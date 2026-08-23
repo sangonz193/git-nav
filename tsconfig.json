@@ -1,7 +1,8 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/shadcn" },
-    { "path": "./apps/desktop" }
+    {
+      "path": "apps/desktop/tsconfig.app.json"
+    }
   ]
 }

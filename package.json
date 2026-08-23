@@ -7,12 +7,16 @@
     "dev": "bun --filter=desktop run dev",
     "lint": "bun run --workspaces lint",
     "format": "bun run --workspaces format",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b && tsc -b apps/desktop/tsconfig.node.json",
+    "update-ts-references": "update-ts-references --configName tsconfig.app.json",
+    "check-ts-references": "update-ts-references --configName tsconfig.app.json --check",
+    "postinstall": "bun run update-ts-references"
   },
   "devDependencies": {
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
-    "typescript": "~6"
+    "typescript": "~6",
+    "update-ts-references": "^6.1.0"
   },
   "packageManager": "bun@1.4.0",
   "engines": {
