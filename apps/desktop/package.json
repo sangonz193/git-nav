@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "tauri": "tauri",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@eslint/js": "^10",
     "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
