@@ -1,0 +1,40 @@
+.git-nav-dockview-theme {
+  --dv-group-view-background-color: #0d0d0f;
+  --dv-tabs-and-actions-container-background-color: #080809;
+  --dv-activegroup-visiblepanel-tab-background-color: #1c1c1f;
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #1c1c1f;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-color: #f4f4f5;
+  --dv-activegroup-hiddenpanel-tab-color: #a1a1aa;
+  --dv-inactivegroup-visiblepanel-tab-color: #f4f4f5;
+  --dv-inactivegroup-hiddenpanel-tab-color: #a1a1aa;
+  --dv-icon-hover-background-color: #27272a;
+  --dv-tab-divider-color: transparent;
+  --dv-tabs-and-actions-container-height: 42px;
+  --dv-tab-font-size: 14px;
+  --dv-tab-margin: 4px;
+  --dv-tab-border-radius: 9px;
+  --dv-overlay-z-index: 999;
+  --dv-floating-box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+
+.git-nav-dockview-theme .dv-tabs-and-actions-container {
+  padding: 4px 12px 4px 8px;
+}
+
+.git-nav-dockview-theme .dv-tabs-container {
+  gap: 4px;
+}
+
+.git-nav-dockview-theme .dv-tab {
+  border-radius: 9px;
+  height: 34px;
+  margin: 0;
+  overflow: hidden;
+}
+
+.git-nav-dockview-theme .dv-right-actions-container {
+  align-items: center;
+  padding: 0 8px 0 4px;
+}
