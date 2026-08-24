@@ -11,7 +11,7 @@ import type { RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
-const PULL_REQUEST_SYNC_INTERVAL = 600_000
+const PULL_REQUEST_SYNC_INTERVAL = 60_000
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
 const commitColumnHelper = createColumnHelper<typeof commitTableFeatures, Commit>()
 const commitColumns = commitColumnHelper.columns([
@@ -104,8 +104,6 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
       return
     }
     started.current = true
-    let interval: number | undefined
-    let stopped = false
     const channel = new Channel<CommitBatch>((batch) => {
       setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
     })
@@ -115,20 +113,12 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
         .catch(() => undefined)
     }
 
+    refreshSquashMergeInferences()
+    const interval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
     invoke("stream_commit_graph", { repoPath: params.path, onBatch: channel })
-      .then(() => {
-        if (stopped) {
-          return
-        }
-        refreshSquashMergeInferences()
-        interval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
-      })
       .catch((message: unknown) => setError(String(message)))
     return () => {
-      stopped = true
-      if (interval !== undefined) {
-        window.clearInterval(interval)
-      }
+      window.clearInterval(interval)
     }
   }, [params.path])
 

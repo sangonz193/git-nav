@@ -13,7 +13,7 @@ use tauri::{ipc::Channel, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, 
 
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
-const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 600;
+const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
