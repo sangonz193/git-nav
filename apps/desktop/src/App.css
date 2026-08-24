@@ -199,7 +199,7 @@
 
 .commit-graph-refs {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
   overflow: hidden;
 }
@@ -211,11 +211,15 @@
   border-radius: 4px;
   color: var(--commit-ref-color);
   display: inline-flex;
-  gap: 4px;
+  gap: 3px;
   overflow: hidden;
-  padding: 2px 5px;
+  padding: 1px 4px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.commit-ref svg {
+  flex: none;
 }
 
 .commit-ref-current {
