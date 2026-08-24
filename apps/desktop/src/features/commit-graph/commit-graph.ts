@@ -14,6 +14,13 @@ export type Commit = {
 
 export type CommitBatch = [string, string[], string, string, string[], string, number, number[], number, number[], boolean[]][]
 
+export type CheckedOutWorktree = {
+  branch: string
+  name: string
+  path: string
+  isOpen: boolean
+}
+
 export const ROW_HEIGHT = 32
 export const GRAPH_WIDTH = 112
 export const GRAPH_GUTTER = 18
@@ -44,7 +51,7 @@ export function relativeDate(value: string) {
   return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds / size), unit)
 }
 
-export function displayRefs(refs: string[]) {
+export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorktree[] = []) {
   const checkedOut = refs.find((ref) => ref.startsWith("HEAD -> "))?.slice("HEAD -> ".length)
   const branchRefs = refs.filter((ref) => !ref.startsWith("HEAD -> ") && !ref.startsWith("tag: "))
   const localBranches = new Set(branchRefs.filter((ref) => !ref.startsWith("origin/")))
@@ -52,7 +59,7 @@ export function displayRefs(refs: string[]) {
     localBranches.add(checkedOut)
   }
   const consumed = new Set<string>()
-  const result: { label: string; checkedOut: boolean }[] = []
+  const result: { label: string; checkedOut: boolean; worktrees: CheckedOutWorktree[] }[] = []
 
   for (const branch of localBranches) {
     const remote = `origin/${branch}`
@@ -61,23 +68,23 @@ export function displayRefs(refs: string[]) {
     if (hasRemote) {
       consumed.add(remote)
     }
-    result.push({ label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut })
+    result.push({ label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
   }
 
   for (const ref of branchRefs) {
     if (!consumed.has(ref) && ref !== "origin/HEAD") {
-      result.push({ label: ref, checkedOut: ref === checkedOut })
+      result.push({ label: ref, checkedOut: ref === checkedOut, worktrees: [] })
     }
   }
 
   for (const ref of refs) {
     if (ref.startsWith("tag: ")) {
-      result.push({ label: ref.slice("tag: ".length), checkedOut: false })
+      result.push({ label: ref.slice("tag: ".length), checkedOut: false, worktrees: [] })
     }
   }
 
   if (checkedOut?.startsWith("origin/")) {
-    result.push({ label: checkedOut, checkedOut: true })
+    result.push({ label: checkedOut, checkedOut: true, worktrees: [] })
   }
 
   return result

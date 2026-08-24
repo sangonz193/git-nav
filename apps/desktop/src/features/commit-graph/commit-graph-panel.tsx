@@ -2,11 +2,13 @@ import { columnResizingFeature, columnSizingFeature, createColumnHelper, tableFe
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { Channel, invoke } from "@tauri-apps/api/core"
 import type { IDockviewPanelProps } from "dockview-react"
+import { PanelsTopLeft } from "lucide-react"
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { commitFromTuple, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, relativeDate, ROW_HEIGHT, type Commit, type CommitBatch } from "./commit-graph"
+import { commitFromTuple, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, relativeDate, ROW_HEIGHT, type CheckedOutWorktree, type Commit, type CommitBatch } from "./commit-graph"
 import type { RepositoryPanelParams } from "../repository/repository-window"
+import type { Project } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
@@ -22,6 +24,7 @@ const commitColumns = commitColumnHelper.columns([
 export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanelParams>) {
   const [commits, setCommits] = useState<Commit[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const started = useRef(false)
@@ -72,6 +75,28 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
     })
 
     invoke("stream_commit_graph", { repoPath: params.path, onBatch: channel }).catch((message: unknown) => setError(String(message)))
+  }, [params.path])
+
+  useEffect(() => {
+    let disposed = false
+    const refresh = () => invoke<Project>("project_snapshot", { path: params.path })
+      .then((project) => {
+        if (!disposed) {
+          setCheckedOutWorktrees(project.worktrees
+            .filter((worktree) => worktree.path !== params.path && !worktree.isPrunable && !worktree.isDetached)
+            .map(({ branch, name, path, isOpen }) => ({ branch, name, path, isOpen })))
+        }
+      })
+      .catch((message: unknown) => setError(String(message)))
+
+    refresh()
+    window.addEventListener("focus", refresh)
+    const interval = window.setInterval(refresh, 10_000)
+    return () => {
+      disposed = true
+      window.removeEventListener("focus", refresh)
+      window.clearInterval(interval)
+    }
   }, [params.path])
 
   useEffect(() => {
@@ -129,15 +154,17 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
             return (
               <article className="commit-graph-row" key={commit.hash} style={{ gridTemplateColumns: columnTemplate, transform: `translateY(${row.start}px)` }}>
                 <div className="commit-graph-refs">
-                  {displayRefs(commit.refs).map((ref, index) => (
+                  {displayRefs(commit.refs, checkedOutWorktrees).map((ref, index) => (
                     <span
-                      aria-label={ref.checkedOut ? "Currently checked out" : undefined}
+                      aria-label={ref.checkedOut ? "Currently checked out" : ref.worktrees.length ? "Checked out in another worktree" : undefined}
                       className={`commit-ref${ref.checkedOut ? " commit-ref-current" : ""}`}
                       key={`${ref.label}-${index}`}
                       style={{ "--commit-ref-color": refColor } as CSSProperties}
+                      title={ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`).join("\n") || undefined}
                     >
                       {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}
                       {ref.label}
+                      {ref.worktrees.length > 0 && <PanelsTopLeft aria-hidden className={`size-3 ${ref.worktrees.some((worktree) => worktree.isOpen) ? "text-foreground" : "text-muted-foreground"}`} />}
                     </span>
                   ))}
                 </div>

@@ -1,28 +1,66 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{HashMap, HashSet},
     env, fs,
     io::{BufRead, BufReader},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Mutex,
 };
-use tauri::{ipc::Channel, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{ipc::Channel, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Repository {
+struct Worktree {
     path: String,
     name: String,
     branch: String,
-    remote: Option<String>,
+    head: String,
+    is_main: bool,
+    is_detached: bool,
+    is_locked: bool,
+    is_prunable: bool,
+    is_open: bool,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Project {
+    id: String,
+    name: String,
+    path: String,
+    worktrees: Vec<Worktree>,
+}
+
+struct WorktreeRecord {
+    path: String,
+    branch: String,
+    head: String,
+    is_main: bool,
+    is_detached: bool,
+    is_locked: bool,
+    is_prunable: bool,
+}
+
+#[derive(Default, Deserialize, Serialize)]
 struct RecentRepositories {
+    #[serde(default)]
+    projects: Vec<String>,
+    #[serde(default)]
     repositories: Vec<String>,
 }
+
+#[derive(Clone)]
+struct OpenWorktree {
+    project_id: String,
+    worktree_path: String,
+}
+
+#[derive(Default)]
+struct OpenWorktrees(Mutex<HashMap<String, OpenWorktree>>);
 
 fn recent_repositories_path(app: &AppHandle) -> Result<PathBuf, String> {
     let data_dir = app
@@ -42,7 +80,13 @@ fn load_recent_paths(app: &AppHandle) -> Result<Vec<String>, String> {
     };
 
     serde_json::from_str::<RecentRepositories>(&contents)
-        .map(|recent| recent.repositories)
+        .map(|recent| {
+            if recent.projects.is_empty() {
+                recent.repositories
+            } else {
+                recent.projects
+            }
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -53,7 +97,8 @@ fn save_recent_path(app: &AppHandle, repository_path: &str) -> Result<(), String
     paths.truncate(MAX_RECENT_REPOSITORIES);
 
     let contents = serde_json::to_string(&RecentRepositories {
-        repositories: paths,
+        projects: paths,
+        repositories: Vec::new(),
     })
     .map_err(|error| error.to_string())?;
     fs::write(recent_repositories_path(app)?, contents).map_err(|error| error.to_string())
@@ -76,63 +121,203 @@ fn git_output(path: &str, arguments: &[&str]) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn repository_at(path: &str) -> Result<Repository, String> {
-    let repository_path = git_output(path, &["rev-parse", "--show-toplevel"])
-        .ok_or_else(|| "Choose a Git repository.".to_string())?;
-    let name = PathBuf::from(&repository_path)
+fn git_output_bytes(path: &str, arguments: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(arguments)
+        .output()
+        .ok()?;
+
+    output.status.success().then_some(output.stdout)
+}
+
+fn worktree_path(path: &str) -> Result<String, String> {
+    git_output(path, &["rev-parse", "--show-toplevel"])
+        .ok_or_else(|| "Choose a Git repository.".to_string())
+}
+
+fn project_id(path: &str) -> Result<String, String> {
+    let worktree_path = worktree_path(path)?;
+    let common_dir = git_output(&worktree_path, &["rev-parse", "--git-common-dir"])
+        .ok_or_else(|| "Could not identify the Git project.".to_string())?;
+    let common_dir = PathBuf::from(common_dir);
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        PathBuf::from(worktree_path).join(common_dir)
+    };
+
+    fs::canonicalize(common_dir)
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| error.to_string())
+}
+
+fn worktree_name(path: &str) -> String {
+    Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or(&repository_path)
-        .to_string();
+        .unwrap_or(path)
+        .to_string()
+}
 
-    Ok(Repository {
-        path: repository_path.clone(),
-        name,
-        branch: git_output(&repository_path, &["branch", "--show-current"])
-            .unwrap_or_else(|| "Detached HEAD".to_string()),
-        remote: git_output(&repository_path, &["remote", "get-url", "origin"]),
+fn parse_worktree_records(output: &str) -> Vec<WorktreeRecord> {
+    let mut worktrees = Vec::new();
+
+    for (index, record) in output
+        .split('\0')
+        .collect::<Vec<_>>()
+        .split(|field| field.is_empty())
+        .enumerate()
+    {
+        let mut path = None;
+        let mut head = None;
+        let mut branch = None;
+        let mut detached = false;
+        let mut locked = false;
+        let mut prunable = false;
+
+        for field in record {
+            if let Some(value) = field.strip_prefix("worktree ") {
+                path = Some(value.to_string());
+            } else if let Some(value) = field.strip_prefix("HEAD ") {
+                head = Some(value.to_string());
+            } else if let Some(value) = field.strip_prefix("branch refs/heads/") {
+                branch = Some(value.to_string());
+            } else if *field == "detached" {
+                detached = true;
+            } else if field.starts_with("locked") {
+                locked = true;
+            } else if field.starts_with("prunable") {
+                prunable = true;
+            }
+        }
+
+        if let Some(path) = path {
+            worktrees.push(WorktreeRecord {
+                path,
+                branch: branch.unwrap_or_else(|| "Detached HEAD".to_string()),
+                head: head.unwrap_or_default(),
+                is_main: index == 0,
+                is_detached: detached,
+                is_locked: locked,
+                is_prunable: prunable,
+            });
+        }
+    }
+
+    worktrees
+}
+
+fn project_at(path: &str, open_worktrees: &OpenWorktrees) -> Result<Project, String> {
+    let id = project_id(path)?;
+    let output = git_output_bytes(path, &["worktree", "list", "--porcelain", "-z"])
+        .ok_or_else(|| "Could not list Git worktrees.".to_string())?;
+    let output = String::from_utf8(output).map_err(|error| error.to_string())?;
+    let open_worktrees = open_worktrees.0.lock().map_err(|error| error.to_string())?;
+    let worktrees = parse_worktree_records(&output)
+        .into_iter()
+        .map(|worktree| {
+            let path = worktree.path;
+            let is_open = open_worktrees
+                .values()
+                .any(|worktree| worktree.project_id == id && worktree.worktree_path == path);
+            Worktree {
+                name: worktree_name(&path),
+                path,
+                branch: worktree.branch,
+                head: worktree.head,
+                is_main: worktree.is_main,
+                is_detached: worktree.is_detached,
+                is_locked: worktree.is_locked,
+                is_prunable: worktree.is_prunable,
+                is_open,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let main = worktrees
+        .first()
+        .ok_or_else(|| "No usable Git worktrees were found.".to_string())?;
+    Ok(Project {
+        id,
+        name: worktree_name(&main.path),
+        path: main.path.clone(),
+        worktrees,
     })
 }
 
 #[tauri::command]
-fn recent_repositories(app: AppHandle) -> Result<Vec<Repository>, String> {
-    let repositories = load_recent_paths(&app)?
+fn recent_projects(
+    app: AppHandle,
+    open_worktrees: tauri::State<OpenWorktrees>,
+) -> Result<Vec<Project>, String> {
+    let mut project_ids = HashSet::new();
+    Ok(load_recent_paths(&app)?
         .into_iter()
-        .filter_map(|path| repository_at(&path).ok())
-        .collect();
+        .filter_map(|path| project_at(&path, &open_worktrees).ok())
+        .filter(|project| project_ids.insert(project.id.clone()))
+        .collect())
+}
 
-    Ok(repositories)
+#[tauri::command]
+fn project_snapshot(
+    path: String,
+    open_worktrees: tauri::State<OpenWorktrees>,
+) -> Result<Project, String> {
+    project_at(&path, &open_worktrees)
 }
 
 fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
-    let repository = repository_at(&path)?;
-    save_recent_path(app, &repository.path)?;
-
+    let worktree_path = worktree_path(path)?;
+    let project = project_at(&worktree_path, &app.state::<OpenWorktrees>())?;
+    save_recent_path(app, &project.path)?;
     let label = format!(
         "repository-{}",
-        repository.path.as_bytes().iter().fold(0u64, |hash, byte| {
-            hash.wrapping_mul(31).wrapping_add(*byte as u64)
-        })
+        worktree_path.as_bytes().iter().fold(0u64, |hash, byte| hash
+            .wrapping_mul(31)
+            .wrapping_add(*byte as u64))
     );
 
     if let Some(window) = app.get_webview_window(&label) {
         window.set_focus().map_err(|error| error.to_string())?;
     } else {
         let query = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("repository", &repository.path)
+            .append_pair("repository", &worktree_path)
             .finish();
         let url = format!("/?{query}");
-        WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
-            .title(format!("{} · Git Nav", repository.name))
+        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+            .title(format!("{} · Git Nav", worktree_name(&worktree_path)))
             .inner_size(800.0, 600.0)
             .build()
             .map_err(|error| error.to_string())?;
+        window.on_window_event({
+            let app = app.clone();
+            let label = label.clone();
+            move |event| {
+                if matches!(event, WindowEvent::Destroyed) {
+                    if let Ok(mut worktrees) = app.state::<OpenWorktrees>().0.lock() {
+                        worktrees.remove(&label);
+                    }
+                }
+            }
+        });
+        app.state::<OpenWorktrees>()
+            .0
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(
+                label,
+                OpenWorktree {
+                    project_id: project.id,
+                    worktree_path,
+                },
+            );
     }
 
     if let Some(window) = app.get_webview_window("main") {
         window.close().map_err(|error| error.to_string())?;
     }
-
     Ok(())
 }
 
@@ -303,6 +488,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_main_and_linked_worktrees_from_porcelain_output() {
+        let worktrees = parse_worktree_records(
+            "worktree /workspace/project\0HEAD main-sha\0branch refs/heads/main\0\0worktree /workspace/fix\0HEAD fix-sha\0branch refs/heads/fix\0locked\0\0worktree /workspace/old\0HEAD old-sha\0detached\0prunable missing\0\0",
+        );
+
+        assert_eq!(worktrees.len(), 3);
+        assert!(worktrees[0].is_main);
+        assert_eq!(worktrees[0].branch, "main");
+        assert_eq!(worktrees[1].branch, "fix");
+        assert!(worktrees[1].is_locked);
+        assert!(worktrees[2].is_detached);
+        assert!(worktrees[2].is_prunable);
+        assert_eq!(worktrees[2].branch, "Detached HEAD");
+    }
+
+    #[test]
     fn assigns_a_lane_and_reuses_it_for_the_first_parent() {
         let mut lanes = Vec::new();
         let commit =
@@ -376,9 +577,11 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_dialog::init())
+        .manage(OpenWorktrees::default())
         .invoke_handler(tauri::generate_handler![
-            recent_repositories,
+            recent_projects,
             open_repository,
+            project_snapshot,
             stream_commit_graph
         ])
         .setup(move |app| {
