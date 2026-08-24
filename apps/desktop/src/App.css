@@ -201,7 +201,8 @@
   display: flex;
   gap: 3px;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .commit-ref {
@@ -211,6 +212,7 @@
   border-radius: 4px;
   color: var(--commit-ref-color);
   display: inline-flex;
+  flex: none;
   gap: 3px;
   overflow: hidden;
   padding: 1px 4px;
