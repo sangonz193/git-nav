@@ -43,6 +43,31 @@
   flex-grow: 0;
 }
 
+:root {
+  color-scheme: light;
+  scrollbar-color: var(--muted-foreground) var(--background);
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+::-webkit-scrollbar {
+  background: var(--background);
+  height: 12px;
+  width: 12px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--muted-foreground);
+  border: 3px solid var(--background);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--background);
+}
+
 .commit-graph-scroll {
   flex: 1;
   height: 100%;
@@ -50,15 +75,18 @@
 }
 
 .commit-graph-header {
+  background: var(--background);
   border-bottom: 1px solid rgb(255 255 255 / 8%);
-  flex: 0 0 32px;
+  height: 32px;
   overflow: hidden;
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .commit-graph-header-content {
   display: flex;
   height: 32px;
-  will-change: transform;
 }
 
 .commit-graph-header-spacer {
@@ -126,10 +154,10 @@
 
 .commit-graph-canvas {
   height: 100%;
-  left: 0;
+  left: auto;
   pointer-events: none;
   position: sticky;
-  top: 0;
+  top: 32px;
   width: 112px;
   z-index: 1;
 }

@@ -25,7 +25,7 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const started = useRef(false)
-  const [scroll, setScroll] = useState({ left: 0, top: 0, height: 0 })
+  const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
   const table = useTable({
     columnResizeMode: "onChange",
@@ -48,7 +48,7 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
     if (!element) {
       return
     }
-    setScroll({ left: element.scrollLeft, top: element.scrollTop, height: element.clientHeight })
+    setScroll({ top: element.scrollTop, height: element.clientHeight })
   }, [])
 
   useEffect(() => {
@@ -92,35 +92,35 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
 
   return (
     <main className="flex h-full flex-col overflow-hidden bg-background">
-      <div className="commit-graph-header">
-        <div className="commit-graph-header-content" style={{ minWidth: tableWidth, transform: `translateX(${-scroll.left}px)` }}>
-          <div className="commit-graph-header-spacer">Graph</div>
-          <div className="commit-graph-header-columns" style={{ gridTemplateColumns: columnTemplate }}>
-            {table.getFlatHeaders().map((header) => (
-              <div className="commit-graph-header-cell" key={header.id}>
-                <table.FlexRender header={header} />
-                {header.column.getCanResize() && (
-                  <div
-                    aria-label={`Resize ${String(header.column.columnDef.header)} column`}
-                    className={`commit-graph-resize-handle${header.column.getIsResizing() ? " is-resizing" : ""}`}
-                    onDoubleClick={() => header.column.resetSize()}
-                    onMouseDown={(event) => {
-                      event.preventDefault()
-                      header.getResizeHandler()(event)
-                    }}
-                    onTouchStart={(event) => {
-                      event.preventDefault()
-                      header.getResizeHandler()(event)
-                    }}
-                    role="separator"
-                  />
-                )}
-              </div>
-            ))}
+      <div className="commit-graph-scroll" onScroll={onScroll} ref={scrollElement}>
+        <div className="commit-graph-header">
+          <div className="commit-graph-header-content" style={{ minWidth: tableWidth }}>
+            <div className="commit-graph-header-spacer">Graph</div>
+            <div className="commit-graph-header-columns" style={{ gridTemplateColumns: columnTemplate }}>
+              {table.getFlatHeaders().map((header) => (
+                <div className="commit-graph-header-cell" key={header.id}>
+                  <table.FlexRender header={header} />
+                  {header.column.getCanResize() && (
+                    <div
+                      aria-label={`Resize ${String(header.column.columnDef.header)} column`}
+                      className={`commit-graph-resize-handle${header.column.getIsResizing() ? " is-resizing" : ""}`}
+                      onDoubleClick={() => header.column.resetSize()}
+                      onMouseDown={(event) => {
+                        event.preventDefault()
+                        header.getResizeHandler()(event)
+                      }}
+                      onTouchStart={(event) => {
+                        event.preventDefault()
+                        header.getResizeHandler()(event)
+                      }}
+                      role="separator"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
-      <div className="commit-graph-scroll" onScroll={onScroll} ref={scrollElement}>
         <div className="commit-graph-space" style={{ height: rowVirtualizer.getTotalSize(), minWidth: tableWidth }}>
           <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
           {virtualRows.map((row) => {
