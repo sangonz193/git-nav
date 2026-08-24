@@ -34,6 +34,20 @@
   overflow: hidden;
 }
 
+.git-nav-dockview-theme .dv-tab .dv-default-tab-action {
+  cursor: default;
+}
+
+.git-nav-dockview-theme .dv-tab .dv-default-tab-action .dv-svg {
+  height: 8px;
+  width: 8px;
+}
+
+.git-nav-dockview-theme:has(.dv-tab:active) {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .git-nav-dockview-theme .dv-right-actions-container {
   align-items: center;
   padding: 0 8px 0 4px;

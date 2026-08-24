@@ -36,7 +36,7 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
   return (
     <button
       aria-label="New tab"
-      className="flex size-8 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+      className="flex size-[34px] items-center justify-center rounded-[9px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
       onClick={() => addGraphPanel(containerApi, params, activePanel)}
       type="button"
     >
@@ -68,6 +68,9 @@ const repositoryPanels = {
 const repositoryDockviewTheme = {
   ...themeDark,
   className: "git-nav-dockview-theme",
+  dndOverlayBorder: "2px solid #3b82f6",
+  dndOverlayMounting: "absolute" as const,
+  dndPanelOverlay: "group" as const,
   tabGroupIndicator: "none" as const,
 }
 
@@ -80,7 +83,9 @@ export function RepositoryWindow({ path }: { path: string }) {
       <RepositoryContext.Provider value={params}>
         <DockviewReact
           components={repositoryPanels}
+          disableDnd={false}
           disableTabsOverflowList
+          dndStrategy="pointer"
           onReady={(event) => {
             event.api.addPanel({
               component: "graph",

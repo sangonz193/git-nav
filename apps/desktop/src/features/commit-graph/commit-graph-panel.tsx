@@ -28,6 +28,8 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const started = useRef(false)
+  const savedScrollTop = useRef(0)
+  const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
   const table = useTable({
@@ -64,6 +66,25 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
     updateScroll()
     return () => observer.disconnect()
   }, [updateScroll])
+
+  useEffect(() => {
+    const element = scrollElement.current
+    if (!element) {
+      return
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      isScrollElementVisible.current = entry.isIntersecting
+      if (!entry.isIntersecting) {
+        return
+      }
+      element.scrollTop = savedScrollTop.current
+      rowVirtualizer.measure()
+      element.dispatchEvent(new Event("scroll"))
+      updateScroll()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [rowVirtualizer, updateScroll])
 
   useEffect(() => {
     if (started.current) {
@@ -111,6 +132,9 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
     }
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = null
+      if (isScrollElementVisible.current && scrollElement.current) {
+        savedScrollTop.current = scrollElement.current.scrollTop
+      }
       updateScroll()
     })
   }
