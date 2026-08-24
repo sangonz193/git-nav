@@ -13,7 +13,7 @@
     },
     "apps/desktop": {
       "name": "desktop",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "dependencies": {
         "@tanstack/react-table": "^9.1.2",
         "@tanstack/react-virtual": "^3.14.10",
@@ -44,7 +44,7 @@
     },
     "packages/cli": {
       "name": "git-nav",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "bin": {
         "git-nav": "./bin/git-nav.js",
       },
@@ -52,12 +52,12 @@
         "eslint": "^10",
       },
       "optionalDependencies": {
-        "@git-nav/darwin-arm64": "0.0.1",
-        "@git-nav/darwin-x64": "0.0.1",
-        "@git-nav/linux-arm64": "0.0.1",
-        "@git-nav/linux-x64": "0.0.1",
-        "@git-nav/win32-arm64": "0.0.1",
-        "@git-nav/win32-x64": "0.0.1",
+        "@git-nav/darwin-arm64": "0.0.2",
+        "@git-nav/darwin-x64": "0.0.2",
+        "@git-nav/linux-arm64": "0.0.2",
+        "@git-nav/linux-x64": "0.0.2",
+        "@git-nav/win32-arm64": "0.0.2",
+        "@git-nav/win32-x64": "0.0.2",
       },
     },
     "packages/shadcn": {
