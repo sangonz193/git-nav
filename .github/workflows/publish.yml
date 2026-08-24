@@ -1,0 +1,48 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+
+      - run: bun run lint
+
+      - run: cargo test
+        working-directory: apps/desktop/src-tauri
+
+      - run: |
+          version="$(node -p \"require('./packages/cli/package.json').version\")"
+          test "v$version" = "$GITHUB_REF_NAME"
+          test "$version" = "$(sed -n 's/^version = \"\([^\"]*\)\"/\1/p' apps/desktop/src-tauri/Cargo.toml | head -1)"
+          test "$version" = "$(node -p \"require('./apps/desktop/src-tauri/tauri.conf.json').version\")"
+
+      - run: bun run build:package
+
+      - run: npm publish --access public
+        working-directory: packages/cli/dist/packages/darwin-arm64
+
+      - run: npm publish --access public
+        working-directory: packages/cli

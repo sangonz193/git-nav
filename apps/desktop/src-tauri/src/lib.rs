@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process::Command};
+use std::{env, fs, path::PathBuf, process::Command};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const MAX_RECENT_REPOSITORIES: usize = 8;
@@ -98,10 +98,9 @@ fn recent_repositories(app: AppHandle) -> Result<Vec<Repository>, String> {
     Ok(repositories)
 }
 
-#[tauri::command]
-fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
+fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
     let repository = repository_at(&path)?;
-    save_recent_path(&app, &repository.path)?;
+    save_recent_path(app, &repository.path)?;
 
     let label = format!(
         "repository-{}",
@@ -117,7 +116,7 @@ fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
             .append_pair("repository", &repository.path)
             .finish();
         let url = format!("/?{query}");
-        WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
             .title(format!("{} · Git Nav", repository.name))
             .inner_size(800.0, 600.0)
             .build()
@@ -131,15 +130,79 @@ fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn repository_path_from_args(args: &[String], cwd: &str) -> Option<String> {
+    let path = args.get(1)?;
+    let path = PathBuf::from(path);
+    Some(
+        if path.is_absolute() {
+            path
+        } else {
+            PathBuf::from(cwd).join(path)
+        }
+        .to_string_lossy()
+        .into_owned(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repository_path_from_args;
+
+    #[test]
+    fn uses_the_invocation_directory_for_relative_paths() {
+        let path = repository_path_from_args(
+            &["git-nav".to_string(), "repository".to_string()],
+            "/workspace",
+        );
+
+        assert_eq!(path.as_deref(), Some("/workspace/repository"));
+    }
+
+    #[test]
+    fn preserves_absolute_paths() {
+        let path = repository_path_from_args(
+            &["git-nav".to_string(), "/workspace/repository".to_string()],
+            "/other-workspace",
+        );
+
+        assert_eq!(path.as_deref(), Some("/workspace/repository"));
+    }
+}
+
+#[tauri::command]
+fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
+    open_repository_window(&app, &path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let args: Vec<_> = env::args().collect();
+    let cwd = env::current_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let repository_path = repository_path_from_args(&args, &cwd);
+
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            if let Some(path) = repository_path_from_args(&args, &cwd) {
+                let _ = open_repository_window(app, &path);
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             recent_repositories,
             open_repository
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(path) = &repository_path {
+                open_repository_window(app.handle(), path)?;
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

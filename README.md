@@ -1,6 +1,28 @@
-# shadcn/ui monorepo template
+# Git Nav
 
-This is a Vite monorepo template with shadcn/ui.
+## Install
+
+```sh
+npm install --global git-nav
+git nav .
+```
+
+The `git-nav` executable is distributed through the `git-nav` npm package, with platform binaries published as `@git-nav/*` optional dependencies.
+
+## Development
+
+```sh
+bun install
+bun run dev
+```
+
+Build the app and package the current platform binary with:
+
+```sh
+bun run build:package
+```
+
+See [the deployment guide](docs/deploy.md) for CI releases.
 
 ## Adding components
 

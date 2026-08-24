@@ -1,0 +1,41 @@
+{
+  "name": "git-nav",
+  "version": "0.0.1",
+  "type": "module",
+  "bin": {
+    "git-nav": "./bin/git-nav.js"
+  },
+  "binaryScope": "@git-nav",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sangonz193/git-nav.git",
+    "directory": "packages/cli"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "@git-nav/darwin-arm64": "0.0.1",
+    "@git-nav/darwin-x64": "0.0.1",
+    "@git-nav/linux-arm64": "0.0.1",
+    "@git-nav/linux-x64": "0.0.1",
+    "@git-nav/win32-arm64": "0.0.1",
+    "@git-nav/win32-x64": "0.0.1"
+  },
+  "scripts": {
+    "build:package": "bun run --cwd ../../apps/desktop tauri build && bun scripts/package-platform.ts",
+    "format": "prettier --no-config --write \"**/*.{js,ts}\"",
+    "lint": "eslint bin",
+    "release": "bun scripts/publish.ts"
+  },
+  "devDependencies": {
+    "eslint": "^10"
+  }
+}
