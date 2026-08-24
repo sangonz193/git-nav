@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
@@ -6,11 +7,13 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{ipc::Channel, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
+const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 600;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +72,12 @@ fn recent_repositories_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| error.to_string())?;
     fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
     Ok(data_dir.join("recent-repositories.json"))
+}
+
+fn pull_request_database_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
+    Ok(data_dir.join("pull-requests.sqlite3"))
 }
 
 fn load_recent_paths(app: &AppHandle) -> Result<Vec<String>, String> {
@@ -159,6 +168,212 @@ fn worktree_name(path: &str) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_string()
+}
+
+#[derive(Deserialize)]
+struct GithubPullRequest {
+    number: i64,
+    merged_at: Option<String>,
+    merge_commit_sha: Option<String>,
+    updated_at: String,
+    head: GithubPullRequestHead,
+}
+
+#[derive(Deserialize)]
+struct GithubPullRequestHead {
+    sha: String,
+}
+
+fn github_repository(remote: &str) -> Option<(String, String)> {
+    let remote = remote.trim_end_matches('/').trim_end_matches(".git");
+    let (host, path) = if let Some(remote) = remote.strip_prefix("git@") {
+        remote.split_once(':')?
+    } else if let Some(remote) = remote.strip_prefix("ssh://git@") {
+        remote.split_once('/')?
+    } else {
+        let remote = remote
+            .strip_prefix("https://")
+            .or_else(|| remote.strip_prefix("http://"))?;
+        remote.split_once('/')?
+    };
+    let (owner, repository) = path.split_once('/')?;
+    (!owner.is_empty() && !repository.is_empty()).then_some((host.to_string(), format!("{owner}/{repository}")))
+}
+
+fn github_pull_requests(host: &str, repository: &str) -> Option<Vec<GithubPullRequest>> {
+    let endpoint = format!("repos/{repository}/pulls?state=closed&sort=updated&direction=desc&per_page=100");
+    let mut command = Command::new("gh");
+    command.args(["api", "--method", "GET", "--header", "Accept: application/vnd.github+json"]);
+    if host != "github.com" {
+        command.args(["--hostname", host]);
+    }
+    let output = command.arg(endpoint).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| serde_json::from_slice(&output.stdout).ok())
+        .flatten()
+}
+
+fn git_succeeds(path: &str, arguments: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(arguments)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn migrate_pull_request_database(connection: &mut Connection) -> Result<(), String> {
+    connection
+        .execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+        .map_err(|error| error.to_string())?;
+    let version = connection
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, Option<i64>>(0))
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    if version < 1 {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction
+            .execute_batch(
+                "
+                CREATE TABLE pull_requests (
+                  host TEXT NOT NULL,
+                  repository TEXT NOT NULL,
+                  number INTEGER NOT NULL,
+                  head_sha TEXT NOT NULL,
+                  merge_commit_sha TEXT,
+                  merged_at TEXT,
+                  updated_at TEXT NOT NULL,
+                  PRIMARY KEY (host, repository, number)
+                );
+                CREATE TABLE pull_request_syncs (
+                  host TEXT NOT NULL,
+                  repository TEXT NOT NULL,
+                  synchronized_at INTEGER NOT NULL,
+                  PRIMARY KEY (host, repository)
+                );
+                INSERT INTO schema_migrations (version) VALUES (1);
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn pull_request_database(path: PathBuf) -> Result<Connection, String> {
+    let mut connection = Connection::open(path).map_err(|error| error.to_string())?;
+    migrate_pull_request_database(&mut connection)?;
+    Ok(connection)
+}
+
+fn should_sync_pull_requests(connection: &Connection, host: &str, repository: &str) -> Result<bool, String> {
+    let synchronized_at = connection
+        .query_row(
+            "SELECT synchronized_at FROM pull_request_syncs WHERE host = ?1 AND repository = ?2",
+            params![host, repository],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    Ok(match synchronized_at {
+        Some(synchronized_at) => now.saturating_sub(synchronized_at as u64) >= PULL_REQUEST_SYNC_INTERVAL_SECONDS,
+        None => true,
+    })
+}
+
+fn sync_pull_requests(connection: &mut Connection, host: &str, repository: &str) -> Result<(), String> {
+    let pull_requests = github_pull_requests(host, repository).ok_or_else(|| "Could not load pull requests.".to_string())?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    for pull_request in pull_requests {
+        transaction
+            .execute(
+                "
+                INSERT INTO pull_requests (host, repository, number, head_sha, merge_commit_sha, merged_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(host, repository, number) DO UPDATE SET
+                  head_sha = excluded.head_sha,
+                  merge_commit_sha = excluded.merge_commit_sha,
+                  merged_at = excluded.merged_at,
+                  updated_at = excluded.updated_at
+                WHERE excluded.updated_at > pull_requests.updated_at
+                ",
+                params![
+                    host,
+                    repository,
+                    pull_request.number,
+                    pull_request.head.sha,
+                    pull_request.merge_commit_sha,
+                    pull_request.merged_at,
+                    pull_request.updated_at,
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    let synchronized_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs() as i64;
+    transaction
+        .execute(
+            "
+            INSERT INTO pull_request_syncs (host, repository, synchronized_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(host, repository) DO UPDATE SET synchronized_at = excluded.synchronized_at
+            ",
+            params![host, repository, synchronized_at],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(String, String)> {
+    let Some(remote) = git_output(repo_path, &["remote", "get-url", "origin"]) else {
+        return Vec::new();
+    };
+    let Some((host, repository)) = github_repository(&remote) else {
+        return Vec::new();
+    };
+    let Some(refs) = git_output(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]) else {
+        return Vec::new();
+    };
+    let Ok(mut connection) = pull_request_database(database_path) else {
+        return Vec::new();
+    };
+    if should_sync_pull_requests(&connection, &host, &repository).unwrap_or(false) {
+        let _ = sync_pull_requests(&mut connection, &host, &repository);
+    }
+    let ref_hashes: HashSet<_> = refs.lines().collect();
+    let mut edges = HashSet::new();
+    let mut statement = match connection.prepare(
+        "
+        SELECT head_sha, merge_commit_sha
+        FROM pull_requests
+        WHERE host = ?1 AND repository = ?2 AND merged_at IS NOT NULL AND merge_commit_sha IS NOT NULL
+        ",
+    ) {
+        Ok(statement) => statement,
+        Err(_) => return Vec::new(),
+    };
+    let pull_requests = match statement.query_map(params![host, repository], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+        Ok(pull_requests) => pull_requests,
+        Err(_) => return Vec::new(),
+    };
+    for pull_request in pull_requests.flatten() {
+        let (source, target) = pull_request;
+        if ref_hashes.contains(source.as_str())
+            && !git_succeeds(repo_path, &["merge-base", "--is-ancestor", &source, "HEAD"])
+            && git_succeeds(repo_path, &["merge-base", "--is-ancestor", &target, "HEAD"])
+        {
+            edges.insert((source, target));
+        }
+    }
+    edges.into_iter().collect()
 }
 
 fn parse_worktree_records(output: &str) -> Vec<WorktreeRecord> {
@@ -463,6 +678,16 @@ fn stream_commit_graph(
     }
 }
 
+#[tauri::command]
+async fn inferred_squash_merge_edges(app: AppHandle, repo_path: String) -> Vec<(String, String)> {
+    let Ok(database_path) = pull_request_database_path(&app) else {
+        return Vec::new();
+    };
+    tauri::async_runtime::spawn_blocking(move || inferred_squash_merges(&repo_path, database_path))
+        .await
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +726,30 @@ mod tests {
         assert!(worktrees[2].is_detached);
         assert!(worktrees[2].is_prunable);
         assert_eq!(worktrees[2].branch, "Detached HEAD");
+    }
+
+    #[test]
+    fn parses_github_remote_urls() {
+        assert_eq!(
+            github_repository("git@github.com:octocat/hello-world.git"),
+            Some(("github.com".to_string(), "octocat/hello-world".to_string()))
+        );
+        assert_eq!(
+            github_repository("https://github.com/octocat/hello-world.git"),
+            Some(("github.com".to_string(), "octocat/hello-world".to_string()))
+        );
+    }
+
+    #[test]
+    fn migrates_pull_request_database() {
+        let mut connection = Connection::open_in_memory().unwrap();
+
+        migrate_pull_request_database(&mut connection).unwrap();
+
+        let version = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(version, 1);
     }
 
     #[test]
@@ -582,7 +831,8 @@ pub fn run() {
             recent_projects,
             open_repository,
             project_snapshot,
-            stream_commit_graph
+            stream_commit_graph,
+            inferred_squash_merge_edges
         ])
         .setup(move |app| {
             if let Some(path) = &repository_path {

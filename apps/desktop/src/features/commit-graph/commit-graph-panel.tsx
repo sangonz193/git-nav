@@ -3,14 +3,15 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { Channel, invoke } from "@tauri-apps/api/core"
 import type { IDockviewPanelProps } from "dockview-react"
 import { PanelsTopLeft } from "lucide-react"
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react"
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { commitFromTuple, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, relativeDate, ROW_HEIGHT, type CheckedOutWorktree, type Commit, type CommitBatch } from "./commit-graph"
+import { commitFromTuple, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, relativeDate, ROW_HEIGHT, type CheckedOutWorktree, type Commit, type CommitBatch, type SquashMergeInference } from "./commit-graph"
 import type { RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
+const PULL_REQUEST_SYNC_INTERVAL = 600_000
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
 const commitColumnHelper = createColumnHelper<typeof commitTableFeatures, Commit>()
 const commitColumns = commitColumnHelper.columns([
@@ -23,6 +24,7 @@ const commitColumns = commitColumnHelper.columns([
 
 export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanelParams>) {
   const [commits, setCommits] = useState<Commit[]>([])
+  const [squashMergeInferences, setSquashMergeInferences] = useState<SquashMergeInference[]>([])
   const [error, setError] = useState<string | null>(null)
   const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
   const scrollElement = useRef<HTMLDivElement>(null)
@@ -47,6 +49,17 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
     overscan: 12,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
+  const squashMergeEdges = useMemo(() => {
+    if (squashMergeInferences.length === 0) {
+      return []
+    }
+    const indexes = new Map(commits.map((commit, index) => [commit.hash, index]))
+    return squashMergeInferences.flatMap(([branchHash, targetHash]) => {
+      const branchIndex = indexes.get(branchHash)
+      const targetIndex = indexes.get(targetHash)
+      return branchIndex === undefined || targetIndex === undefined ? [] : [{ branchIndex, targetIndex }]
+    })
+  }, [commits, squashMergeInferences])
 
   const updateScroll = useCallback(() => {
     const element = scrollElement.current
@@ -91,11 +104,32 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
       return
     }
     started.current = true
+    let interval: number | undefined
+    let stopped = false
     const channel = new Channel<CommitBatch>((batch) => {
       setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
     })
+    function refreshSquashMergeInferences() {
+      invoke<SquashMergeInference[]>("inferred_squash_merge_edges", { repoPath: params.path })
+        .then(setSquashMergeInferences)
+        .catch(() => undefined)
+    }
 
-    invoke("stream_commit_graph", { repoPath: params.path, onBatch: channel }).catch((message: unknown) => setError(String(message)))
+    invoke("stream_commit_graph", { repoPath: params.path, onBatch: channel })
+      .then(() => {
+        if (stopped) {
+          return
+        }
+        refreshSquashMergeInferences()
+        interval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
+      })
+      .catch((message: unknown) => setError(String(message)))
+    return () => {
+      stopped = true
+      if (interval !== undefined) {
+        window.clearInterval(interval)
+      }
+    }
   }, [params.path])
 
   useEffect(() => {
@@ -122,9 +156,9 @@ export function CommitGraphPanel({ params }: IDockviewPanelProps<RepositoryPanel
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, scroll.height)
+      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, scroll.height, squashMergeEdges)
     }
-  }, [commits, scroll, virtualRows])
+  }, [commits, scroll, squashMergeEdges, virtualRows])
 
   function onScroll() {
     if (scrollFrame.current !== null) {

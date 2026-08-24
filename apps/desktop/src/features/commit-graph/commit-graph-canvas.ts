@@ -1,6 +1,6 @@
 import { GRAPH_COLORS, GRAPH_GUTTER, GRAPH_WIDTH, LANE_WIDTH, ROW_HEIGHT, type Commit } from "./commit-graph"
 
-export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], items: { index: number; start: number }[], scrollTop: number, height: number) {
+export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], items: { index: number; start: number }[], scrollTop: number, height: number, squashMergeEdges: { branchIndex: number; targetIndex: number }[]) {
   const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
   const pixelWidth = Math.ceil(GRAPH_WIDTH * ratio)
@@ -21,6 +21,28 @@ export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], it
   context.clearRect(0, 0, GRAPH_WIDTH, height)
   context.lineWidth = 2
   context.lineCap = "round"
+
+  context.lineWidth = 1.5
+  context.setLineDash([3, 4])
+  for (const { branchIndex, targetIndex } of squashMergeEdges) {
+    const branchY = branchIndex * ROW_HEIGHT - scrollTop + ROW_HEIGHT / 2
+    const targetY = targetIndex * ROW_HEIGHT - scrollTop + ROW_HEIGHT / 2
+    if (Math.max(branchY, targetY) < 0 || Math.min(branchY, targetY) > height) {
+      continue
+    }
+    const branch = commits[branchIndex]
+    const target = commits[targetIndex]
+    const branchX = GRAPH_GUTTER + branch.lane * LANE_WIDTH
+    const targetX = GRAPH_GUTTER + target.lane * LANE_WIDTH
+    const middleY = (branchY + targetY) / 2
+    context.strokeStyle = GRAPH_COLORS[branch.lane % GRAPH_COLORS.length]
+    context.beginPath()
+    context.moveTo(branchX, branchY)
+    context.bezierCurveTo(branchX, middleY, targetX, middleY, targetX, targetY)
+    context.stroke()
+  }
+  context.setLineDash([])
+  context.lineWidth = 2
 
   for (const item of items) {
     const commit = commits[item.index]

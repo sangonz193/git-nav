@@ -13,6 +13,7 @@ export type Commit = {
 }
 
 export type CommitBatch = [string, string[], string, string, string[], string, number, number[], number, number[], boolean[]][]
+export type SquashMergeInference = [branchHash: string, targetHash: string]
 
 export type CheckedOutWorktree = {
   branch: string
