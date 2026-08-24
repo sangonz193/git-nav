@@ -34,10 +34,10 @@ jobs:
         working-directory: apps/desktop/src-tauri
 
       - run: |
-          version="$(node -p \"require('./packages/cli/package.json').version\")"
+          version="$(node -p "require('./packages/cli/package.json').version")"
           test "v$version" = "$GITHUB_REF_NAME"
-          test "$version" = "$(sed -n 's/^version = \"\([^\"]*\)\"/\1/p' apps/desktop/src-tauri/Cargo.toml | head -1)"
-          test "$version" = "$(node -p \"require('./apps/desktop/src-tauri/tauri.conf.json').version\")"
+          test "$version" = "$(sed -n 's/^version = "\([^"]*\)"/\1/p' apps/desktop/src-tauri/Cargo.toml | head -1)"
+          test "$version" = "$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
 
       - run: bun run build:package
 
