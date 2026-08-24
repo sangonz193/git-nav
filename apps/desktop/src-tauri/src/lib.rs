@@ -1,8 +1,14 @@
 use serde::{Deserialize, Serialize};
-use std::{env, fs, path::PathBuf, process::Command};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::{
+    env, fs,
+    io::{BufRead, BufReader},
+    path::PathBuf,
+    process::{Command, Stdio},
+};
+use tauri::{ipc::Channel, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const MAX_RECENT_REPOSITORIES: usize = 8;
+const COMMIT_BATCH_SIZE: usize = 500;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,9 +150,137 @@ fn repository_path_from_args(args: &[String], cwd: &str) -> Option<String> {
     )
 }
 
+fn lane_for(lanes: &mut Vec<Option<String>>, hash: &str) -> usize {
+    if let Some(index) = lanes
+        .iter()
+        .position(|waiting_for| waiting_for.as_deref() == Some(hash))
+    {
+        return index;
+    }
+
+    if let Some(index) = lanes.iter().position(Option::is_none) {
+        return index;
+    }
+
+    lanes.push(None);
+    lanes.len() - 1
+}
+
+fn parse_commit(line: &str, lanes: &mut Vec<Option<String>>) -> Option<Vec<serde_json::Value>> {
+    let fields: Vec<_> = line.split('\0').collect();
+    if fields.len() != 6 || fields[0].is_empty() {
+        return None;
+    }
+
+    let hash = fields[0];
+    let parents: Vec<_> = fields[1]
+        .split_whitespace()
+        .filter(|parent| !parent.is_empty())
+        .collect();
+    let lane = lane_for(lanes, hash);
+    let incoming_lanes: Vec<_> = lanes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, waiting_for)| (waiting_for.as_deref() == Some(hash)).then_some(index))
+        .collect();
+    for (index, waiting_for) in lanes.iter_mut().enumerate() {
+        if index != lane && waiting_for.as_deref() == Some(hash) {
+            *waiting_for = None;
+        }
+    }
+    let mut parent_lanes = Vec::with_capacity(parents.len());
+
+    if let Some(first_parent) = parents.first() {
+        lanes[lane] = Some((*first_parent).to_string());
+        parent_lanes.push(lane);
+
+        for parent in parents.iter().skip(1) {
+            let parent_lane = lane_for(lanes, parent);
+            lanes[parent_lane] = Some((*parent).to_string());
+            parent_lanes.push(parent_lane);
+        }
+    } else {
+        lanes[lane] = None;
+    }
+
+    while lanes.last().is_some_and(Option::is_none) {
+        lanes.pop();
+    }
+    let active_lanes: Vec<_> = lanes.iter().map(Option::is_some).collect();
+
+    let refs = if fields[4].is_empty() {
+        Vec::new()
+    } else {
+        fields[4].split(", ").collect()
+    };
+
+    Some(vec![
+        serde_json::Value::String(hash.to_string()),
+        serde_json::json!(parents),
+        serde_json::Value::String(fields[2].to_string()),
+        serde_json::Value::String(fields[3].to_string()),
+        serde_json::json!(refs),
+        serde_json::Value::String(fields[5].to_string()),
+        serde_json::json!(lane),
+        serde_json::json!(parent_lanes),
+        serde_json::json!(lanes.len()),
+        serde_json::json!(incoming_lanes),
+        serde_json::json!(active_lanes),
+    ])
+}
+
+#[tauri::command]
+fn stream_commit_graph(
+    repo_path: String,
+    on_batch: Channel<Vec<Vec<serde_json::Value>>>,
+) -> Result<(), String> {
+    let mut child = Command::new("git")
+        .args([
+            "--no-optional-locks",
+            "-C",
+            &repo_path,
+            "log",
+            "--all",
+            "--topo-order",
+            "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s",
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Could not read git output.".to_string())?;
+    let mut lanes = Vec::new();
+    let mut batch = Vec::with_capacity(COMMIT_BATCH_SIZE);
+
+    for line in BufReader::new(stdout).lines() {
+        let line = line.map_err(|error| error.to_string())?;
+        if let Some(commit) = parse_commit(&line, &mut lanes) {
+            batch.push(commit);
+        }
+
+        if batch.len() == COMMIT_BATCH_SIZE {
+            on_batch.send(batch).map_err(|error| error.to_string())?;
+            batch = Vec::with_capacity(COMMIT_BATCH_SIZE);
+        }
+    }
+
+    if !batch.is_empty() {
+        on_batch.send(batch).map_err(|error| error.to_string())?;
+    }
+
+    let status = child.wait().map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("git log failed.".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::repository_path_from_args;
+    use super::*;
 
     #[test]
     fn uses_the_invocation_directory_for_relative_paths() {
@@ -166,6 +300,53 @@ mod tests {
         );
 
         assert_eq!(path.as_deref(), Some("/workspace/repository"));
+    }
+
+    #[test]
+    fn assigns_a_lane_and_reuses_it_for_the_first_parent() {
+        let mut lanes = Vec::new();
+        let commit =
+            parse_commit("a\0b\0Ada\02026-01-01T00:00:00+00:00\0\0first", &mut lanes).unwrap();
+
+        assert_eq!(commit[6], 0);
+        assert_eq!(commit[7], serde_json::json!([0]));
+        assert_eq!(lanes, vec![Some("b".to_string())]);
+    }
+
+    #[test]
+    fn assigns_additional_parents_to_separate_lanes() {
+        let mut lanes = Vec::new();
+        let commit = parse_commit(
+            "a\0b c\0Ada\02026-01-01T00:00:00+00:00\0\0merge",
+            &mut lanes,
+        )
+        .unwrap();
+
+        assert_eq!(commit[6], 0);
+        assert_eq!(commit[7], serde_json::json!([0, 1]));
+        assert_eq!(commit[9], serde_json::json!([]));
+        assert_eq!(commit[10], serde_json::json!([true, true]));
+        assert_eq!(lanes, vec![Some("b".to_string()), Some("c".to_string())]);
+    }
+
+    #[test]
+    fn frees_root_lanes() {
+        let mut lanes = vec![Some("a".to_string())];
+        let commit =
+            parse_commit("a\0\0Ada\02026-01-01T00:00:00+00:00\0\0root", &mut lanes).unwrap();
+
+        assert_eq!(commit[8], 0);
+        assert_eq!(commit[9], serde_json::json!([0]));
+        assert_eq!(commit[10], serde_json::json!([]));
+        assert!(lanes.is_empty());
+    }
+
+    #[test]
+    fn frees_duplicate_lanes_after_a_commit_is_seen() {
+        let mut lanes = vec![Some("a".to_string()), Some("a".to_string())];
+        parse_commit("a\0b\0Ada\02026-01-01T00:00:00+00:00\0\0commit", &mut lanes).unwrap();
+
+        assert_eq!(lanes, vec![Some("b".to_string())]);
     }
 }
 
@@ -197,7 +378,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             recent_repositories,
-            open_repository
+            open_repository,
+            stream_commit_graph
         ])
         .setup(move |app| {
             if let Some(path) = &repository_path {

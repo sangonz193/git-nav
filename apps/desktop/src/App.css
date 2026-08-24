@@ -38,3 +38,166 @@
   align-items: center;
   padding: 0 8px 0 4px;
 }
+
+.git-nav-dockview-theme .dv-void-container {
+  flex-grow: 0;
+}
+
+.commit-graph-scroll {
+  flex: 1;
+  height: 100%;
+  overflow: auto;
+}
+
+.commit-graph-header {
+  border-bottom: 1px solid rgb(255 255 255 / 8%);
+  flex: 0 0 32px;
+  overflow: hidden;
+}
+
+.commit-graph-header-content {
+  display: flex;
+  height: 32px;
+  will-change: transform;
+}
+
+.commit-graph-header-spacer {
+  align-items: center;
+  color: #71717a;
+  display: flex;
+  flex: 0 0 112px;
+  font-size: 11px;
+  font-weight: 600;
+  padding-left: 16px;
+  text-transform: uppercase;
+}
+
+.commit-graph-header-columns {
+  display: grid;
+  flex: 0 0 auto;
+}
+
+.commit-graph-header-cell {
+  align-items: center;
+  color: #a1a1aa;
+  display: flex;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 0;
+  padding: 0 16px 0 8px;
+  position: relative;
+  text-transform: uppercase;
+}
+
+.commit-graph-resize-handle {
+  bottom: 0;
+  cursor: col-resize;
+  position: absolute;
+  right: -4px;
+  touch-action: none;
+  top: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  width: 8px;
+  z-index: 3;
+}
+
+.commit-graph-resize-handle::after {
+  background: #60a5fa;
+  bottom: 5px;
+  content: "";
+  opacity: 0;
+  position: absolute;
+  right: 3px;
+  top: 5px;
+  transition: opacity 120ms ease;
+  width: 1px;
+}
+
+.commit-graph-resize-handle:hover::after,
+.commit-graph-resize-handle.is-resizing::after {
+  opacity: 1;
+}
+
+.commit-graph-space {
+  min-width: 760px;
+  position: relative;
+}
+
+.commit-graph-canvas {
+  height: 100%;
+  left: 0;
+  pointer-events: none;
+  position: sticky;
+  top: 0;
+  width: 112px;
+  z-index: 1;
+}
+
+.commit-graph-row {
+  align-items: center;
+  border-bottom: 1px solid rgb(255 255 255 / 4%);
+  display: grid;
+  font-size: 12px;
+  height: 32px;
+  left: 112px;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.commit-graph-row > * {
+  min-width: 0;
+  padding: 0 16px 0 8px;
+}
+
+.commit-graph-row:hover {
+  background: rgb(255 255 255 / 4%);
+}
+
+.commit-graph-refs {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.commit-ref {
+  align-items: center;
+  background: color-mix(in srgb, var(--commit-ref-color) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
+  border-radius: 4px;
+  color: var(--commit-ref-color);
+  display: inline-flex;
+  gap: 4px;
+  overflow: hidden;
+  padding: 2px 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-ref-current {
+  background: color-mix(in srgb, var(--commit-ref-color) 26%, transparent);
+  border-color: var(--commit-ref-color);
+  font-weight: 600;
+}
+
+.commit-ref-head {
+  background: var(--commit-ref-color);
+  border-radius: 2px;
+  color: #09090b;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 14px;
+  padding: 0 3px;
+}
+
+.commit-graph-status {
+  inset: 0;
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  position: absolute;
+}
