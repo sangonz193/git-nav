@@ -9,10 +9,10 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, Conte
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import type { IDockviewPanelProps } from "dockview-react"
 import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2, TriangleAlert, Undo2, X } from "lucide-react"
-import { type CSSProperties, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, commitFromTuple, commitSelection, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
 import { OperationMenuItems, type OperationPlan, type RebaseResult, type RefMenuComponents, type RefUpdate } from "./commit-operations"
 import type { RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
@@ -60,6 +60,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(null)
   const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
+  const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
+  const [isResizingGraph, setIsResizingGraph] = useState(false)
   const scrollElement = useRef<HTMLDivElement>(null)
   const graphSpace = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -75,7 +77,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     columns: commitColumns,
   })
   const columnTemplate = table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ")
-  const tableWidth = GRAPH_WIDTH + table.getTotalSize()
+  const tableWidth = graphWidth + table.getTotalSize()
   const rowVirtualizer = useVirtualizer({
     count: commits.length,
     getScrollElement: () => scrollElement.current,
@@ -334,9 +336,35 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, scroll.height, squashMergeEdges)
+      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, scroll.height, squashMergeEdges, graphWidth)
     }
-  }, [commits, scroll, squashMergeEdges, virtualRows])
+  }, [commits, graphWidth, scroll, squashMergeEdges, virtualRows])
+
+  function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
+    const originX = "touches" in event ? event.touches[0].clientX : event.clientX
+    const originWidth = graphWidth
+    setIsResizingGraph(true)
+
+    const onMove = (moveEvent: MouseEvent | TouchEvent) => {
+      const clientX = "touches" in moveEvent ? moveEvent.touches[0]?.clientX : moveEvent.clientX
+      if (clientX !== undefined) {
+        setGraphWidth(clampGraphWidth(originWidth + clientX - originX))
+      }
+    }
+
+    const onEnd = () => {
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onEnd)
+      window.removeEventListener("touchmove", onMove)
+      window.removeEventListener("touchend", onEnd)
+      setIsResizingGraph(false)
+    }
+
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onEnd)
+    window.addEventListener("touchmove", onMove)
+    window.addEventListener("touchend", onEnd)
+  }
 
   function onScroll() {
     if (scrollFrame.current !== null) {
@@ -608,10 +636,26 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </DropdownMenu>
         </ButtonGroup>
       </div>
-      <div className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement}>
+      <div className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} style={{ "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
           <div className="commit-graph-header-content" style={{ minWidth: tableWidth }}>
-            <div className="commit-graph-header-spacer">Graph</div>
+            <div className="commit-graph-header-spacer">
+              Graph
+              <div
+                aria-label="Resize Graph column"
+                className={`commit-graph-resize-handle${isResizingGraph ? " is-resizing" : ""}`}
+                onDoubleClick={() => setGraphWidth(fitGraphWidth(commits))}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  startGraphResize(event)
+                }}
+                onTouchStart={(event) => {
+                  event.preventDefault()
+                  startGraphResize(event)
+                }}
+                role="separator"
+              />
+            </div>
             <div className="commit-graph-header-columns" style={{ gridTemplateColumns: columnTemplate }}>
               {table.getFlatHeaders().map((header) => (
                 <div className="commit-graph-header-cell" key={header.id}>

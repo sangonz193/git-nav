@@ -4,6 +4,9 @@ import {
   ancestryPath,
   commitSelection,
   displayRefs,
+  fitGraphWidth,
+  GRAPH_MAX_WIDTH,
+  GRAPH_MIN_WIDTH,
   isCurrentCheckout,
   relativeDate,
   splitRefLabel,
@@ -256,5 +259,33 @@ describe("isCurrentCheckout", () => {
 describe("relativeDate", () => {
   test("returns the original value when it is not a date", () => {
     expect(relativeDate("not a date")).toBe("not a date")
+  })
+})
+
+describe("fitGraphWidth", () => {
+  test("falls back to the minimum width for a single lane history", () => {
+    expect(fitGraphWidth(linear)).toBe(GRAPH_MIN_WIDTH)
+  })
+
+  test("covers the widest lane count seen across the commits", () => {
+    expect(
+      fitGraphWidth([
+        { ...commit("a"), laneCount: 3 },
+        { ...commit("b"), laneCount: 9 },
+        { ...commit("c"), laneCount: 2 },
+      ])
+    ).toBe(18 + 9 * 14)
+  })
+
+  test("covers lanes that only appear as parent or incoming lanes", () => {
+    expect(
+      fitGraphWidth([{ ...commit("a"), parentLanes: [4], incomingLanes: [6] }])
+    ).toBe(18 + 7 * 14)
+  })
+
+  test("clamps a very wide history to the maximum width", () => {
+    expect(fitGraphWidth([{ ...commit("a"), laneCount: 200 }])).toBe(
+      GRAPH_MAX_WIDTH
+    )
   })
 })

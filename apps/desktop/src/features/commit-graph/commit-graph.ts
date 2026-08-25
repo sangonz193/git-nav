@@ -40,8 +40,28 @@ export const ROW_HEIGHT = 32
 export const GRAPH_WIDTH = 112
 export const GRAPH_GUTTER = 18
 export const LANE_WIDTH = 14
+export const GRAPH_MIN_WIDTH = 46
+export const GRAPH_MAX_WIDTH = 480
 export const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#22d3ee", "#fb923c"]
 const REF_TAIL_LENGTH = 8
+
+export function clampGraphWidth(width: number) {
+  return Math.round(Math.max(GRAPH_MIN_WIDTH, Math.min(GRAPH_MAX_WIDTH, width)))
+}
+
+export function fitGraphWidth(commits: Commit[]) {
+  let lanes = 0
+  for (const commit of commits) {
+    lanes = Math.max(lanes, commit.laneCount, commit.lane + 1, commit.activeLanes.length)
+    for (const lane of commit.parentLanes) {
+      lanes = Math.max(lanes, lane + 1)
+    }
+    for (const lane of commit.incomingLanes) {
+      lanes = Math.max(lanes, lane + 1)
+    }
+  }
+  return clampGraphWidth(GRAPH_GUTTER + lanes * LANE_WIDTH)
+}
 
 export function isCurrentCheckout(refs: string[]) {
   return refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))

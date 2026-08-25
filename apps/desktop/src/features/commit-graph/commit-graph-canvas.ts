@@ -1,14 +1,14 @@
 import { GRAPH_COLORS, GRAPH_GUTTER, GRAPH_WIDTH, isCurrentCheckout, LANE_WIDTH, ROW_HEIGHT, type Commit } from "./commit-graph"
 
-export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], items: { index: number; start: number }[], scrollTop: number, height: number, squashMergeEdges: { branchIndex: number; targetIndex: number }[]) {
+export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], items: { index: number; start: number }[], scrollTop: number, height: number, squashMergeEdges: { branchIndex: number; targetIndex: number }[], width = GRAPH_WIDTH) {
   const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
-  const pixelWidth = Math.ceil(GRAPH_WIDTH * ratio)
+  const pixelWidth = Math.ceil(width * ratio)
 
   if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
     canvas.width = pixelWidth
     canvas.height = pixelHeight
-    canvas.style.width = `${GRAPH_WIDTH}px`
+    canvas.style.width = `${width}px`
     canvas.style.height = `${height}px`
   }
 
@@ -18,7 +18,7 @@ export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], it
   }
 
   context.setTransform(ratio, 0, 0, ratio, 0, 0)
-  context.clearRect(0, 0, GRAPH_WIDTH, height)
+  context.clearRect(0, 0, width, height)
   context.lineWidth = 2
   context.lineCap = "round"
 
