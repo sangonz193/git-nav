@@ -447,6 +447,9 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
     let Some((host, repository)) = github_repository(&remote) else {
         return Vec::new();
     };
+    let Ok(primary) = primary_reference(repo_path) else {
+        return Vec::new();
+    };
     let Some(refs) = git_output(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]) else {
         return Vec::new();
     };
@@ -475,8 +478,8 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
     for pull_request in pull_requests.flatten() {
         let (source, target) = pull_request;
         if ref_hashes.contains(source.as_str())
-            && !git_succeeds(repo_path, &["merge-base", "--is-ancestor", &source, "HEAD"])
-            && git_succeeds(repo_path, &["merge-base", "--is-ancestor", &target, "HEAD"])
+            && !git_succeeds(repo_path, &["merge-base", "--is-ancestor", &source, &primary])
+            && git_succeeds(repo_path, &["merge-base", "--is-ancestor", &target, &primary])
         {
             edges.insert((source, target));
         }
