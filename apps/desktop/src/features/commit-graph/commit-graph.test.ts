@@ -1,0 +1,260 @@
+import { describe, expect, test } from "bun:test"
+
+import {
+  ancestryPath,
+  commitSelection,
+  displayRefs,
+  isCurrentCheckout,
+  relativeDate,
+  splitRefLabel,
+} from "./commit-graph"
+
+function commit(hash: string, parents: string[] = []) {
+  return {
+    hash,
+    parents,
+    author: "Ada",
+    date: "2026-01-01T00:00:00Z",
+    refs: [],
+    subject: hash,
+    lane: 0,
+    parentLanes: [],
+    laneCount: 1,
+    incomingLanes: [],
+    activeLanes: [],
+  }
+}
+
+const linear = [
+  commit("a", ["b"]),
+  commit("b", ["c"]),
+  commit("c", ["d"]),
+  commit("d"),
+]
+
+const sideBranch = [
+  commit("a", ["b"]),
+  commit("x", ["c"]),
+  commit("b", ["c"]),
+  commit("c"),
+]
+
+const merged = [
+  commit("m", ["f", "g"]),
+  commit("f", ["b"]),
+  commit("g", ["b"]),
+  commit("b", ["c"]),
+  commit("c"),
+]
+
+describe("ancestryPath", () => {
+  test("selects every commit between the endpoints of a linear chain", () => {
+    expect(ancestryPath(linear, 0, 2).map((c) => c.hash)).toEqual([
+      "a",
+      "b",
+      "c",
+    ])
+  })
+
+  test("skips a sibling branch commit that sits between the endpoints", () => {
+    expect(ancestryPath(sideBranch, 0, 3).map((c) => c.hash)).toEqual([
+      "a",
+      "b",
+      "c",
+    ])
+  })
+
+  test("skips a commit reachable from the tip that is not an ancestor of the base", () => {
+    expect(ancestryPath(merged, 0, 2).map((c) => c.hash)).toEqual(["m", "g"])
+  })
+
+  test("selects nothing for two unrelated sibling tips", () => {
+    expect(ancestryPath(sideBranch, 0, 1)).toEqual([])
+  })
+
+  test("gives the same result regardless of endpoint order", () => {
+    expect(ancestryPath(sideBranch, 3, 0)).toEqual(
+      ancestryPath(sideBranch, 0, 3)
+    )
+  })
+
+  test("selects only the commit itself for a single index", () => {
+    expect(ancestryPath(sideBranch, 1, 1).map((c) => c.hash)).toEqual(["x"])
+  })
+
+  test("selects both parent lines of a merge in range", () => {
+    expect(ancestryPath(merged, 0, 3).map((c) => c.hash)).toEqual([
+      "m",
+      "f",
+      "g",
+      "b",
+    ])
+  })
+
+  test("selects down to a root commit endpoint", () => {
+    expect(ancestryPath(linear, 0, 3).map((c) => c.hash)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ])
+  })
+})
+
+describe("commitSelection", () => {
+  test("reports the newest selected commit as the tip", () => {
+    expect(commitSelection(linear, 2, 0)?.tip.hash).toBe("a")
+  })
+
+  test("resolves the base to the first parent of the oldest selected commit", () => {
+    expect(commitSelection(linear, 0, 2)?.base?.hash).toBe("d")
+  })
+
+  test("resolves the base to the first parent of an oldest merge commit", () => {
+    expect(commitSelection(merged, 0, 0)?.base?.hash).toBe("f")
+  })
+
+  test("leaves the base null for a root commit", () => {
+    expect(commitSelection(linear, 0, 3)?.base).toBeNull()
+  })
+
+  test("leaves the base null when the parent has not streamed in yet", () => {
+    expect(commitSelection(linear.slice(0, 3), 0, 2)?.base).toBeNull()
+  })
+
+  test("returns null when the endpoints share no ancestry path", () => {
+    expect(commitSelection(sideBranch, 0, 1)).toBeNull()
+  })
+})
+
+describe("displayRefs", () => {
+  const worktrees = [
+    { branch: "main", name: "main", path: "/repos/main", isOpen: false },
+  ]
+
+  test("orders the current checkout, other worktrees, locals, remotes and tags", () => {
+    const refs = displayRefs(
+      [
+        "origin/staging",
+        "main",
+        "origin/main",
+        "tag: v1.0.0",
+        "HEAD -> feature",
+        "origin/feature",
+      ],
+      worktrees
+    )
+    expect(refs.map((ref) => ref.label)).toEqual([
+      "feature · origin",
+      "main · origin",
+      "origin/staging",
+      "v1.0.0",
+    ])
+    expect(refs[0].checkedOut).toBe(true)
+    expect(refs[1].worktrees).toEqual(worktrees)
+  })
+
+  test("pairs a local branch with its remote into one entry", () => {
+    expect(displayRefs(["main", "origin/main"])).toEqual([
+      {
+        branch: "main",
+        label: "main · origin",
+        checkedOut: false,
+        tag: false,
+        worktrees: [],
+      },
+    ])
+  })
+
+  test("keeps an unpushed local branch and a remote-only branch separate", () => {
+    expect(
+      displayRefs(["main", "origin/staging"]).map((ref) => ref.label)
+    ).toEqual(["main", "origin/staging"])
+    expect(
+      displayRefs(["main", "origin/staging"]).map((ref) => ref.branch)
+    ).toEqual(["main", null])
+  })
+
+  test("excludes origin/HEAD", () => {
+    expect(
+      displayRefs(["origin/HEAD", "origin/staging"]).map((ref) => ref.label)
+    ).toEqual(["origin/staging"])
+  })
+
+  test("includes the checked out branch even when it has no ref of its own", () => {
+    expect(displayRefs(["HEAD -> feature"])).toEqual([
+      {
+        branch: "feature",
+        label: "feature",
+        checkedOut: true,
+        tag: false,
+        worktrees: [],
+      },
+    ])
+  })
+
+  test("marks a detached checkout of a remote branch as checked out", () => {
+    expect(displayRefs(["HEAD -> origin/main"])).toEqual([
+      {
+        branch: null,
+        label: "origin/main",
+        checkedOut: true,
+        tag: false,
+        worktrees: [],
+      },
+    ])
+  })
+
+  test("strips the tag prefix and sorts tags last", () => {
+    expect(displayRefs(["tag: v1.0.0", "main"])).toEqual([
+      {
+        branch: "main",
+        label: "main",
+        checkedOut: false,
+        tag: false,
+        worktrees: [],
+      },
+      {
+        branch: null,
+        label: "v1.0.0",
+        checkedOut: false,
+        tag: true,
+        worktrees: [],
+      },
+    ])
+  })
+})
+
+describe("splitRefLabel", () => {
+  test("keeps a short label whole", () => {
+    expect(splitRefLabel("main")).toEqual({ start: "main", end: "" })
+  })
+
+  test("keeps a label of exactly the tail length whole", () => {
+    expect(splitRefLabel("release1")).toEqual({ start: "release1", end: "" })
+  })
+
+  test("splits a longer label into a head and an eight character tail", () => {
+    expect(splitRefLabel("feature/authentication")).toEqual({
+      start: "feature/authen",
+      end: "tication",
+    })
+  })
+})
+
+describe("isCurrentCheckout", () => {
+  test("matches a detached HEAD and a HEAD pointing at a branch", () => {
+    expect(isCurrentCheckout(["HEAD"])).toBe(true)
+    expect(isCurrentCheckout(["origin/main", "HEAD -> main"])).toBe(true)
+  })
+
+  test("does not match a branch that merely starts with HEAD", () => {
+    expect(isCurrentCheckout(["HEADER", "origin/HEAD"])).toBe(false)
+  })
+})
+
+describe("relativeDate", () => {
+  test("returns the original value when it is not a date", () => {
+    expect(relativeDate("not a date")).toBe("not a date")
+  })
+})
