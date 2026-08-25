@@ -98,6 +98,15 @@ body {
   overflow: auto;
 }
 
+.commit-graph-scroll.is-selecting {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.commit-graph-scroll.is-unrelated {
+  cursor: no-drop;
+}
+
 .commit-graph-header {
   background: var(--background);
   border-bottom: 1px solid rgb(255 255 255 / 8%);
@@ -247,6 +256,49 @@ body {
 
 .commit-graph-row.commit-graph-row-current:hover {
   background: color-mix(in srgb, var(--commit-ref-color) 16%, transparent);
+}
+
+.commit-graph-row.commit-graph-row-selected {
+  background: rgb(96 165 250 / 20%);
+  box-shadow: inset 0 0 0 1px rgb(96 165 250 / 40%);
+}
+
+.commit-graph-row.commit-graph-row-selected:hover {
+  background: rgb(96 165 250 / 28%);
+}
+
+.commit-graph-row.commit-graph-row-current.commit-graph-row-selected {
+  background: color-mix(in srgb, var(--commit-ref-color) 12%, rgb(96 165 250 / 20%));
+  box-shadow: inset 2px 0 0 var(--commit-ref-color), inset 0 0 0 1px rgb(96 165 250 / 40%);
+}
+
+.commit-graph-selection-bar {
+  align-items: center;
+  background: color-mix(in srgb, var(--background) 92%, transparent);
+  border: 1px solid rgb(244 244 245 / 45%);
+  border-radius: 6px;
+  bottom: 8px;
+  color: #f4f4f5;
+  display: flex;
+  font-size: 0.6875rem;
+  gap: 6px;
+  padding: 4px 6px;
+  position: absolute;
+  right: 8px;
+  z-index: 3;
+}
+
+.commit-graph-selection-bar svg {
+  height: 12px;
+  width: 12px;
+}
+
+.commit-graph-selection-summary {
+  max-width: 320px;
+  overflow: hidden;
+  padding-left: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .commit-graph-summary {

@@ -30,6 +30,12 @@ export type DisplayRef = {
   worktrees: CheckedOutWorktree[]
 }
 
+export type CommitSelection = {
+  commits: Commit[]
+  tip: Commit
+  base: Commit | null
+}
+
 export const ROW_HEIGHT = 32
 export const GRAPH_WIDTH = 112
 export const GRAPH_GUTTER = 18
@@ -43,6 +49,56 @@ export function isCurrentCheckout(refs: string[]) {
 
 export function commitFromTuple([hash, parents, author, date, refs, subject, lane, parentLanes, laneCount, incomingLanes, activeLanes]: CommitBatch[number]): Commit {
   return { hash, parents, author, date, refs, subject, lane, parentLanes, laneCount, incomingLanes, activeLanes }
+}
+
+// The graph is topologically ordered, so a parent always sits at a higher index than its children.
+export function ancestryPath(commits: Commit[], indexA: number, indexB: number) {
+  const first = Math.min(indexA, indexB)
+  const last = Math.max(indexA, indexB)
+  const indexes = new Map<string, number>()
+  for (let index = first; index <= last; index++) {
+    indexes.set(commits[index].hash, index)
+  }
+
+  const reachesTip = new Array<boolean>(last - first + 1).fill(false)
+  reachesTip[0] = true
+  for (let index = first; index <= last; index++) {
+    if (!reachesTip[index - first]) {
+      continue
+    }
+    for (const parent of commits[index].parents) {
+      const parentIndex = indexes.get(parent)
+      if (parentIndex !== undefined) {
+        reachesTip[parentIndex - first] = true
+      }
+    }
+  }
+
+  const reachesBase = new Array<boolean>(last - first + 1).fill(false)
+  reachesBase[last - first] = true
+  for (let index = last - 1; index >= first; index--) {
+    reachesBase[index - first] = commits[index].parents.some((parent) => {
+      const parentIndex = indexes.get(parent)
+      return parentIndex !== undefined && reachesBase[parentIndex - first]
+    })
+  }
+
+  const path: Commit[] = []
+  for (let index = first; index <= last; index++) {
+    if (reachesTip[index - first] && reachesBase[index - first]) {
+      path.push(commits[index])
+    }
+  }
+  return path
+}
+
+export function commitSelection(commits: Commit[], indexA: number, indexB: number): CommitSelection | null {
+  const path = ancestryPath(commits, indexA, indexB)
+  if (path.length === 0) {
+    return null
+  }
+  const [baseHash] = path[path.length - 1].parents
+  return { commits: path, tip: path[0], base: baseHash ? commits.find((commit) => commit.hash === baseHash) ?? null : null }
 }
 
 export function relativeDate(value: string) {
