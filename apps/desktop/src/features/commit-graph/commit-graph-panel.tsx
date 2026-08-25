@@ -8,11 +8,12 @@ import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2, X } from "lucide-react"
-import { type ComponentType, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2, TriangleAlert, Undo2, X } from "lucide-react"
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
 import { ancestryPath, commitFromTuple, commitSelection, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
+import { OperationMenuItems, type OperationPlan, type RebaseResult, type RefMenuComponents, type RefUpdate } from "./commit-operations"
 import type { RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
 
@@ -21,6 +22,7 @@ const PULL_REQUEST_SYNC_INTERVAL = 60_000
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
+const REBASE_UNDO_TIMEOUT = 30_000
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
 type BranchSelection = { baseSha: string, headSha: string, baseLabel: string, headLabel: string }
 type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBranches: boolean }
@@ -28,12 +30,7 @@ type CleanResult = { report: string } | { result: BranchCleanup }
 type CleanupCandidate = { branch: string, reasons: CleanupReason[] }
 type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch"
 type RangeDrag = { anchorIndex: number, focusIndex: number }
-type RefMenuComponents = {
-  Item: ComponentType<{ children: ReactNode, disabled?: boolean, onSelect?: () => void }>
-  Sub: ComponentType<{ children: ReactNode }>
-  SubContent: ComponentType<{ children: ReactNode }>
-  SubTrigger: ComponentType<{ children: ReactNode }>
-}
+type RebaseUndo = { branch: string, onto: string, updates: RefUpdate[] }
 type SelectionRange = { anchorHash: string, focusHash: string }
 type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
@@ -57,6 +54,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(null)
   const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(null)
   const [branchToDelete, setBranchToDelete] = useState<string | null>(null)
+  const [rebasePlan, setRebasePlan] = useState<OperationPlan | null>(null)
+  const [rebaseUndo, setRebaseUndo] = useState<RebaseUndo | null>(null)
   const [graphVersion, setGraphVersion] = useState(0)
   const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(null)
@@ -174,6 +173,31 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     },
     onError: (message) => setError(String(message)),
   })
+  const rebaseMutation = useMutation({
+    mutationFn: (plan: OperationPlan) => invoke<RebaseResult>("rebase_onto", { repoPath: params.path, onto: plan.onto, upstream: plan.upstream, branch: plan.branch }),
+    onMutate: () => {
+      setError(null)
+      setRebaseUndo(null)
+    },
+    onSuccess: (result, plan) => {
+      setRebasePlan(null)
+      if (result.outcome === "failed") {
+        setError([result.message, ...result.files].join("\n"))
+        return
+      }
+      setRebaseUndo({ branch: result.branch, onto: plan.onto, updates: result.updates })
+      refreshGraph()
+    },
+    onError: (message) => setError(String(message)),
+  })
+  const undoRebaseMutation = useMutation({
+    mutationFn: (updates: RefUpdate[]) => invoke("undo_ref_updates", { repoPath: params.path, updates }),
+    onSuccess: () => {
+      setRebaseUndo(null)
+      refreshGraph()
+    },
+    onError: (message) => setError(String(message)),
+  })
 
   const updateScroll = useCallback(() => {
     const element = scrollElement.current
@@ -258,6 +282,14 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     const timeout = window.setTimeout(() => setCleanupReport(null), 6_000)
     return () => window.clearTimeout(timeout)
   }, [cleanupReport])
+
+  useEffect(() => {
+    if (!rebaseUndo) {
+      return
+    }
+    const timeout = window.setTimeout(() => setRebaseUndo(null), REBASE_UNDO_TIMEOUT)
+    return () => window.clearTimeout(timeout)
+  }, [rebaseUndo])
 
   useEffect(() => {
     if (isCleanConfirmationOpen) {
@@ -455,7 +487,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     window.addEventListener("pointerup", onPointerUp)
   }
 
-  function refMenuItems(ref: DisplayRef, { Item, Sub, SubContent, SubTrigger }: RefMenuComponents) {
+  function refMenuItems(ref: DisplayRef, sha: string, components: RefMenuComponents) {
+    const { Item, Sub, SubContent, SubTrigger } = components
     const { branch } = ref
     const reference = refName(ref)
     return (
@@ -468,6 +501,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           <Copy />
           Copy ref name
         </Item>
+        <OperationMenuItems components={components} onConfirm={setRebasePlan} repoPath={params.path} source={selection} targetRef={ref} targetSha={sha} />
         {ref.worktrees.length > 0 && (
           <Sub>
             <SubTrigger>
@@ -509,17 +543,17 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     )
   }
 
-  function refMenuEntry(ref: DisplayRef, key: string, components: RefMenuComponents) {
+  function refMenuEntry(ref: DisplayRef, sha: string, key: string, components: RefMenuComponents) {
     const { Sub, SubContent, SubTrigger } = components
     return (
       <Sub key={key}>
         <SubTrigger>{ref.label}</SubTrigger>
-        <SubContent>{refMenuItems(ref, components)}</SubContent>
+        <SubContent>{refMenuItems(ref, sha, components)}</SubContent>
       </Sub>
     )
   }
 
-  function refChip(ref: DisplayRef) {
+  function refChip(ref: DisplayRef, sha: string) {
     const { start, end } = splitRefLabel(ref.label)
     const chip = (
       <span
@@ -541,9 +575,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
             <DropdownMenuTrigger asChild>{chip}</DropdownMenuTrigger>
           </ContextMenuTrigger>
-          <ContextMenuContent>{refMenuItems(ref, contextMenuComponents)}</ContextMenuContent>
+          <ContextMenuContent>{refMenuItems(ref, sha, contextMenuComponents)}</ContextMenuContent>
         </ContextMenu>
-        <DropdownMenuContent>{refMenuItems(ref, dropdownMenuComponents)}</DropdownMenuContent>
+        <DropdownMenuContent>{refMenuItems(ref, sha, dropdownMenuComponents)}</DropdownMenuContent>
       </DropdownMenu>
     )
   }
@@ -617,14 +651,14 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                   <article className={`commit-graph-row${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onPointerDown={(event) => startRangeDrag(event, row.index)} style={{ "--commit-ref-color": refColor, gridTemplateColumns: columnTemplate, transform: `translateY(${row.start}px)` } as CSSProperties}>
                 <div className="commit-graph-summary">
                   <div className="commit-graph-refs">
-                    {primaryRef && refChip(primaryRef)}
+                    {primaryRef && refChip(primaryRef, commit.hash)}
                     {overflowRefs.length > 0 && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <span className="commit-ref">{`+${overflowRefs.length}`}</span>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent>
-                          {overflowRefs.map((ref, index) => refMenuEntry(ref, `${ref.label}-${index}`, dropdownMenuComponents))}
+                          {overflowRefs.map((ref, index) => refMenuEntry(ref, commit.hash, `${ref.label}-${index}`, dropdownMenuComponents))}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
@@ -662,7 +696,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                         Refs
                       </ContextMenuSubTrigger>
                       <ContextMenuSubContent>
-                        {refs.map((ref, index) => refMenuEntry(ref, `${ref.label}-${index}`, contextMenuComponents))}
+                        {refs.map((ref, index) => refMenuEntry(ref, commit.hash, `${ref.label}-${index}`, contextMenuComponents))}
                       </ContextMenuSubContent>
                     </ContextMenuSub>
                   )}
@@ -696,6 +730,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       {commits.length === 0 && !error && <p className="commit-graph-status">Loading commits…</p>}
       {error && <p className="commit-graph-status text-destructive">{error}</p>}
       {cleanupReport && <p className="commit-graph-cleanup-report">{cleanupReport}</p>}
+      {rebaseUndo && (
+        <div className="commit-graph-cleanup-report flex items-center gap-3">
+          <span>{`Rebased ${rebaseUndo.branch} onto ${rebaseUndo.onto}.`}</span>
+          <Button disabled={undoRebaseMutation.isPending} onClick={() => undoRebaseMutation.mutate(rebaseUndo.updates)} size="xs" type="button" variant="outline">
+            <Undo2 />
+            {undoRebaseMutation.isPending ? "Undoing…" : "Undo"}
+          </Button>
+        </div>
+      )}
       <AlertDialog onOpenChange={setIsCleanConfirmationOpen} open={isCleanConfirmationOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -753,6 +796,38 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             <AlertDialogCancel disabled={deleteBranchMutation.isPending}>Cancel</AlertDialogCancel>
             <Button disabled={deleteBranchMutation.isPending} onClick={() => branchToDelete && deleteBranchMutation.mutate(branchToDelete)} type="button" variant="destructive">
               {deleteBranchMutation.isPending ? "Deleting…" : "Delete branch"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog onOpenChange={(open) => !open && setRebasePlan(null)} open={rebasePlan !== null}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rebase {rebasePlan?.branch} onto {rebasePlan?.onto}?</AlertDialogTitle>
+            <AlertDialogDescription>This rewrites the selected commits and moves {rebasePlan?.branch} to the result.</AlertDialogDescription>
+          </AlertDialogHeader>
+          {rebasePlan && rebasePlan.warnings.length > 0 && (
+            <ul className="grid gap-2 text-sm">
+              {rebasePlan.warnings.map((warning) => (
+                <li className="flex items-start gap-2" key={warning.message}>
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-400" />
+                  <div className="min-w-0">
+                    <p>{warning.message}</p>
+                    {warning.files && (
+                      <ul className="font-mono text-xs text-muted-foreground">
+                        {warning.files.map((file) => <li key={file}>{file}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <code className="overflow-x-auto rounded-lg border p-3 font-mono text-xs whitespace-pre">{rebasePlan?.argv.join(" ")}</code>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={rebaseMutation.isPending}>Cancel</AlertDialogCancel>
+            <Button disabled={rebaseMutation.isPending} onClick={() => rebasePlan && rebaseMutation.mutate(rebasePlan)} type="button">
+              {rebaseMutation.isPending ? "Rebasing…" : "Rebase"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
