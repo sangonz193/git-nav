@@ -12,7 +12,7 @@
   --dv-icon-hover-background-color: #27272a;
   --dv-tab-divider-color: transparent;
   --dv-tabs-and-actions-container-height: 42px;
-  --dv-tab-font-size: 14px;
+  --dv-tab-font-size: 0.875rem;
   --dv-tab-margin: 4px;
   --dv-tab-border-radius: 9px;
   --dv-overlay-z-index: 999;
@@ -29,6 +29,7 @@
 
 .git-nav-dockview-theme .dv-tab {
   border-radius: 9px;
+  cursor: default;
   height: 34px;
   margin: 0;
   overflow: hidden;
@@ -59,7 +60,16 @@
 
 :root {
   color-scheme: light;
+  font-size: 14px;
   scrollbar-color: var(--muted-foreground) var(--background);
+}
+
+body {
+  font-size: 0.875rem;
+}
+
+* {
+  scrollbar-width: thin;
 }
 
 .dark {
@@ -108,7 +118,7 @@
   color: #71717a;
   display: flex;
   flex: 0 0 112px;
-  font-size: 11px;
+  font-size: 0.75rem;
   font-weight: 600;
   padding-left: 16px;
   text-transform: uppercase;
@@ -123,7 +133,7 @@
   align-items: center;
   color: #a1a1aa;
   display: flex;
-  font-size: 11px;
+  font-size: 0.75rem;
   font-weight: 600;
   min-width: 0;
   padding: 0 16px 0 8px;
@@ -180,7 +190,6 @@
   align-items: center;
   border-bottom: 1px solid rgb(255 255 255 / 4%);
   display: grid;
-  font-size: 12px;
   height: 32px;
   left: 112px;
   position: absolute;
@@ -232,10 +241,10 @@
   background: var(--commit-ref-color);
   border-radius: 2px;
   color: #09090b;
-  font-size: 9px;
+  font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0.03em;
-  line-height: 14px;
+  line-height: 1.4;
   padding: 0 3px;
 }
 
