@@ -4,15 +4,27 @@ import {
   type IWatermarkPanelProps,
   themeDark,
 } from "dockview-react"
-import { Plus } from "lucide-react"
+import { GitCompareArrows, GitGraph, Plus } from "lucide-react"
 import { createContext, useContext } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@workspace/shadcn/components/dropdown-menu"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
+import { DiffPanel } from "../diff/diff-panel"
 
 export type RepositoryPanelParams = {
   name: string
   path: string
+}
+
+export type DiffPanelParams = RepositoryPanelParams & {
+  baseRef: string
+  headRef: string
 }
 
 const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
@@ -27,6 +39,16 @@ function addGraphPanel(containerApi: IWatermarkPanelProps["containerApi"] | IDoc
   })
 }
 
+function addDiffPanel(containerApi: IDockviewHeaderActionsProps["containerApi"], params: RepositoryPanelParams, referencePanel: IDockviewHeaderActionsProps["activePanel"]) {
+  containerApi.addPanel({
+    component: "diff",
+    id: `repository-diff-${crypto.randomUUID()}`,
+    params: { ...params, baseRef: "HEAD~1", headRef: "HEAD" },
+    position: { direction: "within", referencePanel },
+    title: "Diff",
+  })
+}
+
 function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
   const params = useContext(RepositoryContext)
   if (!params) {
@@ -34,14 +56,24 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
   }
 
   return (
-    <button
-      aria-label="New tab"
-      className="flex size-[34px] items-center justify-center rounded-[9px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-      onClick={() => addGraphPanel(containerApi, params, activePanel)}
-      type="button"
-    >
-      <Plus className="size-4" />
-    </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label="New tab"
+        className="flex size-[34px] items-center justify-center rounded-[9px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100 data-[state=open]:bg-zinc-800 data-[state=open]:text-zinc-100"
+      >
+        <Plus className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <DropdownMenuItem onSelect={() => addGraphPanel(containerApi, params, activePanel)}>
+          <GitGraph />
+          Graph
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => addDiffPanel(containerApi, params, activePanel)}>
+          <GitCompareArrows />
+          Diff
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -62,6 +94,7 @@ function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
 }
 
 const repositoryPanels = {
+  diff: DiffPanel,
   graph: CommitGraphPanel,
 }
 

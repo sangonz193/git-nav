@@ -41,6 +41,42 @@ struct Project {
     worktrees: Vec<Worktree>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChangedFile {
+    status: String,
+    old_path: Option<String>,
+    new_path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Comparison {
+    base_sha: String,
+    head_sha: String,
+    files: Vec<ChangedFile>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileDiff {
+    old_file_name: Option<String>,
+    new_file_name: Option<String>,
+    old_content: Option<String>,
+    new_content: Option<String>,
+    hunks: Vec<String>,
+    is_binary: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchSelection {
+    base_sha: String,
+    head_sha: String,
+    base_label: String,
+    head_label: String,
+}
+
 struct WorktreeRecord {
     path: String,
     branch: String,
@@ -142,6 +178,75 @@ fn git_output_bytes(path: &str, arguments: &[&str]) -> Option<Vec<u8>> {
         .ok()?;
 
     output.status.success().then_some(output.stdout)
+}
+
+fn git_output_allow_empty(path: &str, arguments: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(arguments)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    String::from_utf8(output.stdout).map_err(|error| error.to_string())
+}
+
+fn resolve_commit(path: &str, reference: &str) -> Result<String, String> {
+    let revision = format!("{reference}^{{commit}}");
+    git_output_allow_empty(path, &["rev-parse", "--verify", "--end-of-options", &revision])
+        .map(|value| value.trim().to_string())
+        .and_then(|value| (!value.is_empty()).then_some(value).ok_or_else(|| format!("Could not resolve {reference}.")))
+}
+
+fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<ChangedFile>, String> {
+    let output = git_output_bytes(path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--name-status", "-z", base_sha, head_sha])
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    let fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| String::from_utf8(field.to_vec()).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut files = Vec::new();
+    let mut index = 0;
+    while let Some(status) = fields.get(index) {
+        index += 1;
+        let kind = status.chars().next().ok_or_else(|| "Invalid git diff status.".to_string())?;
+        let first_path = fields.get(index).ok_or_else(|| "Invalid git diff path.".to_string())?.clone();
+        index += 1;
+        let (old_path, new_path, status) = match kind {
+            'A' => (None, Some(first_path), "added"),
+            'D' => (Some(first_path), None, "deleted"),
+            'R' => {
+                let new_path = fields.get(index).ok_or_else(|| "Invalid renamed path.".to_string())?.clone();
+                index += 1;
+                (Some(first_path), Some(new_path), "renamed")
+            }
+            'C' => {
+                let new_path = fields.get(index).ok_or_else(|| "Invalid copied path.".to_string())?.clone();
+                index += 1;
+                (Some(first_path), Some(new_path), "copied")
+            }
+            _ => (Some(first_path.clone()), Some(first_path), "modified"),
+        };
+        files.push(ChangedFile { status: status.to_string(), old_path, new_path });
+    }
+    Ok(files)
+}
+
+fn primary_reference(path: &str) -> Result<String, String> {
+    if let Some(reference) = git_output(path, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]) {
+        if resolve_commit(path, &reference).is_ok() {
+            return Ok(reference);
+        }
+    }
+    for reference in ["main", "master", "HEAD"] {
+        if resolve_commit(path, reference).is_ok() {
+            return Ok(reference.to_string());
+        }
+    }
+    Err("Could not identify the primary branch.".to_string())
 }
 
 fn worktree_path(path: &str) -> Result<String, String> {
@@ -692,6 +797,91 @@ async fn inferred_squash_merge_edges(app: AppHandle, repo_path: String) -> Vec<(
         .unwrap_or_default()
 }
 
+#[tauri::command]
+fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
+    let base_sha = resolve_commit(&repo_path, &base_ref)?;
+    let head_sha = resolve_commit(&repo_path, &head_ref)?;
+    Ok(Comparison {
+        files: changed_files(&repo_path, &base_sha, &head_sha)?,
+        base_sha,
+        head_sha,
+    })
+}
+
+#[tauri::command]
+fn reference_picker_commits(repo_path: String) -> Result<Vec<Vec<serde_json::Value>>, String> {
+    let output = git_output_allow_empty(
+        &repo_path,
+        &[
+            "log",
+            "--all",
+            "--topo-order",
+            "--max-count=250",
+            "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s",
+        ],
+    )?;
+    let mut lanes = Vec::new();
+    Ok(output
+        .lines()
+        .filter_map(|line| parse_commit(line, &mut lanes))
+        .collect())
+}
+
+#[tauri::command]
+fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSelection, String> {
+    let primary = primary_reference(&repo_path)?;
+    let primary_sha = resolve_commit(&repo_path, &primary)?;
+    let head_sha = resolve_commit(&repo_path, &reference)?;
+    let base_sha = git_output_allow_empty(&repo_path, &["merge-base", &primary_sha, &head_sha])?
+        .trim()
+        .to_string();
+    if base_sha.is_empty() {
+        return Err(format!("Could not find a merge base for {reference}."));
+    }
+    Ok(BranchSelection {
+        base_sha,
+        head_sha,
+        base_label: format!("merge-base({primary}, {reference})"),
+        head_label: reference,
+    })
+}
+
+#[tauri::command]
+fn diff_file(
+    repo_path: String,
+    base_sha: String,
+    head_sha: String,
+    old_path: Option<String>,
+    new_path: Option<String>,
+) -> Result<FileDiff, String> {
+    let path = new_path.as_ref().or(old_path.as_ref()).ok_or_else(|| "No file path was provided.".to_string())?;
+    let numstat = git_output_allow_empty(&repo_path, &["diff", "--no-ext-diff", "--numstat", &base_sha, &head_sha, "--", path])?;
+    let is_binary = numstat.lines().next().is_some_and(|line| line.starts_with("-\t-\t"));
+    if is_binary {
+        return Ok(FileDiff {
+            old_file_name: old_path,
+            new_file_name: new_path,
+            old_content: None,
+            new_content: None,
+            hunks: Vec::new(),
+            is_binary: true,
+        });
+    }
+
+    let old_content = old_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{base_sha}:{path}")])).transpose()?;
+    let new_content = new_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{head_sha}:{path}")])).transpose()?;
+    let patch = git_output_allow_empty(&repo_path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3", &base_sha, &head_sha, "--", path])?;
+
+    Ok(FileDiff {
+        old_file_name: old_path,
+        new_file_name: new_path,
+        old_content,
+        new_content,
+        hunks: (!patch.is_empty()).then_some(vec![patch]).unwrap_or_default(),
+        is_binary: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,7 +1031,11 @@ pub fn run() {
             open_repository,
             project_snapshot,
             stream_commit_graph,
-            inferred_squash_merge_edges
+            inferred_squash_merge_edges,
+            compare_refs,
+            reference_picker_commits,
+            select_branch_range,
+            diff_file
         ])
         .setup(move |app| {
             if let Some(path) = &repository_path {
