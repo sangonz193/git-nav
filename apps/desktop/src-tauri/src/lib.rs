@@ -864,7 +864,7 @@ fn repository_path_from_args(args: &[String], cwd: &str) -> Option<String> {
     )
 }
 
-fn lane_for(lanes: &mut Vec<Option<String>>, hash: &str) -> usize {
+fn lane_for(lanes: &mut Vec<Option<String>>, hash: &str, reserve_first: bool) -> usize {
     if let Some(index) = lanes
         .iter()
         .position(|waiting_for| waiting_for.as_deref() == Some(hash))
@@ -872,15 +872,20 @@ fn lane_for(lanes: &mut Vec<Option<String>>, hash: &str) -> usize {
         return index;
     }
 
-    if let Some(index) = lanes.iter().position(Option::is_none) {
-        return index;
+    let first = usize::from(reserve_first);
+    if let Some(index) = lanes.iter().skip(first).position(Option::is_none) {
+        return first + index;
     }
 
     lanes.push(None);
     lanes.len() - 1
 }
 
-fn parse_commit(line: &str, lanes: &mut Vec<Option<String>>) -> Option<Vec<serde_json::Value>> {
+fn parse_commit(
+    line: &str,
+    lanes: &mut Vec<Option<String>>,
+    reserved_tip: &mut Option<String>,
+) -> Option<Vec<serde_json::Value>> {
     let fields: Vec<_> = line.split('\0').collect();
     if fields.len() != 6 || fields[0].is_empty() {
         return None;
@@ -891,7 +896,16 @@ fn parse_commit(line: &str, lanes: &mut Vec<Option<String>>) -> Option<Vec<serde
         .split_whitespace()
         .filter(|parent| !parent.is_empty())
         .collect();
-    let lane = lane_for(lanes, hash);
+    // Lane 0 stays empty until the default branch tip arrives so it reports inactive on the rows above it.
+    if reserved_tip.is_some() && lanes.is_empty() {
+        lanes.push(None);
+    }
+    let lane = if reserved_tip.as_deref() == Some(hash) {
+        *reserved_tip = None;
+        0
+    } else {
+        lane_for(lanes, hash, reserved_tip.is_some())
+    };
     let incoming_lanes: Vec<_> = lanes
         .iter()
         .enumerate()
@@ -909,7 +923,7 @@ fn parse_commit(line: &str, lanes: &mut Vec<Option<String>>) -> Option<Vec<serde
         parent_lanes.push(lane);
 
         for parent in parents.iter().skip(1) {
-            let parent_lane = lane_for(lanes, parent);
+            let parent_lane = lane_for(lanes, parent, reserved_tip.is_some());
             lanes[parent_lane] = Some((*parent).to_string());
             parent_lanes.push(parent_lane);
         }
@@ -948,6 +962,9 @@ fn stream_commit_graph(
     repo_path: String,
     on_batch: Channel<Vec<Vec<serde_json::Value>>>,
 ) -> Result<(), String> {
+    let mut reserved_tip = primary_reference(&repo_path)
+        .and_then(|reference| resolve_commit(&repo_path, &reference))
+        .ok();
     let mut child = Command::new("git")
         .args([
             "--no-optional-locks",
@@ -970,7 +987,7 @@ fn stream_commit_graph(
 
     for line in BufReader::new(stdout).lines() {
         let line = line.map_err(|error| error.to_string())?;
-        if let Some(commit) = parse_commit(&line, &mut lanes) {
+        if let Some(commit) = parse_commit(&line, &mut lanes, &mut reserved_tip) {
             batch.push(commit);
         }
 
@@ -1100,7 +1117,7 @@ fn reference_picker_commits(repo_path: String) -> Result<Vec<Vec<serde_json::Val
     let mut lanes = Vec::new();
     Ok(output
         .lines()
-        .filter_map(|line| parse_commit(line, &mut lanes))
+        .filter_map(|line| parse_commit(line, &mut lanes, &mut None))
         .collect())
 }
 
@@ -1562,7 +1579,7 @@ mod tests {
     fn assigns_a_lane_and_reuses_it_for_the_first_parent() {
         let mut lanes = Vec::new();
         let commit =
-            parse_commit("a\0b\0Ada\02026-01-01T00:00:00+00:00\0\0first", &mut lanes).unwrap();
+            parse_commit("a\0b\0Ada\02026-01-01T00:00:00+00:00\0\0first", &mut lanes, &mut None).unwrap();
 
         assert_eq!(commit[6], 0);
         assert_eq!(commit[7], serde_json::json!([0]));
@@ -1575,6 +1592,7 @@ mod tests {
         let commit = parse_commit(
             "a\0b c\0Ada\02026-01-01T00:00:00+00:00\0\0merge",
             &mut lanes,
+            &mut None,
         )
         .unwrap();
 
@@ -1589,7 +1607,7 @@ mod tests {
     fn frees_root_lanes() {
         let mut lanes = vec![Some("a".to_string())];
         let commit =
-            parse_commit("a\0\0Ada\02026-01-01T00:00:00+00:00\0\0root", &mut lanes).unwrap();
+            parse_commit("a\0\0Ada\02026-01-01T00:00:00+00:00\0\0root", &mut lanes, &mut None).unwrap();
 
         assert_eq!(commit[8], 0);
         assert_eq!(commit[9], serde_json::json!([0]));
@@ -1600,9 +1618,101 @@ mod tests {
     #[test]
     fn frees_duplicate_lanes_after_a_commit_is_seen() {
         let mut lanes = vec![Some("a".to_string()), Some("a".to_string())];
-        parse_commit("a\0b\0Ada\02026-01-01T00:00:00+00:00\0\0commit", &mut lanes).unwrap();
+        parse_commit("a\0b\0Ada\02026-01-01T00:00:00+00:00\0\0commit", &mut lanes, &mut None).unwrap();
 
         assert_eq!(lanes, vec![Some("b".to_string())]);
+    }
+
+    #[test]
+    fn reserves_the_first_lane_for_the_default_branch_tip() {
+        let mut lanes = Vec::new();
+        let mut reserved_tip = Some("main".to_string());
+
+        let feature = parse_commit(
+            "feature\0feature-parent\0Ada\02026-01-01T00:00:00+00:00\0\0feature",
+            &mut lanes,
+            &mut reserved_tip,
+        )
+        .unwrap();
+
+        assert_eq!(feature[6], 1);
+        assert_eq!(feature[7], serde_json::json!([1]));
+        assert_eq!(feature[8], 2);
+        assert_eq!(feature[10], serde_json::json!([false, true]));
+
+        let tip = parse_commit(
+            "main\0main-parent\0Ada\02026-01-01T00:00:00+00:00\0\0tip",
+            &mut lanes,
+            &mut reserved_tip,
+        )
+        .unwrap();
+
+        assert_eq!(tip[6], 0);
+        assert_eq!(tip[7], serde_json::json!([0]));
+        assert_eq!(tip[9], serde_json::json!([]));
+        assert_eq!(reserved_tip, None);
+        assert_eq!(
+            lanes,
+            vec![Some("main-parent".to_string()), Some("feature-parent".to_string())]
+        );
+    }
+
+    #[test]
+    fn moves_the_default_branch_tip_out_of_the_lane_waiting_for_it() {
+        let mut lanes = Vec::new();
+        let mut reserved_tip = Some("main".to_string());
+        parse_commit(
+            "feature\0main\0Ada\02026-01-01T00:00:00+00:00\0\0feature",
+            &mut lanes,
+            &mut reserved_tip,
+        )
+        .unwrap();
+
+        let tip = parse_commit(
+            "main\0main-parent\0Ada\02026-01-01T00:00:00+00:00\0\0tip",
+            &mut lanes,
+            &mut reserved_tip,
+        )
+        .unwrap();
+
+        assert_eq!(tip[6], 0);
+        assert_eq!(tip[9], serde_json::json!([1]));
+        assert_eq!(lanes, vec![Some("main-parent".to_string())]);
+    }
+
+    #[test]
+    fn keeps_the_first_lane_empty_while_the_default_branch_tip_is_missing() {
+        let mut lanes = Vec::new();
+        let mut reserved_tip = Some("main".to_string());
+
+        let root = parse_commit(
+            "feature\0\0Ada\02026-01-01T00:00:00+00:00\0\0root",
+            &mut lanes,
+            &mut reserved_tip,
+        )
+        .unwrap();
+
+        assert_eq!(root[6], 1);
+        assert_eq!(root[10], serde_json::json!([]));
+        assert_eq!(reserved_tip.as_deref(), Some("main"));
+        assert!(lanes.is_empty());
+    }
+
+    #[test]
+    fn uses_the_first_lane_without_a_default_branch_tip() {
+        let mut lanes = Vec::new();
+        let mut reserved_tip = None;
+
+        let commit = parse_commit(
+            "feature\0feature-parent\0Ada\02026-01-01T00:00:00+00:00\0\0feature",
+            &mut lanes,
+            &mut reserved_tip,
+        )
+        .unwrap();
+
+        assert_eq!(commit[6], 0);
+        assert_eq!(commit[8], 1);
+        assert_eq!(lanes, vec![Some("feature-parent".to_string())]);
     }
 
     #[test]
