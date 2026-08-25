@@ -77,6 +77,35 @@ struct BranchSelection {
     head_label: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchCleanup {
+    candidates: Vec<String>,
+    deleted: Vec<String>,
+    failed: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CleanupReason {
+    SquashMergedPullRequest,
+    MergedIntoDefaultBranch,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CleanupCandidate {
+    branch: String,
+    reasons: Vec<CleanupReason>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CleanupOptions {
+    delete_merged_pull_request_branches: bool,
+    delete_merged_branches: bool,
+}
+
 struct WorktreeRecord {
     path: String,
     branch: String,
@@ -440,6 +469,16 @@ fn sync_pull_requests(connection: &mut Connection, host: &str, repository: &str)
     transaction.commit().map_err(|error| error.to_string())
 }
 
+fn fetch_and_sync_repository(repo_path: &str, database_path: PathBuf) -> Result<(), String> {
+    git_output_allow_empty(repo_path, &["fetch", "origin"])?;
+    let remote = git_output(repo_path, &["remote", "get-url", "origin"])
+        .ok_or_else(|| "Could not identify the origin remote.".to_string())?;
+    let (host, repository) = github_repository(&remote)
+        .ok_or_else(|| "Only GitHub remotes are supported.".to_string())?;
+    let mut connection = pull_request_database(database_path)?;
+    sync_pull_requests(&mut connection, &host, &repository)
+}
+
 fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(String, String)> {
     let Some(remote) = git_output(repo_path, &["remote", "get-url", "origin"]) else {
         return Vec::new();
@@ -485,6 +524,102 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
         }
     }
     edges.into_iter().collect()
+}
+
+fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<Vec<String>, String> {
+    let remote = git_output(repo_path, &["remote", "get-url", "origin"]).ok_or_else(|| "Could not identify the origin remote.".to_string())?;
+    let (host, repository) = github_repository(&remote).ok_or_else(|| "Only GitHub remotes are supported.".to_string())?;
+    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
+    let mut connection = pull_request_database(database_path)?;
+    if should_sync_pull_requests(&connection, &host, &repository)? {
+        sync_pull_requests(&mut connection, &host, &repository)?;
+    }
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT head_sha
+            FROM pull_requests
+            WHERE host = ?1 AND repository = ?2 AND merged_at IS NOT NULL
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+    let merged_heads = statement
+        .query_map(params![host, repository], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .collect::<HashSet<_>>();
+    let primary = primary_reference(repo_path).ok().and_then(|reference| reference.strip_prefix("origin/").map(str::to_string).or(Some(reference)));
+    let protected = ["main", "master"]
+        .into_iter()
+        .chain(primary.as_deref())
+        .collect::<HashSet<_>>();
+
+    Ok(refs
+        .split('\n')
+        .filter_map(|line| line.split_once('\0'))
+        .filter(|(branch, hash)| !protected.contains(branch) && merged_heads.contains(*hash))
+        .map(|(branch, _)| branch.to_string())
+        .collect())
+}
+
+fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String> {
+    let primary = primary_reference(repo_path)?;
+    let primary_branch = primary.strip_prefix("origin/").unwrap_or(&primary);
+    let protected = ["main", "master", primary_branch]
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let refs = git_output_allow_empty(
+        repo_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )?;
+    let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
+    let checked_out = parse_worktree_records(&worktrees)
+        .into_iter()
+        .filter(|worktree| !worktree.is_detached)
+        .map(|worktree| worktree.branch)
+        .collect::<HashSet<_>>();
+
+    Ok(refs
+        .lines()
+        .filter(|branch| !protected.contains(branch) && !checked_out.contains(*branch))
+        .filter(|branch| {
+            git_succeeds(
+                repo_path,
+                &["merge-base", "--is-ancestor", branch, &primary],
+            )
+        })
+        .map(str::to_string)
+        .collect())
+}
+
+fn cleanup_candidates(
+    repo_path: &str,
+    options: &CleanupOptions,
+    database_path: Option<PathBuf>,
+) -> Result<Vec<CleanupCandidate>, String> {
+    let mut candidates = HashMap::new();
+    if let Some(database_path) = database_path {
+        for branch in merged_branch_candidates(repo_path, database_path)? {
+            candidates
+                .entry(branch)
+                .or_insert_with(Vec::new)
+                .push(CleanupReason::SquashMergedPullRequest);
+        }
+    }
+    if options.delete_merged_branches {
+        for branch in merged_local_branch_candidates(repo_path)? {
+            candidates
+                .entry(branch)
+                .or_insert_with(Vec::new)
+                .push(CleanupReason::MergedIntoDefaultBranch);
+        }
+    }
+    let mut candidates = candidates
+        .into_iter()
+        .map(|(branch, reasons)| CleanupCandidate { branch, reasons })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.branch.cmp(&right.branch));
+    Ok(candidates)
 }
 
 fn parse_worktree_records(output: &str) -> Vec<WorktreeRecord> {
@@ -801,6 +936,78 @@ async fn inferred_squash_merge_edges(app: AppHandle, repo_path: String) -> Vec<(
 }
 
 #[tauri::command]
+async fn fetch_and_sync_pull_requests(app: AppHandle, repo_path: String) -> Result<(), String> {
+    let database_path = pull_request_database_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || fetch_and_sync_repository(&repo_path, database_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn squashed_branch_candidates(app: AppHandle, repo_path: String) -> Result<Vec<String>, String> {
+    let database_path = pull_request_database_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || merged_branch_candidates(&repo_path, database_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn preview_cleanup_candidates(
+    app: AppHandle,
+    repo_path: String,
+    options: CleanupOptions,
+) -> Result<Vec<CleanupCandidate>, String> {
+    let database_path = options
+        .delete_merged_pull_request_branches
+        .then(|| pull_request_database_path(&app))
+        .transpose()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        cleanup_candidates(&repo_path, &options, database_path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn delete_squashed_branches(
+    app: AppHandle,
+    repo_path: String,
+    options: CleanupOptions,
+) -> Result<BranchCleanup, String> {
+    let database_path = options
+        .delete_merged_pull_request_branches
+        .then(|| pull_request_database_path(&app))
+        .transpose()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let candidates = cleanup_candidates(&repo_path, &options, database_path)?
+            .into_iter()
+            .map(|candidate| candidate.branch)
+            .collect::<Vec<_>>();
+        let mut deleted = Vec::new();
+        let mut failed = Vec::new();
+        for branch in &candidates {
+            if git_succeeds(&repo_path, &["branch", "-D", "--", branch]) {
+                deleted.push(branch.clone());
+            } else {
+                failed.push(branch.clone());
+            }
+        }
+        Ok(BranchCleanup {
+            candidates,
+            deleted,
+            failed,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn delete_branch(repo_path: String, branch: String) -> Result<(), String> {
+    git_output_allow_empty(&repo_path, &["branch", "-D", "--", &branch]).map(|_| ())
+}
+
+#[tauri::command]
 fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
     let base_sha = resolve_commit(&repo_path, &base_ref)?;
     let head_sha = resolve_commit(&repo_path, &head_ref)?;
@@ -1002,6 +1209,34 @@ fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
     open_repository_window(&app, &path)
 }
 
+#[tauri::command]
+fn open_worktree(app: AppHandle, path: String, target: String) -> Result<(), String> {
+    if target == "git-nav" {
+        return open_repository_window(&app, &path);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let arguments = match target.as_str() {
+            "vscode" => vec!["-a", "Visual Studio Code", &path],
+            "terminal" => vec!["-a", "Terminal", &path],
+            "finder" => vec![path.as_str()],
+            _ => return Err("Unknown worktree target.".to_string()),
+        };
+        Command::new("open")
+            .args(arguments)
+            .status()
+            .map_err(|error| error.to_string())?
+            .success()
+            .then_some(())
+            .ok_or_else(|| format!("Could not open {target}."))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, path, target);
+        Err("Opening worktrees outside Git Nav is currently supported on macOS only.".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<_> = env::args().collect();
@@ -1032,9 +1267,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             recent_projects,
             open_repository,
+            open_worktree,
             project_snapshot,
             stream_commit_graph,
             inferred_squash_merge_edges,
+            fetch_and_sync_pull_requests,
+            squashed_branch_candidates,
+            preview_cleanup_candidates,
+            delete_squashed_branches,
+            delete_branch,
             compare_refs,
             reference_picker_commits,
             select_branch_range,

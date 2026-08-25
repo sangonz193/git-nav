@@ -28,6 +28,10 @@ export const GRAPH_GUTTER = 18
 export const LANE_WIDTH = 14
 export const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#22d3ee", "#fb923c"]
 
+export function isCurrentCheckout(refs: string[]) {
+  return refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))
+}
+
 export function commitFromTuple([hash, parents, author, date, refs, subject, lane, parentLanes, laneCount, incomingLanes, activeLanes]: CommitBatch[number]): Commit {
   return { hash, parents, author, date, refs, subject, lane, parentLanes, laneCount, incomingLanes, activeLanes }
 }
@@ -60,7 +64,7 @@ export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorkt
     localBranches.add(checkedOut)
   }
   const consumed = new Set<string>()
-  const result: { label: string; checkedOut: boolean; worktrees: CheckedOutWorktree[] }[] = []
+  const result: { branch: string | null; label: string; checkedOut: boolean; worktrees: CheckedOutWorktree[] }[] = []
 
   for (const branch of localBranches) {
     const remote = `origin/${branch}`
@@ -69,23 +73,23 @@ export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorkt
     if (hasRemote) {
       consumed.add(remote)
     }
-    result.push({ label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
+    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
   }
 
   for (const ref of branchRefs) {
     if (!consumed.has(ref) && ref !== "origin/HEAD") {
-      result.push({ label: ref, checkedOut: ref === checkedOut, worktrees: [] })
+      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, worktrees: [] })
     }
   }
 
   for (const ref of refs) {
     if (ref.startsWith("tag: ")) {
-      result.push({ label: ref.slice("tag: ".length), checkedOut: false, worktrees: [] })
+      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, worktrees: [] })
     }
   }
 
   if (checkedOut?.startsWith("origin/")) {
-    result.push({ label: checkedOut, checkedOut: true, worktrees: [] })
+    result.push({ branch: null, label: checkedOut, checkedOut: true, worktrees: [] })
   }
 
   return result

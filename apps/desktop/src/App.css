@@ -102,9 +102,10 @@ body {
   background: var(--background);
   border-bottom: 1px solid rgb(255 255 255 / 8%);
   height: 32px;
-  overflow: hidden;
+  min-width: 100%;
   position: sticky;
   top: 0;
+  width: max-content;
   z-index: 2;
 }
 
@@ -186,6 +187,39 @@ body {
   z-index: 1;
 }
 
+.commit-graph-checkout-hint {
+  align-items: center;
+  background: color-mix(in srgb, var(--background) 92%, transparent);
+  border: 1px solid rgb(244 244 245 / 45%);
+  border-radius: 5px;
+  color: #f4f4f5;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.6875rem;
+  gap: 4px;
+  left: 8px;
+  padding: 4px 6px;
+  position: absolute;
+  z-index: 3;
+}
+
+.commit-graph-checkout-hint:hover {
+  background: color-mix(in srgb, var(--background) 80%, #f4f4f5 20%);
+}
+
+.commit-graph-checkout-hint svg {
+  height: 12px;
+  width: 12px;
+}
+
+.commit-graph-checkout-hint-up {
+  top: 72px;
+}
+
+.commit-graph-checkout-hint-down {
+  bottom: 8px;
+}
+
 .commit-graph-row {
   align-items: center;
   border-bottom: 1px solid rgb(255 255 255 / 4%);
@@ -206,8 +240,17 @@ body {
   background: rgb(255 255 255 / 4%);
 }
 
+.commit-graph-summary {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .commit-graph-refs {
   display: flex;
+  flex: none;
   gap: 3px;
   min-width: 0;
   overflow: hidden;
@@ -220,6 +263,7 @@ body {
   border-radius: 4px;
   color: var(--commit-ref-color);
   display: inline-flex;
+  flex: none;
   gap: 3px;
   overflow: hidden;
   padding: 1px 4px;
@@ -235,6 +279,15 @@ body {
   background: color-mix(in srgb, var(--commit-ref-color) 26%, transparent);
   border-color: var(--commit-ref-color);
   font-weight: 600;
+}
+
+.commit-ref[aria-haspopup="menu"] {
+  cursor: pointer;
+}
+
+.commit-ref[aria-haspopup="menu"]:hover,
+.commit-ref[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
 }
 
 .commit-ref-head {
@@ -255,6 +308,23 @@ body {
   justify-content: center;
   pointer-events: none;
   position: absolute;
+}
+
+.commit-graph-cleanup-report {
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 6px;
+  bottom: 12px;
+  color: #d4d4d8;
+  left: 50%;
+  margin: 0;
+  max-width: min(720px, calc(100% - 32px));
+  padding: 8px 12px;
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: pre-line;
+  word-break: break-word;
+  z-index: 3;
 }
 
 .diff-panel {
