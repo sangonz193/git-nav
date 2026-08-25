@@ -474,6 +474,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     const onPointerUp = () => {
       window.removeEventListener("pointermove", onPointerMove)
       window.removeEventListener("pointerup", onPointerUp)
+      window.getSelection()?.removeAllRanges()
       if (frame !== null) {
         cancelAnimationFrame(frame)
       }
