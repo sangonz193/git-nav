@@ -9,7 +9,10 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{ipc::Channel, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    ipc::Channel, webview::PageLoadEvent, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
+    WindowEvent,
+};
 
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
@@ -504,6 +507,7 @@ fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
         let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
             .title(format!("{} · Git Nav", worktree_name(&worktree_path)))
             .inner_size(800.0, 600.0)
+            .visible(false)
             .build()
             .map_err(|error| error.to_string())?;
         window.on_window_event({
@@ -825,6 +829,11 @@ pub fn run() {
     }
 
     builder
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                let _ = webview.window().show();
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenWorktrees::default())
         .invoke_handler(tauri::generate_handler![
