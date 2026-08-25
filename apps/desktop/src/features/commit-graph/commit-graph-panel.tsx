@@ -12,7 +12,7 @@ import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, Exter
 import { type ComponentType, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, commitFromTuple, commitSelection, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, commitFromTuple, commitSelection, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
 import type { RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
 
@@ -338,9 +338,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     setGraphVersion((version) => version + 1)
   }
 
-  async function openBranchDiff(branch: string) {
+  async function openRefDiff(reference: string) {
     try {
-      const selection = await invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference: branch })
+      const selection = await invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
       const referencePanel = containerApi.getPanel(api.id)
       if (!referencePanel) {
         throw new Error("Could not open a diff tab.")
@@ -350,7 +350,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         id: `repository-diff-${crypto.randomUUID()}`,
         params: { ...params, baseRef: selection.baseSha, headRef: selection.headSha },
         position: { direction: "within", referencePanel },
-        title: `Diff: ${branch}`,
+        title: `Diff: ${reference}`,
       })
     } catch (message) {
       setError(String(message))
@@ -456,16 +456,17 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }
 
   function refMenuItems(ref: DisplayRef, { Item, Sub, SubContent, SubTrigger }: RefMenuComponents) {
-    const branch = ref.branch!
+    const { branch } = ref
+    const reference = refName(ref)
     return (
       <>
-        <Item onSelect={() => openBranchDiff(branch)}>
+        <Item onSelect={() => openRefDiff(reference)}>
           <GitCompareArrows />
           Compare with main
         </Item>
-        <Item onSelect={() => copyText(branch)}>
+        <Item onSelect={() => copyText(reference)}>
           <Copy />
-          Copy branch name
+          Copy ref name
         </Item>
         {ref.worktrees.length > 0 && (
           <Sub>
@@ -498,7 +499,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             </SubContent>
           </Sub>
         )}
-        {!ref.checkedOut && ref.worktrees.length === 0 && (
+        {branch && !ref.checkedOut && ref.worktrees.length === 0 && (
           <Item onSelect={() => setBranchToDelete(branch)}>
             <Trash2 />
             Delete branch
@@ -509,14 +510,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }
 
   function refMenuEntry(ref: DisplayRef, key: string, components: RefMenuComponents) {
-    const { Item, Sub, SubContent, SubTrigger } = components
-    return ref.branch ? (
+    const { Sub, SubContent, SubTrigger } = components
+    return (
       <Sub key={key}>
         <SubTrigger>{ref.label}</SubTrigger>
         <SubContent>{refMenuItems(ref, components)}</SubContent>
       </Sub>
-    ) : (
-      <Item disabled key={key}>{ref.label}</Item>
     )
   }
 
@@ -535,9 +534,6 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         </span>
       </span>
     )
-    if (!ref.branch) {
-      return chip
-    }
     return (
       <DropdownMenu>
         <ContextMenu>
@@ -663,7 +659,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                     <ContextMenuSub>
                       <ContextMenuSubTrigger>
                         <GitBranch />
-                        Branches
+                        Refs
                       </ContextMenuSubTrigger>
                       <ContextMenuSubContent>
                         {refs.map((ref, index) => refMenuEntry(ref, `${ref.label}-${index}`, contextMenuComponents))}

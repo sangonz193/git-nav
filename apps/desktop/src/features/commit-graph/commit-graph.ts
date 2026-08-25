@@ -121,6 +121,10 @@ export function relativeDate(value: string) {
   return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds / size), unit)
 }
 
+export function refName(ref: DisplayRef) {
+  return ref.branch ?? ref.label
+}
+
 export function splitRefLabel(label: string) {
   return label.length <= REF_TAIL_LENGTH
     ? { start: label, end: "" }
