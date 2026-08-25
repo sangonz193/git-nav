@@ -5,7 +5,7 @@ use std::{
     env, fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,6 +17,7 @@ use tauri::{
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
+const MINIMUM_MERGE_TREE_VERSION: (u32, u32) = (2, 38);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +105,72 @@ struct CleanupCandidate {
 struct CleanupOptions {
     delete_merged_pull_request_branches: bool,
     delete_merged_branches: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PredictedConflict {
+    commit: String,
+    subject: String,
+    files: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ConflictPrediction {
+    Clean,
+    Conflicts(PredictedConflict),
+    Unknown { reason: String },
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum PendingOperation {
+    Rebase,
+    Merge,
+    CherryPick,
+    Bisect,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchOperability {
+    exists: bool,
+    sha: Option<String>,
+    worktree_path: Option<String>,
+    is_current_worktree: bool,
+    is_dirty: bool,
+    pending_operation: Option<PendingOperation>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RefUpdate {
+    reference: String,
+    before: String,
+    after: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompletedRebase {
+    branch: String,
+    head_sha: String,
+    updates: Vec<RefUpdate>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FailedRebase {
+    message: String,
+    files: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum RebaseResult {
+    Completed(CompletedRebase),
+    Failed(FailedRebase),
 }
 
 struct WorktreeRecord {
@@ -1092,6 +1159,341 @@ fn diff_file(
     })
 }
 
+fn git_result(path: &str, arguments: &[&str]) -> Result<Output, String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(arguments)
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|error| error.to_string())
+}
+
+fn parse_git_version(output: &str) -> Option<(u32, u32)> {
+    let mut parts = output.split_whitespace().nth(2)?.split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+fn git_version(path: &str) -> Option<(u32, u32)> {
+    git_output(path, &["--version"]).as_deref().and_then(parse_git_version)
+}
+
+fn parse_merge_tree_output(stdout: &str) -> Result<(String, Vec<String>), String> {
+    let mut fields = stdout.split('\0');
+    let tree = fields
+        .next()
+        .filter(|tree| !tree.is_empty())
+        .ok_or_else(|| "git merge-tree produced no tree.".to_string())?;
+    Ok((
+        tree.to_string(),
+        fields.take_while(|field| !field.is_empty()).map(str::to_string).collect(),
+    ))
+}
+
+fn predicted_conflicts(repo_path: &str, onto: &str, upstream: &str, branch: &str) -> Result<ConflictPrediction, String> {
+    let Some(version) = git_version(repo_path) else {
+        return Ok(ConflictPrediction::Unknown { reason: "Could not read the installed Git version.".to_string() });
+    };
+    if version < MINIMUM_MERGE_TREE_VERSION {
+        let (major, minor) = MINIMUM_MERGE_TREE_VERSION;
+        return Ok(ConflictPrediction::Unknown {
+            reason: format!("Predicting conflicts requires Git {major}.{minor} or newer."),
+        });
+    }
+    let onto_sha = resolve_commit(repo_path, onto)?;
+    let upstream_sha = resolve_commit(repo_path, upstream)?;
+    let branch_sha = resolve_commit(repo_path, branch)?;
+    // Three dots so --cherry-pick sees the upstream side and drops the commits git rebase would skip as already applied.
+    let range = format!("{upstream_sha}...{branch_sha}");
+    let commits = git_output_allow_empty(
+        repo_path,
+        &["rev-list", "--reverse", "--topo-order", "--no-merges", "--cherry-pick", "--right-only", &range],
+    )?;
+    let mut accumulated = git_output(repo_path, &["rev-parse", "--verify", &format!("{onto_sha}^{{tree}}")])
+        .ok_or_else(|| format!("Could not resolve the tree of {onto}."))?;
+
+    for commit in commits.lines() {
+        let Some(parent) = git_output(repo_path, &["rev-parse", "--verify", "--quiet", &format!("{commit}^1")]) else {
+            return Ok(ConflictPrediction::Unknown { reason: format!("{commit} has no parent to replay against.") });
+        };
+        let output = git_result(
+            repo_path,
+            &[
+                "merge-tree",
+                "-z",
+                "--write-tree",
+                "--name-only",
+                &format!("--merge-base={parent}"),
+                &accumulated,
+                commit,
+            ],
+        )?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        match output.status.code() {
+            Some(0) => accumulated = parse_merge_tree_output(&stdout)?.0,
+            Some(1) => {
+                return Ok(ConflictPrediction::Conflicts(PredictedConflict {
+                    commit: commit.to_string(),
+                    subject: git_output(repo_path, &["log", "-1", "--format=%s", commit]).unwrap_or_default(),
+                    files: parse_merge_tree_output(&stdout)?.1,
+                }))
+            }
+            _ => {
+                return Ok(ConflictPrediction::Unknown {
+                    reason: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                })
+            }
+        }
+    }
+
+    Ok(ConflictPrediction::Clean)
+}
+
+fn existing_git_path(worktree: &str, name: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(git_output(worktree, &["rev-parse", "--git-path", name])?);
+    let path = if path.is_absolute() { path } else { Path::new(worktree).join(path) };
+    path.exists().then_some(path)
+}
+
+fn rebasing_branch(worktree: &str) -> Option<String> {
+    ["rebase-merge/head-name", "rebase-apply/head-name"]
+        .into_iter()
+        .find_map(|name| existing_git_path(worktree, name))
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|head| head.trim().strip_prefix("refs/heads/").map(str::to_string))
+}
+
+// A worktree that is mid-rebase reports a detached HEAD, but it still owns the branch it is rebasing.
+fn worktree_for_branch(repo_path: &str, branch: &str) -> Result<Option<String>, String> {
+    let output = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
+    Ok(parse_worktree_records(&output)
+        .into_iter()
+        .find(|worktree| {
+            if worktree.is_detached {
+                rebasing_branch(&worktree.path).as_deref() == Some(branch)
+            } else {
+                worktree.branch == branch
+            }
+        })
+        .map(|worktree| worktree.path))
+}
+
+fn pending_operation(worktree: &str) -> Option<PendingOperation> {
+    [
+        ("rebase-merge", PendingOperation::Rebase),
+        ("rebase-apply", PendingOperation::Rebase),
+        ("MERGE_HEAD", PendingOperation::Merge),
+        ("CHERRY_PICK_HEAD", PendingOperation::CherryPick),
+        ("BISECT_LOG", PendingOperation::Bisect),
+    ]
+    .into_iter()
+    .find(|(name, _)| existing_git_path(worktree, name).is_some())
+    .map(|(_, operation)| operation)
+}
+
+fn worktree_is_dirty(worktree: &str) -> Result<bool, String> {
+    let output = git_output_allow_empty(worktree, &["status", "--porcelain", "--untracked-files=no"])?;
+    Ok(!output.trim().is_empty())
+}
+
+fn same_path(left: &str, right: &str) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+fn branch_operability(repo_path: &str, branch: &str) -> Result<BranchOperability, String> {
+    let sha = resolve_commit(repo_path, &format!("refs/heads/{branch}")).ok();
+    let mut state = BranchOperability {
+        exists: sha.is_some(),
+        sha,
+        worktree_path: None,
+        is_current_worktree: false,
+        is_dirty: false,
+        pending_operation: None,
+    };
+    if !state.exists {
+        return Ok(state);
+    }
+    if let Some(worktree) = worktree_for_branch(repo_path, branch)? {
+        state.is_current_worktree = same_path(&worktree_path(repo_path)?, &worktree);
+        state.is_dirty = worktree_is_dirty(&worktree)?;
+        state.pending_operation = pending_operation(&worktree);
+        state.worktree_path = Some(worktree);
+    }
+    Ok(state)
+}
+
+fn parse_ref_shas(output: &str) -> HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| line.split_once('\0'))
+        .map(|(reference, sha)| (reference.to_string(), sha.to_string()))
+        .collect()
+}
+
+fn branch_shas(repo_path: &str) -> Result<HashMap<String, String>, String> {
+    git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"])
+        .map(|output| parse_ref_shas(&output))
+}
+
+fn changed_refs(before: &HashMap<String, String>, after: &HashMap<String, String>) -> Vec<RefUpdate> {
+    let mut updates = before
+        .iter()
+        .filter_map(|(reference, sha)| {
+            let current = after.get(reference)?;
+            (current != sha).then(|| RefUpdate {
+                reference: reference.clone(),
+                before: sha.clone(),
+                after: current.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    updates.sort_by(|left, right| left.reference.cmp(&right.reference));
+    updates
+}
+
+fn conflicted_files(worktree: &str) -> Vec<String> {
+    git_output_allow_empty(worktree, &["diff", "--name-only", "--diff-filter=U"])
+        .map(|output| output.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+fn failed_rebase(worktree: &str, output: &Output) -> RebaseResult {
+    RebaseResult::Failed(FailedRebase {
+        files: conflicted_files(worktree),
+        message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    })
+}
+
+fn completed_rebase(repo_path: &str, branch: &str, before: &HashMap<String, String>) -> Result<RebaseResult, String> {
+    Ok(RebaseResult::Completed(CompletedRebase {
+        head_sha: resolve_commit(repo_path, &format!("refs/heads/{branch}"))?,
+        branch: branch.to_string(),
+        updates: changed_refs(before, &branch_shas(repo_path)?),
+    }))
+}
+
+fn temporary_worktree_path(prefix: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    env::temp_dir()
+        .join(format!("git-nav-{prefix}-{}-{nanos}", std::process::id()))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn discard_temporary_worktree(repo_path: &str, worktree: &str) {
+    let _ = git_result(worktree, &["rebase", "--abort"]);
+    let _ = git_result(repo_path, &["worktree", "remove", "--force", "--", worktree]);
+    let _ = git_result(repo_path, &["worktree", "prune"]);
+    let _ = fs::remove_dir_all(worktree);
+}
+
+fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, branch: &str) -> Result<RebaseResult, String> {
+    let reference = format!("refs/heads/{branch}");
+    resolve_commit(repo_path, &reference)?;
+    resolve_commit(repo_path, onto)?;
+    resolve_commit(repo_path, upstream)?;
+    let before = branch_shas(repo_path)?;
+
+    if let Some(worktree) = worktree_for_branch(repo_path, branch)? {
+        if pending_operation(&worktree).is_some() {
+            return Err(format!("{worktree} already has a Git operation in progress."));
+        }
+        if worktree_is_dirty(&worktree)? {
+            return Err(format!("{worktree} has uncommitted changes."));
+        }
+        let output = git_result(&worktree, &["rebase", "--onto", onto, upstream, branch])?;
+        if output.status.success() {
+            return completed_rebase(repo_path, branch, &before);
+        }
+        let failure = failed_rebase(&worktree, &output);
+        let _ = git_result(&worktree, &["rebase", "--abort"]);
+        return Ok(failure);
+    }
+
+    // Rebasing an unchecked-out branch from the user's own worktree would move that worktree onto it.
+    let worktree = temporary_worktree_path("rebase");
+    git_output_allow_empty(repo_path, &["worktree", "add", "--detach", &worktree, &reference])?;
+    let result = git_result(&worktree, &["rebase", "--onto", onto, upstream, branch]).and_then(|output| {
+        if output.status.success() {
+            completed_rebase(repo_path, branch, &before)
+        } else {
+            Ok(failed_rebase(&worktree, &output))
+        }
+    });
+    discard_temporary_worktree(repo_path, &worktree);
+    result
+}
+
+fn restore_refs(repo_path: &str, updates: &[RefUpdate]) -> Result<(), String> {
+    let mut worktrees = Vec::new();
+    for update in updates {
+        let Some(branch) = update.reference.strip_prefix("refs/heads/") else {
+            continue;
+        };
+        let Some(worktree) = worktree_for_branch(repo_path, branch)? else {
+            continue;
+        };
+        if pending_operation(&worktree).is_some() {
+            return Err(format!("{worktree} has a Git operation in progress."));
+        }
+        if worktree_is_dirty(&worktree)? {
+            return Err(format!("{worktree} has uncommitted changes."));
+        }
+        worktrees.push(worktree);
+    }
+    for update in updates {
+        git_output_allow_empty(repo_path, &["update-ref", &update.reference, &update.before, &update.after])?;
+    }
+    for worktree in worktrees {
+        git_output_allow_empty(&worktree, &["reset", "--hard"])?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn predict_rebase_conflicts(
+    repo_path: String,
+    onto: String,
+    upstream: String,
+    branch: String,
+) -> Result<ConflictPrediction, String> {
+    tauri::async_runtime::spawn_blocking(move || predicted_conflicts(&repo_path, &onto, &upstream, &branch))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn branch_operation_state(repo_path: String, branch: String) -> Result<BranchOperability, String> {
+    branch_operability(&repo_path, &branch)
+}
+
+#[tauri::command]
+async fn rebase_onto(
+    repo_path: String,
+    onto: String,
+    upstream: String,
+    branch: String,
+) -> Result<RebaseResult, String> {
+    tauri::async_runtime::spawn_blocking(move || rebase_branch_onto(&repo_path, &onto, &upstream, &branch))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn undo_ref_updates(repo_path: String, updates: Vec<RefUpdate>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || restore_refs(&repo_path, &updates))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1202,6 +1604,129 @@ mod tests {
 
         assert_eq!(lanes, vec![Some("b".to_string())]);
     }
+
+    #[test]
+    fn reads_the_major_and_minor_git_version() {
+        assert_eq!(parse_git_version("git version 2.50.1 (Apple Git-155)"), Some((2, 50)));
+        assert_eq!(parse_git_version("git version 2.39.5"), Some((2, 39)));
+        assert_eq!(parse_git_version("not git"), None);
+    }
+
+    #[test]
+    fn reads_the_written_tree_from_a_clean_merge() {
+        let (tree, files) = parse_merge_tree_output("tree-sha\0").unwrap();
+
+        assert_eq!(tree, "tree-sha");
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn reads_conflicted_paths_before_the_informational_messages() {
+        let (tree, files) =
+            parse_merge_tree_output("tree-sha\0a.txt\0b.txt\0\01\0a.txt\0CONFLICT (contents)\0message\0").unwrap();
+
+        assert_eq!(tree, "tree-sha");
+        assert_eq!(files, vec!["a.txt".to_string(), "b.txt".to_string()]);
+    }
+
+    #[test]
+    fn reports_only_the_refs_an_operation_moved() {
+        let before = parse_ref_shas("refs/heads/main\0aaa\nrefs/heads/topic\0bbb\nrefs/heads/other\0ccc");
+        let after = parse_ref_shas("refs/heads/main\0aaa\nrefs/heads/topic\0ddd");
+
+        let updates = changed_refs(&before, &after);
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].reference, "refs/heads/topic");
+        assert_eq!(updates[0].before, "bbb");
+        assert_eq!(updates[0].after, "ddd");
+    }
+
+    #[test]
+    fn predicts_the_first_conflicting_commit_of_a_rebase() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-prediction-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("shared.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["branch", "feature"]);
+        write("shared.txt", "onto\n");
+        run(&["commit", "--quiet", "--all", "--message", "diverge"]);
+        run(&["checkout", "--quiet", "feature"]);
+        write("only-feature.txt", "feature\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "add a file"]);
+        write("shared.txt", "feature\n");
+        run(&["commit", "--quiet", "--all", "--message", "change the shared file"]);
+
+        let clean = predicted_conflicts(&path, "main", "feature~2", "feature~1").unwrap();
+        let conflicted = predicted_conflicts(&path, "main", "feature~2", "feature").unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(clean, ConflictPrediction::Clean));
+        let ConflictPrediction::Conflicts(conflict) = conflicted else {
+            panic!("expected a conflict");
+        };
+        assert_eq!(conflict.subject, "change the shared file");
+        assert_eq!(conflict.files, vec!["shared.txt".to_string()]);
+    }
+
+    #[test]
+    fn ignores_commits_whose_patch_is_already_upstream() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-patch-duplicate-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("shared.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["branch", "onto"]);
+        run(&["checkout", "--quiet", "-b", "feature"]);
+        write("shared.txt", "duplicate\n");
+        run(&["commit", "--quiet", "--all", "--message", "change the shared file"]);
+        write("only-feature.txt", "feature\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "add a file"]);
+        run(&["checkout", "--quiet", "main"]);
+        run(&["cherry-pick", "feature~1"]);
+        run(&["commit", "--quiet", "--amend", "--message", "land the shared file change"]);
+        run(&["checkout", "--quiet", "onto"]);
+        write("shared.txt", "onto\n");
+        run(&["commit", "--quiet", "--all", "--message", "diverge"]);
+
+        let prediction = predicted_conflicts(&path, "onto", "main", "feature").unwrap();
+        let rebase = rebase_branch_onto(&path, "onto", "main", "feature").unwrap();
+        let replayed = git_output_allow_empty(&path, &["log", "--format=%s", "onto..feature"]).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(prediction, ConflictPrediction::Clean));
+        assert!(matches!(rebase, RebaseResult::Completed(_)));
+        assert_eq!(replayed.lines().collect::<Vec<_>>(), vec!["add a file"]);
+    }
 }
 
 #[tauri::command]
@@ -1279,7 +1804,11 @@ pub fn run() {
             compare_refs,
             reference_picker_commits,
             select_branch_range,
-            diff_file
+            diff_file,
+            predict_rebase_conflicts,
+            branch_operation_state,
+            rebase_onto,
+            undo_ref_updates
         ])
         .setup(move |app| {
             if let Some(path) = &repository_path {
