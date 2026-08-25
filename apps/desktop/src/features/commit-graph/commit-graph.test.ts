@@ -5,8 +5,10 @@ import {
   commitSelection,
   displayRefs,
   fitGraphWidth,
+  GRAPH_HEADER_HEIGHT,
   GRAPH_MAX_WIDTH,
   GRAPH_MIN_WIDTH,
+  graphCanvasHeight,
   isCurrentCheckout,
   relativeDate,
   splitRefLabel,
@@ -287,5 +289,15 @@ describe("fitGraphWidth", () => {
     expect(fitGraphWidth([{ ...commit("a"), laneCount: 200 }])).toBe(
       GRAPH_MAX_WIDTH
     )
+  })
+})
+
+describe("graphCanvasHeight", () => {
+  test("leaves room for the header so the canvas ends at the bottom of the viewport", () => {
+    expect(graphCanvasHeight(400) + GRAPH_HEADER_HEIGHT).toBe(400)
+  })
+
+  test("stays at zero for a viewport shorter than the header", () => {
+    expect(graphCanvasHeight(0)).toBe(0)
   })
 })

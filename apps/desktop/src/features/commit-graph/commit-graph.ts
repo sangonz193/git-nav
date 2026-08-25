@@ -37,6 +37,7 @@ export type CommitSelection = {
 }
 
 export const ROW_HEIGHT = 32
+export const GRAPH_HEADER_HEIGHT = 32
 export const GRAPH_WIDTH = 112
 export const GRAPH_GUTTER = 18
 export const LANE_WIDTH = 14
@@ -44,6 +45,11 @@ export const GRAPH_MIN_WIDTH = 46
 export const GRAPH_MAX_WIDTH = 480
 export const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#22d3ee", "#fb923c"]
 const REF_TAIL_LENGTH = 8
+
+// The canvas is pinned below the sticky header, so a full viewport height would overflow the scrolled content and drag the canvas off that anchor at the end of the scroll.
+export function graphCanvasHeight(viewportHeight: number) {
+  return Math.max(0, viewportHeight - GRAPH_HEADER_HEIGHT)
+}
 
 export function clampGraphWidth(width: number) {
   return Math.round(Math.max(GRAPH_MIN_WIDTH, Math.min(GRAPH_MAX_WIDTH, width)))

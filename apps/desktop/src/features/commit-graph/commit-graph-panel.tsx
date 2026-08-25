@@ -12,7 +12,7 @@ import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, Exter
 import { type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_COLORS, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
 import { OperationMenuItems, type OperationPlan, type RebaseResult, type RefMenuComponents, type RefUpdate } from "./commit-operations"
 import type { RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
@@ -336,7 +336,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, scroll.height, squashMergeEdges, graphWidth)
+      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, graphCanvasHeight(scroll.height), squashMergeEdges, graphWidth)
     }
   }, [commits, graphWidth, scroll, squashMergeEdges, virtualRows])
 
@@ -636,7 +636,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </DropdownMenu>
         </ButtonGroup>
       </div>
-      <div className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} style={{ "--graph-width": `${graphWidth}px` } as CSSProperties}>
+      <div className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} style={{ "--graph-header-height": `${GRAPH_HEADER_HEIGHT}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
           <div className="commit-graph-header-content" style={{ minWidth: tableWidth }}>
             <div className="commit-graph-header-spacer">

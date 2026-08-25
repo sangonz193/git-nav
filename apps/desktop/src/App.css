@@ -110,7 +110,7 @@ body {
 .commit-graph-header {
   background: var(--background);
   border-bottom: 1px solid rgb(255 255 255 / 8%);
-  height: 32px;
+  height: var(--graph-header-height, 32px);
   min-width: 100%;
   position: sticky;
   top: 0;
@@ -120,7 +120,7 @@ body {
 
 .commit-graph-header-content {
   display: flex;
-  height: 32px;
+  height: var(--graph-header-height, 32px);
 }
 
 .commit-graph-header-spacer {
@@ -188,11 +188,10 @@ body {
 }
 
 .commit-graph-canvas {
-  height: 100%;
   left: auto;
   pointer-events: none;
   position: sticky;
-  top: 32px;
+  top: var(--graph-header-height, 32px);
   width: var(--graph-width, 112px);
   z-index: 1;
 }
