@@ -22,11 +22,20 @@ export type CheckedOutWorktree = {
   isOpen: boolean
 }
 
+export type DisplayRef = {
+  branch: string | null
+  label: string
+  checkedOut: boolean
+  tag: boolean
+  worktrees: CheckedOutWorktree[]
+}
+
 export const ROW_HEIGHT = 32
 export const GRAPH_WIDTH = 112
 export const GRAPH_GUTTER = 18
 export const LANE_WIDTH = 14
 export const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#22d3ee", "#fb923c"]
+const REF_TAIL_LENGTH = 8
 
 export function isCurrentCheckout(refs: string[]) {
   return refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))
@@ -56,6 +65,25 @@ export function relativeDate(value: string) {
   return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds / size), unit)
 }
 
+export function splitRefLabel(label: string) {
+  return label.length <= REF_TAIL_LENGTH
+    ? { start: label, end: "" }
+    : { start: label.slice(0, -REF_TAIL_LENGTH), end: label.slice(-REF_TAIL_LENGTH) }
+}
+
+function refPriority(ref: DisplayRef) {
+  if (ref.checkedOut) {
+    return 0
+  }
+  if (ref.worktrees.length > 0) {
+    return 1
+  }
+  if (ref.branch) {
+    return 2
+  }
+  return ref.tag ? 4 : 3
+}
+
 export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorktree[] = []) {
   const checkedOut = refs.find((ref) => ref.startsWith("HEAD -> "))?.slice("HEAD -> ".length)
   const branchRefs = refs.filter((ref) => !ref.startsWith("HEAD -> ") && !ref.startsWith("tag: "))
@@ -64,7 +92,7 @@ export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorkt
     localBranches.add(checkedOut)
   }
   const consumed = new Set<string>()
-  const result: { branch: string | null; label: string; checkedOut: boolean; worktrees: CheckedOutWorktree[] }[] = []
+  const result: DisplayRef[] = []
 
   for (const branch of localBranches) {
     const remote = `origin/${branch}`
@@ -73,24 +101,24 @@ export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorkt
     if (hasRemote) {
       consumed.add(remote)
     }
-    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
+    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, tag: false, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
   }
 
   for (const ref of branchRefs) {
     if (!consumed.has(ref) && ref !== "origin/HEAD") {
-      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, worktrees: [] })
+      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, tag: false, worktrees: [] })
     }
   }
 
   for (const ref of refs) {
     if (ref.startsWith("tag: ")) {
-      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, worktrees: [] })
+      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, tag: true, worktrees: [] })
     }
   }
 
   if (checkedOut?.startsWith("origin/")) {
-    result.push({ branch: null, label: checkedOut, checkedOut: true, worktrees: [] })
+    result.push({ branch: null, label: checkedOut, checkedOut: true, tag: false, worktrees: [] })
   }
 
-  return result
+  return result.sort((a, b) => refPriority(a) - refPriority(b))
 }

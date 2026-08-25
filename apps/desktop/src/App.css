@@ -240,6 +240,15 @@ body {
   background: rgb(255 255 255 / 4%);
 }
 
+.commit-graph-row.commit-graph-row-current {
+  background: color-mix(in srgb, var(--commit-ref-color) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--commit-ref-color);
+}
+
+.commit-graph-row.commit-graph-row-current:hover {
+  background: color-mix(in srgb, var(--commit-ref-color) 16%, transparent);
+}
+
 .commit-graph-summary {
   align-items: center;
   display: flex;
@@ -265,9 +274,9 @@ body {
   display: inline-flex;
   flex: none;
   gap: 3px;
+  max-width: 180px;
   overflow: hidden;
   padding: 1px 4px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -275,9 +284,26 @@ body {
   flex: none;
 }
 
+.commit-ref-label {
+  display: flex;
+  min-width: 0;
+}
+
+.commit-ref-label-start {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-ref-label-end {
+  flex: none;
+}
+
 .commit-ref-current {
-  background: color-mix(in srgb, var(--commit-ref-color) 26%, transparent);
+  background: var(--commit-ref-color);
   border-color: var(--commit-ref-color);
+  color: #09090b;
   font-weight: 600;
 }
 
@@ -290,6 +316,11 @@ body {
   background: color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
 }
 
+.commit-ref-current[aria-haspopup="menu"]:hover,
+.commit-ref-current[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--commit-ref-color) 84%, #09090b);
+}
+
 .commit-ref-head {
   background: var(--commit-ref-color);
   border-radius: 2px;
@@ -299,6 +330,12 @@ body {
   letter-spacing: 0.03em;
   line-height: 1.4;
   padding: 0 3px;
+}
+
+.commit-ref-current .commit-ref-head {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, #09090b 45%, transparent);
+  padding: 0 2px;
 }
 
 .commit-graph-status {

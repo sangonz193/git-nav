@@ -5,14 +5,14 @@ import { Channel, invoke } from "@tauri-apps/api/core"
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, FileDiff, FolderOpen, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2 } from "lucide-react"
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2 } from "lucide-react"
+import { type ComponentType, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { commitFromTuple, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, relativeDate, ROW_HEIGHT, type CheckedOutWorktree, type Commit, type CommitBatch, type SquashMergeInference } from "./commit-graph"
+import { commitFromTuple, displayRefs, GRAPH_COLORS, GRAPH_WIDTH, isCurrentCheckout, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type DisplayRef, type SquashMergeInference } from "./commit-graph"
 import type { RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
 
@@ -24,7 +24,15 @@ type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBran
 type CleanResult = { report: string } | { result: BranchCleanup }
 type CleanupCandidate = { branch: string, reasons: CleanupReason[] }
 type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch"
+type RefMenuComponents = {
+  Item: ComponentType<{ children: ReactNode, disabled?: boolean, onSelect?: () => void }>
+  Sub: ComponentType<{ children: ReactNode }>
+  SubContent: ComponentType<{ children: ReactNode }>
+  SubTrigger: ComponentType<{ children: ReactNode }>
+}
 type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
+const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
+const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
 const commitColumnHelper = createColumnHelper<typeof commitTableFeatures, Commit>()
 const commitColumns = commitColumnHelper.columns([
@@ -339,6 +347,103 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     })
   }
 
+  function refMenuItems(ref: DisplayRef, { Item, Sub, SubContent, SubTrigger }: RefMenuComponents) {
+    const branch = ref.branch!
+    return (
+      <>
+        <Item onSelect={() => openBranchDiff(branch)}>
+          <GitCompareArrows />
+          Compare with main
+        </Item>
+        <Item onSelect={() => copyText(branch)}>
+          <Copy />
+          Copy branch name
+        </Item>
+        {ref.worktrees.length > 0 && (
+          <Sub>
+            <SubTrigger>
+              <ExternalLink />
+              Open
+            </SubTrigger>
+            <SubContent>
+              {ref.worktrees.flatMap((worktree) => {
+                const suffix = ref.worktrees.length > 1 ? ` (${worktree.name})` : ""
+                return [
+                  <Item key={`${worktree.path}-git-nav`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "git-nav" })}>
+                    <AppWindow />
+                    {`Git Nav${suffix}`}
+                  </Item>,
+                  <Item key={`${worktree.path}-vscode`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "vscode" })}>
+                    <CodeXml />
+                    {`VS Code${suffix}`}
+                  </Item>,
+                  <Item key={`${worktree.path}-terminal`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "terminal" })}>
+                    <Terminal />
+                    {`Terminal${suffix}`}
+                  </Item>,
+                  <Item key={`${worktree.path}-finder`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "finder" })}>
+                    <FolderOpen />
+                    {`Finder${suffix}`}
+                  </Item>,
+                ]
+              })}
+            </SubContent>
+          </Sub>
+        )}
+        {!ref.checkedOut && ref.worktrees.length === 0 && (
+          <Item onSelect={() => setBranchToDelete(branch)}>
+            <Trash2 />
+            Delete branch
+          </Item>
+        )}
+      </>
+    )
+  }
+
+  function refMenuEntry(ref: DisplayRef, key: string, components: RefMenuComponents) {
+    const { Item, Sub, SubContent, SubTrigger } = components
+    return ref.branch ? (
+      <Sub key={key}>
+        <SubTrigger>{ref.label}</SubTrigger>
+        <SubContent>{refMenuItems(ref, components)}</SubContent>
+      </Sub>
+    ) : (
+      <Item disabled key={key}>{ref.label}</Item>
+    )
+  }
+
+  function refChip(ref: DisplayRef) {
+    const { start, end } = splitRefLabel(ref.label)
+    const chip = (
+      <span
+        aria-label={ref.checkedOut ? "Currently checked out" : ref.worktrees.length ? "Checked out in another worktree" : undefined}
+        className={`commit-ref${ref.checkedOut ? " commit-ref-current" : ""}`}
+        title={[ref.label, ...ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`)].join("\n")}
+      >
+        {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}
+        <span className="commit-ref-label">
+          <span className="commit-ref-label-start">{start}</span>
+          {end && <span className="commit-ref-label-end">{end}</span>}
+        </span>
+      </span>
+    )
+    if (!ref.branch) {
+      return chip
+    }
+    return (
+      <DropdownMenu>
+        <ContextMenu>
+          {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
+          <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
+            <DropdownMenuTrigger asChild>{chip}</DropdownMenuTrigger>
+          </ContextMenuTrigger>
+          <ContextMenuContent>{refMenuItems(ref, contextMenuComponents)}</ContextMenuContent>
+        </ContextMenu>
+        <DropdownMenuContent>{refMenuItems(ref, dropdownMenuComponents)}</DropdownMenuContent>
+      </DropdownMenu>
+    )
+  }
+
   return (
     <main className="relative flex h-full flex-col overflow-hidden bg-background">
       <div className="flex items-center justify-end gap-1 border-b p-1">
@@ -399,84 +504,25 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             const commit = commits[row.index]
             const refColor = GRAPH_COLORS[commit.lane % GRAPH_COLORS.length]
             const currentCheckout = isCurrentCheckout(commit.refs)
+            const refs = displayRefs(commit.refs, checkedOutWorktrees)
+            const [primaryRef, ...overflowRefs] = refs
             return (
               <ContextMenu key={commit.hash}>
                 <ContextMenuTrigger asChild>
-                  <article className="commit-graph-row" style={{ gridTemplateColumns: columnTemplate, transform: `translateY(${row.start}px)` }}>
+                  <article className={`commit-graph-row${currentCheckout ? " commit-graph-row-current" : ""}`} style={{ "--commit-ref-color": refColor, gridTemplateColumns: columnTemplate, transform: `translateY(${row.start}px)` } as CSSProperties}>
                 <div className="commit-graph-summary">
                   <div className="commit-graph-refs">
-                    {displayRefs(commit.refs, checkedOutWorktrees).map((ref, index) => {
-                    const key = `${ref.label}-${index}`
-                    const tagContent = (
-                      <span
-                        aria-label={ref.checkedOut ? "Currently checked out" : ref.worktrees.length ? "Checked out in another worktree" : undefined}
-                        className={`commit-ref${ref.checkedOut ? " commit-ref-current" : ""}`}
-                        style={{ "--commit-ref-color": refColor } as CSSProperties}
-                        title={ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`).join("\n") || undefined}
-                      >
-                        {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}
-                        {ref.label}
-                        {ref.worktrees.length > 0 && <ChevronDown aria-hidden className="-mr-0.5 size-3" />}
-                      </span>
-                    )
-                    let tag = ref.worktrees.length === 0 ? tagContent : (
-                      <DropdownMenuTrigger asChild disabled={openWorktreeMutation.isPending}>{tagContent}</DropdownMenuTrigger>
-                    )
-                    if (ref.branch) {
-                      tag = (
-                        <ContextMenu>
-                          <ContextMenuTrigger asChild>{tag}</ContextMenuTrigger>
-                          <ContextMenuContent>
-                            <ContextMenuItem onSelect={() => openBranchDiff(ref.branch!)}>
-                              <GitCompareArrows />
-                              Compare with main
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => copyText(ref.branch!)}>
-                              <Copy />
-                              Copy branch name
-                            </ContextMenuItem>
-                            {!ref.checkedOut && ref.worktrees.length === 0 && (
-                              <ContextMenuItem onSelect={() => setBranchToDelete(ref.branch!)}>
-                                <Trash2 />
-                                Delete branch
-                              </ContextMenuItem>
-                            )}
-                          </ContextMenuContent>
-                        </ContextMenu>
-                      )
-                    }
-                    if (ref.worktrees.length === 0) {
-                      return <span key={key}>{tag}</span>
-                    }
-                    return (
-                      <DropdownMenu key={key}>
-                        {tag}
+                    {primaryRef && refChip(primaryRef)}
+                    {overflowRefs.length > 0 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <span className="commit-ref">{`+${overflowRefs.length}`}</span>
+                        </DropdownMenuTrigger>
                         <DropdownMenuContent>
-                          {ref.worktrees.flatMap((worktree) => {
-                            const suffix = ref.worktrees.length > 1 ? ` (${worktree.name})` : ""
-                            return [
-                              <DropdownMenuItem key={`${worktree.path}-git-nav`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "git-nav" })}>
-                                <AppWindow />
-                                {`Open in Git Nav${suffix}`}
-                              </DropdownMenuItem>,
-                              <DropdownMenuItem key={`${worktree.path}-vscode`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "vscode" })}>
-                                <CodeXml />
-                                {`Open in VS Code${suffix}`}
-                              </DropdownMenuItem>,
-                              <DropdownMenuItem key={`${worktree.path}-terminal`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "terminal" })}>
-                                <Terminal />
-                                {`Open in Terminal${suffix}`}
-                              </DropdownMenuItem>,
-                              <DropdownMenuItem key={`${worktree.path}-finder`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "finder" })}>
-                                <FolderOpen />
-                                {`Open in Finder${suffix}`}
-                              </DropdownMenuItem>,
-                            ]
-                          })}
+                          {overflowRefs.map((ref, index) => refMenuEntry(ref, `${ref.label}-${index}`, dropdownMenuComponents))}
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    )
-                    })}
+                    )}
                   </div>
                   <span className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}>{commit.subject || "(no subject)"}</span>
                 </div>
@@ -498,6 +544,17 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                     <FileDiff />
                     Show commit diff
                   </ContextMenuItem>
+                  {refs.length > 0 && (
+                    <ContextMenuSub>
+                      <ContextMenuSubTrigger>
+                        <GitBranch />
+                        Branches
+                      </ContextMenuSubTrigger>
+                      <ContextMenuSubContent>
+                        {refs.map((ref, index) => refMenuEntry(ref, `${ref.label}-${index}`, contextMenuComponents))}
+                      </ContextMenuSubContent>
+                    </ContextMenuSub>
+                  )}
                 </ContextMenuContent>
               </ContextMenu>
             )
