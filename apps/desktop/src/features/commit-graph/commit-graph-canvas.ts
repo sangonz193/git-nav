@@ -1,4 +1,4 @@
-import { GRAPH_COLORS, GRAPH_GUTTER, GRAPH_WIDTH, isCurrentCheckout, LANE_WIDTH, ROW_HEIGHT, type Commit } from "./commit-graph"
+import { GRAPH_COLORS, GRAPH_GUTTER, GRAPH_WIDTH, LANE_WIDTH, ROW_HEIGHT, type Commit } from "./commit-graph"
 
 export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], items: { index: number; start: number }[], scrollTop: number, height: number, squashMergeEdges: { branchIndex: number; targetIndex: number }[], width = GRAPH_WIDTH) {
   const ratio = window.devicePixelRatio || 1
@@ -98,13 +98,6 @@ export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], it
         context.bezierCurveTo(startX, startY + ROW_HEIGHT / 2, endX, endY - ROW_HEIGHT / 2, endX, endY)
       }
       context.stroke()
-    }
-
-    if (isCurrentCheckout(commit.refs)) {
-      context.fillStyle = "#f4f4f5"
-      context.beginPath()
-      context.arc(startX, startY, 7, 0, Math.PI * 2)
-      context.fill()
     }
 
     context.fillStyle = color

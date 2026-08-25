@@ -197,28 +197,10 @@ body {
 }
 
 .commit-graph-checkout-hint {
-  align-items: center;
-  background: color-mix(in srgb, var(--background) 92%, transparent);
-  border: 1px solid rgb(244 244 245 / 45%);
-  border-radius: 5px;
-  color: #f4f4f5;
-  cursor: pointer;
-  display: flex;
-  font-size: 0.6875rem;
-  gap: 4px;
+  background: var(--background);
   left: 8px;
-  padding: 4px 6px;
   position: absolute;
   z-index: 3;
-}
-
-.commit-graph-checkout-hint:hover {
-  background: color-mix(in srgb, var(--background) 80%, #f4f4f5 20%);
-}
-
-.commit-graph-checkout-hint svg {
-  height: 12px;
-  width: 12px;
 }
 
 .commit-graph-checkout-hint-up {
@@ -234,12 +216,16 @@ body {
   border-bottom: 1px solid rgb(255 255 255 / 4%);
   display: grid;
   height: 32px;
-  left: var(--graph-width, 112px);
+  left: 0;
   position: absolute;
   right: 0;
   top: 0;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.commit-graph-graph-cell {
+  height: 100%;
 }
 
 .commit-graph-row > * {
@@ -249,6 +235,12 @@ body {
 
 .commit-graph-row:hover {
   background: rgb(255 255 255 / 4%);
+}
+
+.commit-graph-row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  z-index: 2;
 }
 
 .commit-graph-row.commit-graph-row-current {
@@ -269,6 +261,17 @@ body {
   background: rgb(96 165 250 / 28%);
 }
 
+.commit-graph-row-branches {
+  min-width: max-content;
+  right: auto;
+  width: max-content;
+}
+
+.commit-graph-row-branches .commit-graph-summary,
+.commit-graph-row-branches .commit-graph-refs {
+  overflow: visible;
+}
+
 .commit-graph-row.commit-graph-row-current.commit-graph-row-selected {
   background: color-mix(in srgb, var(--commit-ref-color) 12%, rgb(96 165 250 / 20%));
   box-shadow: inset 2px 0 0 var(--commit-ref-color), inset 0 0 0 1px rgb(96 165 250 / 40%);
@@ -276,11 +279,11 @@ body {
 
 .commit-graph-selection-bar {
   align-items: center;
-  background: color-mix(in srgb, var(--background) 92%, transparent);
-  border: 1px solid rgb(244 244 245 / 45%);
-  border-radius: 6px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   bottom: 8px;
-  color: #f4f4f5;
+  color: var(--foreground);
   display: flex;
   font-size: 0.6875rem;
   gap: 6px;

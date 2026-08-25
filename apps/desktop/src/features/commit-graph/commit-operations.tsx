@@ -44,7 +44,7 @@ export type RebaseResult =
   | { branch: string, headSha: string, outcome: "completed", updates: RefUpdate[] }
   | { files: string[], message: string, outcome: "failed" }
 export type RefMenuComponents = {
-  Item: ComponentType<{ children: ReactNode, disabled?: boolean, onSelect?: () => void }>
+  Item: ComponentType<{ children: ReactNode, className?: string, disabled?: boolean, onSelect?: () => void, title?: string }>
   Sub: ComponentType<{ children: ReactNode }>
   SubContent: ComponentType<{ children: ReactNode }>
   SubTrigger: ComponentType<{ children: ReactNode }>
@@ -208,9 +208,11 @@ export function OperationMenuItems({ components, onConfirm, repoPath, source, ta
     const state = { branch: choice ? branchStates[choice.branch] ?? null : null, candidates, choice, prediction }
     const blocks = rebaseOnto.blocks(source, target, state)
     const warnings = rebaseOnto.warnings(source, target, state)
+    const blocked = blocks.length > 0
     return (
       <Item
-        disabled={blocks.length > 0}
+        className="max-w-80"
+        disabled={blocked}
         key={key}
         onSelect={() => {
           if (!source?.base || !choice) {
@@ -218,11 +220,12 @@ export function OperationMenuItems({ components, onConfirm, repoPath, source, ta
           }
           onConfirm({ argv: rebaseOnto.argv(source, target, choice), branch: choice.branch, onto, upstream: source.base.hash, warnings })
         }}
+        title={blocked ? blocks.map((block) => block.reason).join(", ") : undefined}
       >
-        {blocks.length === 0 && warnings.length > 0 ? <TriangleAlert /> : <GitGraph />}
-        <span className="truncate">{rebaseOnto.label(source, target, choice)}</span>
-        {blocks.length > 0
-          ? <span className="text-xs text-muted-foreground">{blocks.map((block) => block.reason).join(", ")}</span>
+        {!blocked && warnings.length > 0 ? <TriangleAlert /> : <GitGraph />}
+        <span className="min-w-0 truncate">{blocked ? "Rebase unavailable" : rebaseOnto.label(source, target, choice)}</span>
+        {blocked
+          ? <span className="shrink-0 text-xs text-muted-foreground">Unavailable</span>
           : prediction === null && <span className="text-xs text-muted-foreground">Checking…</span>}
       </Item>
     )

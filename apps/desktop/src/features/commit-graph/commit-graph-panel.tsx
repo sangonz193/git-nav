@@ -9,7 +9,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, Conte
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import type { IDockviewPanelProps } from "dockview-react"
 import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2, TriangleAlert, Undo2, X } from "lucide-react"
-import { type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
 import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_COLORS, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
@@ -33,6 +33,7 @@ type RangeDrag = { anchorIndex: number, focusIndex: number }
 type RebaseUndo = { branch: string, onto: string, updates: RefUpdate[] }
 type SelectionRange = { anchorHash: string, focusHash: string }
 type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
+type ViewMode = "graph" | "branches"
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
@@ -62,6 +63,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
+  const [viewMode, setViewMode] = useState<ViewMode>("graph")
   const scrollElement = useRef<HTMLDivElement>(null)
   const graphSpace = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -77,7 +79,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     columns: commitColumns,
   })
   const columnTemplate = table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ")
-  const tableWidth = graphWidth + table.getTotalSize()
+  const tableWidth = viewMode === "graph" ? graphWidth + table.getTotalSize() : graphWidth
   const rowVirtualizer = useVirtualizer({
     count: commits.length,
     getScrollElement: () => scrollElement.current,
@@ -462,6 +464,10 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (event.button !== 0 || !scroll || !space || (event.target as HTMLElement).closest(".commit-ref")) {
       return
     }
+    const anchorIndex = event.shiftKey && selectionRange
+      ? commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
+      : index
+    const rangeAnchorIndex = anchorIndex === -1 ? index : anchorIndex
     const originX = event.clientX
     const originY = event.clientY
     let pointerY = event.clientY
@@ -481,7 +487,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       const distance = overTop < 0 ? overTop : overBottom > 0 ? overBottom : 0
       if (distance !== 0) {
         scroll.scrollTop += Math.max(-AUTOSCROLL_STEP, Math.min(AUTOSCROLL_STEP, distance))
-        setRangeDrag({ anchorIndex: index, focusIndex: focusIndexAt() })
+        setRangeDrag({ anchorIndex: rangeAnchorIndex, focusIndex: focusIndexAt() })
       }
       frame = requestAnimationFrame(autoScroll)
     }
@@ -496,7 +502,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         window.getSelection()?.removeAllRanges()
         frame = requestAnimationFrame(autoScroll)
       }
-      setRangeDrag({ anchorIndex: index, focusIndex: focusIndexAt() })
+      setRangeDrag({ anchorIndex: rangeAnchorIndex, focusIndex: focusIndexAt() })
     }
 
     const onPointerUp = () => {
@@ -507,13 +513,31 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         cancelAnimationFrame(frame)
       }
       const focusIndex = focusIndexAt()
-      const path = dragging ? ancestryPath(commits, index, focusIndex) : []
-      setSelectionRange(path.length === 0 ? null : { anchorHash: commits[index].hash, focusHash: commits[focusIndex].hash })
+      const path = ancestryPath(commits, rangeAnchorIndex, focusIndex)
+      if (path.length > 0) {
+        setSelectionRange({ anchorHash: commits[rangeAnchorIndex].hash, focusHash: commits[focusIndex].hash })
+      } else if (!event.shiftKey) {
+        setSelectionRange(null)
+      }
       setRangeDrag(null)
     }
 
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
+  }
+
+  function selectCommitFromKeyboard(event: ReactKeyboardEvent<HTMLElement>, index: number) {
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) {
+      return
+    }
+    event.preventDefault()
+    const anchorIndex = event.shiftKey && selectionRange
+      ? commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
+      : index
+    const rangeAnchorIndex = anchorIndex === -1 ? index : anchorIndex
+    if (ancestryPath(commits, rangeAnchorIndex, index).length > 0) {
+      setSelectionRange({ anchorHash: commits[rangeAnchorIndex].hash, focusHash: commits[index].hash })
+    }
   }
 
   function refMenuItems(ref: DisplayRef, sha: string, components: RefMenuComponents) {
@@ -582,7 +606,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     )
   }
 
-  function refChip(ref: DisplayRef, sha: string) {
+  function refChip(ref: DisplayRef, sha: string, key?: string) {
     const { start, end } = splitRefLabel(ref.label)
     const chip = (
       <span
@@ -598,7 +622,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       </span>
     )
     return (
-      <DropdownMenu>
+      <DropdownMenu key={key}>
         <ContextMenu>
           {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
           <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
@@ -613,33 +637,43 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   return (
     <main className="relative flex h-full flex-col overflow-hidden bg-background">
-      <div className="flex items-center justify-end gap-1 border-b p-1">
-        <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="icon" title="Clean merged branches" type="button" variant="ghost">
-          {cleanMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Broom />}
-        </Button>
-        <ButtonGroup>
-          <Button aria-label="Refresh graph" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => refreshGraph()} size="icon" title="Refresh graph" type="button" variant="ghost">
-            {fetchMutation.isPending ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+      <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
+        <ButtonGroup aria-label="View mode">
+          <Button aria-pressed={viewMode === "graph"} onClick={() => setViewMode("graph")} size="sm" type="button" variant={viewMode === "graph" ? "outline" : "ghost"}>
+            Graph
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button aria-label="Fetch options" className="w-6" disabled={fetchMutation.isPending || cleanMutation.isPending} size="icon" title="Fetch options" type="button" variant="ghost">
-                <ChevronDown />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem disabled={fetchMutation.isPending} onSelect={() => fetchMutation.mutate()}>
-                <RefreshCw />
-                Fetch from origin
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button aria-pressed={viewMode === "branches"} onClick={() => setViewMode("branches")} size="sm" type="button" variant={viewMode === "branches" ? "outline" : "ghost"}>
+            Branches
+          </Button>
         </ButtonGroup>
+        <div className="flex items-center gap-1">
+          <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="icon" title="Clean merged branches" type="button" variant="ghost">
+            {cleanMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Broom />}
+          </Button>
+          <ButtonGroup>
+            <Button aria-label="Refresh graph" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => refreshGraph()} size="icon" title="Refresh graph" type="button" variant="ghost">
+              {fetchMutation.isPending ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button aria-label="Fetch options" className="w-6" disabled={fetchMutation.isPending || cleanMutation.isPending} size="icon" title="Fetch options" type="button" variant="ghost">
+                  <ChevronDown />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem disabled={fetchMutation.isPending} onSelect={() => fetchMutation.mutate()}>
+                  <RefreshCw />
+                  Fetch from origin
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </ButtonGroup>
+        </div>
       </div>
-      <div className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} style={{ "--graph-header-height": `${GRAPH_HEADER_HEIGHT}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
+      <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--graph-header-height": `${GRAPH_HEADER_HEIGHT}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
-          <div className="commit-graph-header-content" style={{ minWidth: tableWidth }}>
-            <div className="commit-graph-header-spacer">
+          <div className="commit-graph-header-content" role="row" style={{ minWidth: tableWidth }}>
+            <div className="commit-graph-header-spacer" role="columnheader">
               Graph
               <div
                 aria-label="Resize Graph column"
@@ -656,29 +690,31 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                 role="separator"
               />
             </div>
-            <div className="commit-graph-header-columns" style={{ gridTemplateColumns: columnTemplate }}>
-              {table.getFlatHeaders().map((header) => (
-                <div className="commit-graph-header-cell" key={header.id}>
-                  <table.FlexRender header={header} />
-                  {header.column.getCanResize() && (
-                    <div
-                      aria-label={`Resize ${String(header.column.columnDef.header)} column`}
-                      className={`commit-graph-resize-handle${header.column.getIsResizing() ? " is-resizing" : ""}`}
-                      onDoubleClick={() => header.column.resetSize()}
-                      onMouseDown={(event) => {
-                        event.preventDefault()
-                        header.getResizeHandler()(event)
-                      }}
-                      onTouchStart={(event) => {
-                        event.preventDefault()
-                        header.getResizeHandler()(event)
-                      }}
-                      role="separator"
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
+            {viewMode === "graph" ? (
+              <div className="commit-graph-header-columns" style={{ gridTemplateColumns: columnTemplate }}>
+                {table.getFlatHeaders().map((header) => (
+                  <div className="commit-graph-header-cell" key={header.id} role="columnheader">
+                    <table.FlexRender header={header} />
+                    {header.column.getCanResize() && (
+                      <div
+                        aria-label={`Resize ${String(header.column.columnDef.header)} column`}
+                        className={`commit-graph-resize-handle${header.column.getIsResizing() ? " is-resizing" : ""}`}
+                        onDoubleClick={() => header.column.resetSize()}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          header.getResizeHandler()(event)
+                        }}
+                        onTouchStart={(event) => {
+                          event.preventDefault()
+                          header.getResizeHandler()(event)
+                        }}
+                        role="separator"
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : <div className="commit-graph-header-cell" role="columnheader">Branches</div>}
           </div>
         </div>
         <div className="commit-graph-space" ref={graphSpace} style={{ height: rowVirtualizer.getTotalSize(), minWidth: tableWidth }}>
@@ -693,11 +729,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             return (
               <ContextMenu key={commit.hash}>
                 <ContextMenuTrigger asChild>
-                  <article className={`commit-graph-row${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onPointerDown={(event) => startRangeDrag(event, row.index)} style={{ "--commit-ref-color": refColor, gridTemplateColumns: columnTemplate, transform: `translateY(${row.start}px)` } as CSSProperties}>
-                <div className="commit-graph-summary">
+                  <article aria-keyshortcuts="Enter Space Shift+Enter Shift+Space" aria-rowindex={row.index + 2} aria-selected={selected} className={`commit-graph-row${viewMode === "branches" ? " commit-graph-row-branches" : ""}${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onKeyDown={(event) => selectCommitFromKeyboard(event, row.index)} onPointerDown={(event) => startRangeDrag(event, row.index)} role="row" style={{ "--commit-ref-color": refColor, gridTemplateColumns: `${graphWidth}px ${viewMode === "graph" ? columnTemplate : "max-content"}`, transform: `translateY(${row.start}px)` } as CSSProperties} tabIndex={0}>
+                    <div aria-hidden className="commit-graph-graph-cell" />
+                    <div className="commit-graph-summary" role="gridcell">
                   <div className="commit-graph-refs">
-                    {primaryRef && refChip(primaryRef, commit.hash)}
-                    {overflowRefs.length > 0 && (
+                    {viewMode === "branches" ? refs.map((ref, index) => refChip(ref, commit.hash, `${ref.label}-${index}`)) : primaryRef && refChip(primaryRef, commit.hash)}
+                    {viewMode === "graph" && overflowRefs.length > 0 && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <span className="commit-ref">{`+${overflowRefs.length}`}</span>
@@ -708,11 +745,13 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                       </DropdownMenu>
                     )}
                   </div>
-                  <span className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}>{commit.subject || "(no subject)"}</span>
+                  {viewMode === "graph" && <span className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}>{commit.subject || "(no subject)"}</span>}
                 </div>
-                <span className="truncate text-muted-foreground">{commit.author}</span>
-                <time className="text-muted-foreground" dateTime={commit.date}>{relativeDate(commit.date)}</time>
-                <code className="text-muted-foreground">{commit.hash.slice(0, 8)}</code>
+                {viewMode === "graph" && <>
+                  <span className="truncate text-muted-foreground" role="gridcell">{commit.author}</span>
+                  <time className="text-muted-foreground" dateTime={commit.date} role="gridcell">{relativeDate(commit.date)}</time>
+                  <code className="text-muted-foreground" role="gridcell">{commit.hash.slice(0, 8)}</code>
+                </>}
                   </article>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
@@ -734,7 +773,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                       Diff selected range
                     </ContextMenuItem>
                   )}
-                  {refs.length > 0 && (
+                  {refs.length === 1 && refMenuEntry(refs[0], commit.hash, refs[0].label, contextMenuComponents)}
+                  {refs.length > 1 && (
                     <ContextMenuSub>
                       <ContextMenuSubTrigger>
                         <GitBranch />
