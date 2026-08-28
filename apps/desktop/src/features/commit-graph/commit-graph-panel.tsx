@@ -8,17 +8,18 @@ import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2, TriangleAlert, Undo2, X } from "lucide-react"
+import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2, TriangleAlert, Undo2, X } from "lucide-react"
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_COLORS, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, refName, relativeDate, ROW_HEIGHT, splitRefLabel, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_COLORS, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, refName, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
 import { OperationMenuItems, type OperationPlan, type RebaseResult, type RefMenuComponents, type RefUpdate } from "./commit-operations"
-import type { RepositoryPanelParams } from "../repository/repository-window"
+import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
 const PULL_REQUEST_SYNC_INTERVAL = 60_000
+const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
@@ -32,8 +33,11 @@ type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch"
 type RangeDrag = { anchorIndex: number, focusIndex: number }
 type RebaseUndo = { branch: string, onto: string, updates: RefUpdate[] }
 type SelectionRange = { anchorHash: string, focusHash: string }
+type PendingOperation = "rebase" | "merge" | "cherryPick" | "bisect"
+type WorktreeStatus = { path: string, branch: string, head: string, isDetached: boolean, changedFiles: number, untrackedFiles: number, pendingOperation: PendingOperation | null }
 type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
 type ViewMode = "graph" | "branches"
+const PENDING_OPERATION_LABELS: Record<PendingOperation, string> = { rebase: "rebasing", merge: "merging", cherryPick: "cherry-picking", bisect: "bisecting" }
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
@@ -59,6 +63,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [rebaseUndo, setRebaseUndo] = useState<RebaseUndo | null>(null)
   const [graphVersion, setGraphVersion] = useState(0)
   const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
+  const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(new Map())
+  const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(null)
   const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
@@ -69,9 +75,32 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const canvas = useRef<HTMLCanvasElement>(null)
   const savedScrollTop = useRef(0)
   const refreshAnchor = useRef<{ hash: string; offset: number } | null>(null)
+  const commitsRef = useRef(commits)
+  const fingerprint = useRef<string | null>(null)
+  const fingerprintGeneration = useRef(0)
   const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
+  const refreshGraph = useCallback((clearReport = true) => {
+    setError(null)
+    if (clearReport) {
+      setCleanupReport(null)
+    }
+    const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
+    const index = Math.floor(scrollTop / ROW_HEIGHT)
+    const commit = commitsRef.current[index]
+    refreshAnchor.current = commit ? { hash: commit.hash, offset: scrollTop - index * ROW_HEIGHT } : null
+    // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
+    fingerprint.current = null
+    fingerprintGeneration.current += 1
+    setGraphVersion((version) => version + 1)
+  }, [])
+  // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
+  const refreshWorktreeStatus = useCallback(() => {
+    invoke<WorktreeStatus[]>("worktree_status", { repoPath: params.path })
+      .then(setWorktreeStatuses)
+      .catch(() => undefined)
+  }, [params.path])
   const table = useTable({
     columnResizeMode: "onChange",
     data: EMPTY_COMMITS,
@@ -108,6 +137,26 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }, [commits, rangeDrag, selectionRange])
   const selectedHashes = useMemo(() => new Set(selection?.commits.map((commit) => commit.hash)), [selection])
   const selectionBranch = selection && displayRefs(selection.tip.refs).find((ref) => ref.branch)?.branch
+  const unpushed = useMemo(() => unpushedHashes(commits), [commits])
+  // The oldest unpushed commit is the top of the local segment, so it is the useful place to land.
+  const oldestUnpushedIndex = useMemo(() => {
+    for (let index = commits.length - 1; index >= 0; index -= 1) {
+      if (unpushed.has(commits[index].hash)) {
+        return index
+      }
+    }
+    return -1
+  }, [commits, unpushed])
+  const worktreeStatusesByHead = useMemo(() => {
+    const byHead = new Map<string, WorktreeStatus[]>()
+    for (const status of worktreeStatuses) {
+      if (status.changedFiles + status.untrackedFiles === 0 && !status.pendingOperation) {
+        continue
+      }
+      byHead.set(status.head, [...(byHead.get(status.head) ?? []), status])
+    }
+    return byHead
+  }, [worktreeStatuses])
   const squashMergeEdges = useMemo(() => {
     if (squashMergeInferences.length === 0) {
       return []
@@ -255,6 +304,14 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         .catch(() => undefined)
     }
 
+    invoke<BranchSync[]>("branch_sync", { repoPath: params.path })
+      .then((entries) => {
+        if (!disposed) {
+          setBranchSync(new Map(entries.map((entry) => [entry.branch, entry])))
+        }
+      })
+      .catch(() => undefined)
+    refreshWorktreeStatus()
     refreshSquashMergeInferences()
     const interval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
     invoke("stream_commit_graph", { repoPath: params.path, onBatch: channel })
@@ -263,7 +320,39 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       disposed = true
       window.clearInterval(interval)
     }
-  }, [graphVersion, params.path])
+  }, [graphVersion, params.path, refreshWorktreeStatus])
+
+  useEffect(() => {
+    commitsRef.current = commits
+  }, [commits])
+
+  useEffect(() => {
+    let disposed = false
+    const poll = () => {
+      const generation = fingerprintGeneration.current
+      return invoke<string>("repository_fingerprint", { repoPath: params.path })
+        .then((value) => {
+          // A refresh that started while this was in flight already invalidated the answer.
+          if (disposed || generation !== fingerprintGeneration.current) {
+            return
+          }
+          if (fingerprint.current !== null && fingerprint.current !== value) {
+            refreshGraph(false)
+          }
+          fingerprint.current = value
+        })
+        .catch(() => undefined)
+    }
+
+    poll()
+    const interval = window.setInterval(poll, REPOSITORY_FINGERPRINT_INTERVAL)
+    window.addEventListener("focus", poll)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+      window.removeEventListener("focus", poll)
+    }
+  }, [params.path, refreshGraph])
 
   useEffect(() => {
     const anchor = refreshAnchor.current
@@ -303,15 +392,18 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     let disposed = false
-    const refresh = () => invoke<Project>("project_snapshot", { path: params.path })
-      .then((project) => {
-        if (!disposed) {
-          setCheckedOutWorktrees(project.worktrees
-            .filter((worktree) => worktree.path !== params.path && !worktree.isPrunable && !worktree.isDetached)
-            .map(({ branch, name, path, isOpen }) => ({ branch, name, path, isOpen })))
-        }
-      })
-      .catch((message: unknown) => setError(String(message)))
+    const refresh = () => {
+      invoke<Project>("project_snapshot", { path: params.path })
+        .then((project) => {
+          if (!disposed) {
+            setCheckedOutWorktrees(project.worktrees
+              .filter((worktree) => worktree.path !== params.path && !worktree.isPrunable && !worktree.isDetached)
+              .map(({ branch, name, path, isOpen }) => ({ branch, name, path, isOpen })))
+          }
+        })
+        .catch((message: unknown) => setError(String(message)))
+      refreshWorktreeStatus()
+    }
 
     refresh()
     window.addEventListener("focus", refresh)
@@ -321,7 +413,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       window.removeEventListener("focus", refresh)
       window.clearInterval(interval)
     }
-  }, [params.path])
+  }, [params.path, refreshWorktreeStatus])
 
   useEffect(() => {
     if (!selectionRange) {
@@ -338,9 +430,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, graphCanvasHeight(scroll.height), squashMergeEdges, graphWidth)
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top, height: graphCanvasHeight(scroll.height), squashMergeEdges, unpushed, width: graphWidth })
     }
-  }, [commits, graphWidth, scroll, squashMergeEdges, virtualRows])
+  }, [commits, graphWidth, scroll, squashMergeEdges, unpushed, virtualRows])
 
   function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
     const originX = "touches" in event ? event.touches[0].clientX : event.clientX
@@ -381,23 +473,17 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     })
   }
 
+  function scrollToOldestUnpushed() {
+    if (oldestUnpushedIndex !== -1) {
+      rowVirtualizer.scrollToIndex(oldestUnpushedIndex, { align: "center" })
+    }
+  }
+
   function scrollToCurrentCheckout() {
     if (currentCheckoutIndex === -1) {
       return
     }
     rowVirtualizer.scrollToIndex(currentCheckoutIndex, { align: "center" })
-  }
-
-  function refreshGraph(clearReport = true) {
-    setError(null)
-    if (clearReport) {
-      setCleanupReport(null)
-    }
-    const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
-    const index = Math.floor(scrollTop / ROW_HEIGHT)
-    const commit = commits[index]
-    refreshAnchor.current = commit ? { hash: commit.hash, offset: scrollTop - index * ROW_HEIGHT } : null
-    setGraphVersion((version) => version + 1)
   }
 
   async function openRefDiff(reference: string) {
@@ -440,6 +526,22 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       params: { ...params, baseRef, headRef: commit.hash },
       position: { direction: "within", referencePanel },
       title: `Diff: ${commit.hash.slice(0, 8)}`,
+    })
+  }
+
+  // The diff is scoped to the dirty worktree, which is not always the one this panel was opened on.
+  function openWorktreeDiff(status: WorktreeStatus, name: string) {
+    const referencePanel = containerApi.getPanel(api.id)
+    if (!referencePanel) {
+      setError("Could not open a working tree diff.")
+      return
+    }
+    containerApi.addPanel({
+      component: "diff",
+      id: `repository-diff-${crypto.randomUUID()}`,
+      params: { ...params, path: status.path, baseRef: status.head, headRef: WORKTREE_REF },
+      position: { direction: "within", referencePanel },
+      title: `Uncommitted: ${name}`,
     })
   }
 
@@ -606,19 +708,54 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     )
   }
 
+  function worktreeChips(hash: string) {
+    return (worktreeStatusesByHead.get(hash) ?? []).flatMap((status) => {
+      const name = status.path.split("/").pop() ?? status.path
+      const changes = status.changedFiles + status.untrackedFiles
+      const details = [status.changedFiles && `${status.changedFiles} changed`, status.untrackedFiles && `${status.untrackedFiles} untracked`].filter(Boolean).join(", ")
+      return [
+        changes > 0 && (
+          <button
+            aria-label={`Show ${changes} uncommitted change${changes === 1 ? "" : "s"} in ${name}`}
+            className="commit-ref commit-ref-changes"
+            key={`${status.path}-changes`}
+            onClick={() => openWorktreeDiff(status, name)}
+            onPointerDown={(event) => event.stopPropagation()}
+            title={`${name}: ${details}`}
+            type="button"
+          >
+            <FilePen />
+            {changes}
+          </button>
+        ),
+        status.pendingOperation && (
+          <span
+            className="commit-ref commit-ref-operation"
+            key={`${status.path}-operation`}
+            title={`${name} is ${PENDING_OPERATION_LABELS[status.pendingOperation]}`}
+          >
+            {PENDING_OPERATION_LABELS[status.pendingOperation]}
+          </span>
+        ),
+      ].filter(Boolean)
+    })
+  }
+
   function refChip(ref: DisplayRef, sha: string, key?: string) {
     const { start, end } = splitRefLabel(ref.label)
+    const sync = refSyncLabel(ref)
     const chip = (
       <span
         aria-label={ref.checkedOut ? "Currently checked out" : ref.worktrees.length ? "Checked out in another worktree" : undefined}
-        className={`commit-ref${ref.checkedOut ? " commit-ref-current" : ""}`}
-        title={[ref.label, ...ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`)].join("\n")}
+        className={`commit-ref${ref.checkedOut ? " commit-ref-current" : ""}${ref.remote ? " commit-ref-remote" : ""}`}
+        title={[ref.label, syncDescription(ref), ...ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`)].filter(Boolean).join("\n")}
       >
         {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}
         <span className="commit-ref-label">
           <span className="commit-ref-label-start">{start}</span>
           {end && <span className="commit-ref-label-end">{end}</span>}
         </span>
+        {sync && <span className="commit-ref-sync">{sync}</span>}
       </span>
     )
     return (
@@ -647,6 +784,11 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </Button>
         </ButtonGroup>
         <div className="flex items-center gap-1">
+          {unpushed.size > 0 && (
+            <Button onClick={scrollToOldestUnpushed} size="sm" title="Scroll to the oldest commit that no remote has" type="button" variant="ghost">
+              {`${unpushed.size} unpushed`}
+            </Button>
+          )}
           <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="icon" title="Clean merged branches" type="button" variant="ghost">
             {cleanMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Broom />}
           </Button>
@@ -724,7 +866,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             const refColor = GRAPH_COLORS[commit.lane % GRAPH_COLORS.length]
             const currentCheckout = isCurrentCheckout(commit.refs)
             const selected = selectedHashes.has(commit.hash)
-            const refs = displayRefs(commit.refs, checkedOutWorktrees)
+            const refs = displayRefs(commit.refs, checkedOutWorktrees, branchSync)
             const [primaryRef, ...overflowRefs] = refs
             return (
               <ContextMenu key={commit.hash}>
@@ -744,6 +886,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
+                    {worktreeChips(commit.hash)}
                   </div>
                   {viewMode === "graph" && <span className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}>{commit.subject || "(no subject)"}</span>}
                 </div>

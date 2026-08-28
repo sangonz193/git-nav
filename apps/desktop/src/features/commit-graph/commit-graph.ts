@@ -22,11 +22,21 @@ export type CheckedOutWorktree = {
   isOpen: boolean
 }
 
+export type BranchSync = {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  isGone: boolean
+}
+
 export type DisplayRef = {
   branch: string | null
   label: string
   checkedOut: boolean
+  remote: boolean
   tag: boolean
+  sync: BranchSync | null
   worktrees: CheckedOutWorktree[]
 }
 
@@ -71,6 +81,27 @@ export function fitGraphWidth(commits: Commit[]) {
 
 export function isCurrentCheckout(refs: string[]) {
   return refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))
+}
+
+function isRemoteRef(ref: string) {
+  return (ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref).startsWith("origin/")
+}
+
+// A commit is pushed when a remote ref reaches it, and topological order puts every child before its
+// parents, so one pass forward carries that reachability down without walking the graph twice.
+export function unpushedHashes(commits: Commit[]) {
+  const pushed = new Set<string>()
+  const unpushed = new Set<string>()
+  for (const commit of commits) {
+    if (pushed.has(commit.hash) || commit.refs.some(isRemoteRef)) {
+      for (const parent of commit.parents) {
+        pushed.add(parent)
+      }
+    } else {
+      unpushed.add(commit.hash)
+    }
+  }
+  return unpushed
 }
 
 export function commitFromTuple([hash, parents, author, date, refs, subject, lane, parentLanes, laneCount, incomingLanes, activeLanes]: CommitBatch[number]): Commit {
@@ -170,7 +201,35 @@ function refPriority(ref: DisplayRef) {
   return ref.tag ? 4 : 3
 }
 
-export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorktree[] = []) {
+export function refSyncLabel({ sync }: DisplayRef) {
+  if (!sync) {
+    return null
+  }
+  if (sync.isGone) {
+    return "gone"
+  }
+  if (!sync.upstream) {
+    return "local"
+  }
+  const counts = [sync.ahead && `↑${sync.ahead}`, sync.behind && `↓${sync.behind}`].filter(Boolean)
+  return counts.length > 0 ? counts.join(" ") : null
+}
+
+export function syncDescription({ sync }: DisplayRef) {
+  if (!sync) {
+    return null
+  }
+  if (sync.isGone) {
+    return `${sync.upstream} is gone from the remote`
+  }
+  if (!sync.upstream) {
+    return "Not pushed to a remote"
+  }
+  const counts = [sync.ahead && `${sync.ahead} ahead`, sync.behind && `${sync.behind} behind`].filter(Boolean)
+  return counts.length > 0 ? `${sync.upstream}: ${counts.join(", ")}` : `In sync with ${sync.upstream}`
+}
+
+export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorktree[] = [], branchSync?: Map<string, BranchSync>) {
   const checkedOut = refs.find((ref) => ref.startsWith("HEAD -> "))?.slice("HEAD -> ".length)
   const branchRefs = refs.filter((ref) => !ref.startsWith("HEAD -> ") && !ref.startsWith("tag: "))
   const localBranches = new Set(branchRefs.filter((ref) => !ref.startsWith("origin/")))
@@ -187,23 +246,23 @@ export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorkt
     if (hasRemote) {
       consumed.add(remote)
     }
-    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, tag: false, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
+    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, remote: false, tag: false, sync: branchSync?.get(branch) ?? null, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
   }
 
   for (const ref of branchRefs) {
     if (!consumed.has(ref) && ref !== "origin/HEAD") {
-      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, tag: false, worktrees: [] })
+      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, remote: ref.startsWith("origin/"), tag: false, sync: null, worktrees: [] })
     }
   }
 
   for (const ref of refs) {
     if (ref.startsWith("tag: ")) {
-      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, tag: true, worktrees: [] })
+      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, remote: false, tag: true, sync: null, worktrees: [] })
     }
   }
 
   if (checkedOut?.startsWith("origin/")) {
-    result.push({ branch: null, label: checkedOut, checkedOut: true, tag: false, worktrees: [] })
+    result.push({ branch: null, label: checkedOut, checkedOut: true, remote: true, tag: false, sync: null, worktrees: [] })
   }
 
   return result.sort((a, b) => refPriority(a) - refPriority(b))

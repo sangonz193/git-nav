@@ -339,6 +339,8 @@ body {
 
 .commit-ref svg {
   flex: none;
+  height: 12px;
+  width: 12px;
 }
 
 .commit-ref-label {
@@ -355,6 +357,49 @@ body {
 
 .commit-ref-label-end {
   flex: none;
+}
+
+.commit-ref-sync {
+  color: color-mix(in srgb, var(--commit-ref-color) 70%, var(--muted-foreground));
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+.commit-ref-current .commit-ref-sync {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.commit-ref-changes,
+.commit-ref-operation {
+  background: rgb(251 191 36 / 12%);
+  border-color: rgb(251 191 36 / 32%);
+  color: #fbbf24;
+}
+
+.commit-ref-changes {
+  font-variant-numeric: tabular-nums;
+}
+
+button.commit-ref {
+  cursor: pointer;
+  font: inherit;
+}
+
+button.commit-ref-changes:hover {
+  background: rgb(251 191 36 / 24%);
+}
+
+.commit-ref-remote {
+  background: color-mix(in srgb, var(--muted-foreground) 10%, transparent);
+  border-color: color-mix(in srgb, var(--muted-foreground) 26%, transparent);
+  color: var(--muted-foreground);
+}
+
+.commit-ref-remote[aria-haspopup="menu"]:hover,
+.commit-ref-remote[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--muted-foreground) 22%, transparent);
 }
 
 .commit-ref-current {

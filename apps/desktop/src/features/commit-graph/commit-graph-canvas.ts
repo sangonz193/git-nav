@@ -1,6 +1,17 @@
 import { GRAPH_COLORS, GRAPH_GUTTER, GRAPH_WIDTH, LANE_WIDTH, ROW_HEIGHT, type Commit } from "./commit-graph"
 
-export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], items: { index: number; start: number }[], scrollTop: number, height: number, squashMergeEdges: { branchIndex: number; targetIndex: number }[], width = GRAPH_WIDTH) {
+type CommitGraphDrawing = {
+  canvas: HTMLCanvasElement
+  commits: Commit[]
+  items: { index: number; start: number }[]
+  scrollTop: number
+  height: number
+  squashMergeEdges: { branchIndex: number; targetIndex: number }[]
+  unpushed?: Set<string>
+  width?: number
+}
+
+export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squashMergeEdges, unpushed, width = GRAPH_WIDTH }: CommitGraphDrawing) {
   const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
   const pixelWidth = Math.ceil(width * ratio)
@@ -104,5 +115,15 @@ export function drawCommitGraph(canvas: HTMLCanvasElement, commits: Commit[], it
     context.beginPath()
     context.arc(startX, startY, 4, 0, Math.PI * 2)
     context.fill()
+
+    // The canvas sits above the rows, so punching the centre out lets the row background read through as a hollow node.
+    if (unpushed?.has(commit.hash)) {
+      context.save()
+      context.globalCompositeOperation = "destination-out"
+      context.beginPath()
+      context.arc(startX, startY, 2, 0, Math.PI * 2)
+      context.fill()
+      context.restore()
+    }
   }
 }

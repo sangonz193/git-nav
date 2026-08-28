@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     env, fs,
+    hash::{Hash, Hasher},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -18,6 +19,8 @@ const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
 const MINIMUM_MERGE_TREE_VERSION: (u32, u32) = (2, 38);
+// Not a legal ref name, so it cannot collide with anything the user could name a branch or tag.
+const WORKTREE_REF: &str = ":worktree";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -199,6 +202,28 @@ struct WorktreeRecord {
     is_prunable: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchSync {
+    branch: String,
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+    is_gone: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeStatus {
+    path: String,
+    branch: String,
+    head: String,
+    is_detached: bool,
+    changed_files: u32,
+    untracked_files: u32,
+    pending_operation: Option<PendingOperation>,
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct RecentRepositories {
     #[serde(default)]
@@ -375,12 +400,13 @@ fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
     files
 }
 
-fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<ChangedFile>, String> {
-    let output = git_output_bytes(path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--name-status", "-z", base_sha, head_sha])
-        .ok_or_else(|| "git diff failed.".to_string())?;
+const NAME_STATUS_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--name-status", "-z"];
+const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
+
+fn parse_changed_files(name_status: &[u8], patch: &str) -> Result<Vec<ChangedFile>, String> {
     // The patch lists files in the same order as --name-status, so its per-file stats zip by index.
-    let stats = parse_patch_stats(&git_output_allow_empty(path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3", base_sha, head_sha])?);
-    let fields = output
+    let stats = parse_patch_stats(patch);
+    let fields = name_status
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty())
         .map(|field| String::from_utf8(field.to_vec()).map_err(|error| error.to_string()))
@@ -420,6 +446,56 @@ fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<Chang
             hunk_rows: stat.hunk_rows,
         });
     }
+    Ok(files)
+}
+
+fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<ChangedFile>, String> {
+    let revisions = [base_sha, head_sha];
+    let name_status = git_output_bytes(path, &[&NAME_STATUS_ARGUMENTS[..], &revisions].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], &revisions].concat())?;
+    parse_changed_files(&name_status, &patch)
+}
+
+// Untracked files are invisible to git diff, so they are listed separately and appended after the
+// tracked changes, where they cannot disturb the index the patch stats are zipped by.
+fn untracked_files(path: &str) -> Result<Vec<ChangedFile>, String> {
+    let output = git_output_bytes(path, &["ls-files", "--others", "--exclude-standard", "-z"])
+        .ok_or_else(|| "git ls-files failed.".to_string())?;
+    let root = worktree_path(path)?;
+    let mut files = Vec::new();
+    for field in output.split(|byte| *byte == 0).filter(|field| !field.is_empty()) {
+        let name = String::from_utf8(field.to_vec()).map_err(|error| error.to_string())?;
+        let contents = fs::read(Path::new(&root).join(&name)).unwrap_or_default();
+        let is_binary = contents.contains(&0);
+        let lines = if is_binary || contents.is_empty() {
+            0
+        } else {
+            let newlines = contents.iter().filter(|byte| **byte == b'\n').count() as u32;
+            newlines + u32::from(contents.last() != Some(&b'\n'))
+        };
+        files.push(ChangedFile {
+            status: "added".to_string(),
+            old_path: None,
+            new_path: Some(name),
+            additions: lines,
+            deletions: 0,
+            is_binary,
+            split_rows: lines,
+            unified_rows: lines,
+            hunk_rows: u32::from(lines > 0),
+        });
+    }
+    Ok(files)
+}
+
+fn worktree_changed_files(path: &str, base_sha: &str) -> Result<Vec<ChangedFile>, String> {
+    let revisions = [base_sha];
+    let name_status = git_output_bytes(path, &[&NAME_STATUS_ARGUMENTS[..], &revisions].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], &revisions].concat())?;
+    let mut files = parse_changed_files(&name_status, &patch)?;
+    files.extend(untracked_files(path)?);
     Ok(files)
 }
 
@@ -638,27 +714,119 @@ fn fetch_and_sync_repository(repo_path: &str, database_path: PathBuf) -> Result<
     sync_pull_requests(&mut connection, &host, &repository)
 }
 
-fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(String, String)> {
-    let Some(remote) = git_output(repo_path, &["remote", "get-url", "origin"]) else {
+fn patch_id(repo_path: &str, arguments: &[&str]) -> Option<String> {
+    let diff = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["patch-id", "--stable"])
+        .stdin(diff.stdout?)
+        .output()
+        .ok()?;
+    let value = String::from_utf8(output.stdout).ok()?;
+    value.split_whitespace().next().map(str::to_string)
+}
+
+struct SquashCandidate {
+    hash: String,
+    tree: String,
+    paths: Vec<String>,
+}
+
+// One record per commit, carrying the tree and the paths it touched, so neither the tree comparison
+// nor the path filter has to spawn a process per candidate.
+fn squash_candidates(repo_path: &str, range: &str) -> Vec<SquashCandidate> {
+    let Ok(output) = git_output_allow_empty(repo_path, &["log", "--no-merges", "--format=%x00%H %T", "--name-only", range]) else {
         return Vec::new();
     };
-    let Some((host, repository)) = github_repository(&remote) else {
-        return Vec::new();
-    };
+    output
+        .split('\0')
+        .filter_map(|record| {
+            let mut lines = record.lines().filter(|line| !line.is_empty());
+            let (hash, tree) = lines.next()?.split_once(' ')?;
+            let mut paths: Vec<_> = lines.map(str::to_string).collect();
+            paths.sort();
+            Some(SquashCandidate { hash: hash.to_string(), tree: tree.to_string(), paths })
+        })
+        .collect()
+}
+
+// A squash merge replaces a branch with a single commit holding the same net change, so the branch
+// never becomes an ancestor and the graph has no edge to draw without reconstructing one.
+fn squash_merge_target(repo_path: &str, tip: &str, primary: &str) -> Option<String> {
+    if git_succeeds(repo_path, &["merge-base", "--is-ancestor", tip, primary]) {
+        return None;
+    }
+    let base = git_output(repo_path, &["merge-base", tip, primary])?;
+    let range = format!("{base}..{primary}");
+    let tip_tree = git_output(repo_path, &["rev-parse", &format!("{tip}^{{tree}}")])?;
+    let candidates = squash_candidates(repo_path, &range);
+
+    // The squash landed straight onto the branch point, so it carries the branch tip's tree verbatim.
+    if let Some(candidate) = candidates.iter().find(|candidate| candidate.tree == tip_tree) {
+        return Some(candidate.hash.clone());
+    }
+
+    // Otherwise the primary branch moved on before the squash, so only the net change still matches.
+    let mut branch_paths: Vec<_> = git_output_allow_empty(repo_path, &["diff", "--name-only", &base, tip])
+        .ok()?
+        .lines()
+        .map(str::to_string)
+        .collect();
+    branch_paths.sort();
+    if branch_paths.is_empty() {
+        return None;
+    }
+    let branch_patch = patch_id(repo_path, &["diff", &base, tip])?;
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate.paths == branch_paths)
+        .find(|candidate| patch_id(repo_path, &["show", &candidate.hash]).as_deref() == Some(branch_patch.as_str()))
+        .map(|candidate| candidate.hash)
+}
+
+fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
     let Ok(primary) = primary_reference(repo_path) else {
         return Vec::new();
     };
-    let Some(refs) = git_output(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]) else {
+    let Ok(branches) = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads"]) else {
         return Vec::new();
     };
+    branches
+        .lines()
+        .filter(|tip| !tip.is_empty())
+        .filter_map(|tip| squash_merge_target(repo_path, tip, &primary).map(|target| (tip.to_string(), target)))
+        .collect()
+}
+
+fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(String, String)> {
+    let mut edges: HashSet<_> = local_squash_merges(repo_path).into_iter().collect();
+    // Pull requests still cover squashes whose conflict resolution changed the content on the way in.
+    let Some(remote) = git_output(repo_path, &["remote", "get-url", "origin"]) else {
+        return edges.into_iter().collect();
+    };
+    let Some((host, repository)) = github_repository(&remote) else {
+        return edges.into_iter().collect();
+    };
+    let Ok(primary) = primary_reference(repo_path) else {
+        return edges.into_iter().collect();
+    };
+    let Some(refs) = git_output(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]) else {
+        return edges.into_iter().collect();
+    };
     let Ok(mut connection) = pull_request_database(database_path) else {
-        return Vec::new();
+        return edges.into_iter().collect();
     };
     if should_sync_pull_requests(&connection, &host, &repository).unwrap_or(false) {
         let _ = sync_pull_requests(&mut connection, &host, &repository);
     }
     let ref_hashes: HashSet<_> = refs.lines().collect();
-    let mut edges = HashSet::new();
     let mut statement = match connection.prepare(
         "
         SELECT head_sha, merge_commit_sha
@@ -667,11 +835,11 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
         ",
     ) {
         Ok(statement) => statement,
-        Err(_) => return Vec::new(),
+        Err(_) => return edges.into_iter().collect(),
     };
     let pull_requests = match statement.query_map(params![host, repository], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
         Ok(pull_requests) => pull_requests,
-        Err(_) => return Vec::new(),
+        Err(_) => return edges.into_iter().collect(),
     };
     for pull_request in pull_requests.flatten() {
         let (source, target) = pull_request;
@@ -1101,6 +1269,25 @@ fn stream_commit_graph(
     }
 }
 
+// Only ever compared against the previous fingerprint from the same run, so a process-local hash is enough.
+fn fingerprint(values: &[&str]) -> String {
+    let mut hasher = DefaultHasher::new();
+    for value in values {
+        value.hash(&mut hasher);
+    }
+    hasher.finish().to_string()
+}
+
+// show-ref exits non-zero on a repository with no refs, and symbolic-ref does the same on a detached HEAD.
+#[tauri::command(async)]
+fn repository_fingerprint(repo_path: String) -> String {
+    let refs = git_output_allow_empty(&repo_path, &["--no-optional-locks", "show-ref", "--head"])
+        .unwrap_or_default();
+    let head = git_output_allow_empty(&repo_path, &["symbolic-ref", "--quiet", "HEAD"])
+        .unwrap_or_default();
+    fingerprint(&[&refs, &head])
+}
+
 #[tauri::command]
 async fn inferred_squash_merge_edges(app: AppHandle, repo_path: String) -> Vec<(String, String)> {
     let Ok(database_path) = pull_request_database_path(&app) else {
@@ -1183,9 +1370,56 @@ fn delete_branch(repo_path: String, branch: String) -> Result<(), String> {
     git_output_allow_empty(&repo_path, &["branch", "-D", "--", &branch]).map(|_| ())
 }
 
+fn parse_branch_sync(output: &str) -> Vec<BranchSync> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\0');
+            let branch = fields.next()?;
+            let upstream = fields.next().unwrap_or_default();
+            let track = fields.next().unwrap_or_default();
+            let mut sync = BranchSync {
+                branch: branch.to_string(),
+                upstream: (!upstream.is_empty()).then(|| upstream.to_string()),
+                ahead: 0,
+                behind: 0,
+                is_gone: track == "gone",
+            };
+            for part in track.split(", ") {
+                if let Some(count) = part.strip_prefix("ahead ") {
+                    sync.ahead = count.parse().unwrap_or_default();
+                } else if let Some(count) = part.strip_prefix("behind ") {
+                    sync.behind = count.parse().unwrap_or_default();
+                }
+            }
+            Some(sync)
+        })
+        .collect()
+}
+
+#[tauri::command(async)]
+fn branch_sync(repo_path: String) -> Result<Vec<BranchSync>, String> {
+    let output = git_output_allow_empty(
+        &repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)",
+            "refs/heads",
+        ],
+    )?;
+    Ok(parse_branch_sync(&output))
+}
+
 #[tauri::command(async)]
 fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
     let base_sha = resolve_commit(&repo_path, &base_ref)?;
+    if head_ref == WORKTREE_REF {
+        return Ok(Comparison {
+            files: worktree_changed_files(&repo_path, &base_sha)?,
+            base_sha,
+            head_sha: WORKTREE_REF.to_string(),
+        });
+    }
     let head_sha = resolve_commit(&repo_path, &head_ref)?;
     Ok(Comparison {
         files: changed_files(&repo_path, &base_sha, &head_sha)?,
@@ -1232,6 +1466,17 @@ fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSel
     })
 }
 
+// git diff cannot see an untracked file, so an empty patch means falling back to an empty left side.
+fn worktree_patch(repo_path: &str, base_sha: &str, path: &str) -> Result<String, String> {
+    let patch = git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], &[base_sha, "--", path]].concat())?;
+    if !patch.is_empty() {
+        return Ok(patch);
+    }
+    // --no-index reports a difference by exiting non-zero, so its status carries no error to report.
+    let output = git_result(repo_path, &[&PATCH_ARGUMENTS[..], &["--no-index", "--", "/dev/null", path]].concat())?;
+    String::from_utf8(output.stdout).map_err(|error| error.to_string())
+}
+
 #[tauri::command(async)]
 fn diff_file(
     repo_path: String,
@@ -1241,7 +1486,12 @@ fn diff_file(
     new_path: Option<String>,
 ) -> Result<FileDiff, String> {
     let path = new_path.as_ref().or(old_path.as_ref()).ok_or_else(|| "No file path was provided.".to_string())?;
-    let patch = git_output_allow_empty(&repo_path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3", &base_sha, &head_sha, "--", path])?;
+    let is_worktree = head_sha == WORKTREE_REF;
+    let patch = if is_worktree {
+        worktree_patch(&repo_path, &base_sha, path)?
+    } else {
+        git_output_allow_empty(&repo_path, &[&PATCH_ARGUMENTS[..], &[base_sha.as_str(), head_sha.as_str(), "--", path]].concat())?
+    };
     // Content lines in a patch always carry a leading marker, so an unprefixed header is git's own.
     if patch.lines().any(|line| line.starts_with("Binary files ") || line == "GIT binary patch") {
         return Ok(FileDiff {
@@ -1255,7 +1505,12 @@ fn diff_file(
     }
 
     let old_content = old_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{base_sha}:{path}")])).transpose()?;
-    let new_content = new_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{head_sha}:{path}")])).transpose()?;
+    let new_content = if is_worktree {
+        let root = worktree_path(&repo_path)?;
+        new_path.as_ref().map(|path| fs::read_to_string(Path::new(&root).join(path)).map_err(|error| error.to_string())).transpose()?
+    } else {
+        new_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{head_sha}:{path}")])).transpose()?
+    };
 
     Ok(FileDiff {
         old_file_name: old_path,
@@ -1404,6 +1659,51 @@ fn pending_operation(worktree: &str) -> Option<PendingOperation> {
 fn worktree_is_dirty(worktree: &str) -> Result<bool, String> {
     let output = git_output_allow_empty(worktree, &["status", "--porcelain", "--untracked-files=no"])?;
     Ok(!output.trim().is_empty())
+}
+
+// The rebase safety check ignores untracked files, but a new file is still local work worth reporting.
+fn parse_status_counts(output: &str) -> (u32, u32) {
+    let mut changed = 0;
+    let mut untracked = 0;
+    for line in output.lines() {
+        match line.split(' ').next() {
+            Some("1" | "2" | "u") => changed += 1,
+            Some("?") => untracked += 1,
+            _ => {}
+        }
+    }
+    (changed, untracked)
+}
+
+#[tauri::command(async)]
+fn worktree_status(repo_path: String) -> Result<Vec<WorktreeStatus>, String> {
+    let output = git_output_allow_empty(&repo_path, &["worktree", "list", "--porcelain", "-z"])?;
+    Ok(parse_worktree_records(&output)
+        .into_iter()
+        .filter(|worktree| !worktree.is_prunable)
+        .filter_map(|worktree| {
+            let status = git_output_allow_empty(
+                &worktree.path,
+                &[
+                    "--no-optional-locks",
+                    "status",
+                    "--porcelain=v2",
+                    "--untracked-files=normal",
+                ],
+            )
+            .ok()?;
+            let (changed_files, untracked_files) = parse_status_counts(&status);
+            Some(WorktreeStatus {
+                branch: worktree.branch,
+                head: worktree.head,
+                is_detached: worktree.is_detached,
+                changed_files,
+                untracked_files,
+                pending_operation: pending_operation(&worktree.path),
+                path: worktree.path,
+            })
+        })
+        .collect())
 }
 
 fn same_path(left: &str, right: &str) -> bool {
@@ -1643,6 +1943,41 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_upstream_state_of_each_branch() {
+        let branches = parse_branch_sync(concat!(
+            "ahead\0origin/ahead\0ahead 1, behind 2\n",
+            "gone\0origin/gone\0gone\n",
+            "synced\0origin/synced\0\n",
+            "local\0\0",
+        ));
+
+        assert_eq!(branches.len(), 4);
+        assert_eq!(branches[0].upstream.as_deref(), Some("origin/ahead"));
+        assert_eq!((branches[0].ahead, branches[0].behind), (1, 2));
+        assert!(!branches[0].is_gone);
+        assert!(branches[1].is_gone);
+        assert_eq!((branches[2].ahead, branches[2].behind), (0, 0));
+        assert!(!branches[2].is_gone);
+        assert_eq!(branches[3].upstream, None);
+        assert!(!branches[3].is_gone);
+    }
+
+    #[test]
+    fn counts_tracked_and_untracked_changes_separately() {
+        let (changed, untracked) = parse_status_counts(concat!(
+            "# branch.oid 0000\n",
+            "1 MM N... 100644 100644 100644 aaa bbb changed.txt\n",
+            "2 R. N... 100644 100644 100644 ccc ddd R100 new.txt\told.txt\n",
+            "u UU N... 100644 100644 100644 100644 eee fff ggg conflicted.txt\n",
+            "? untracked.txt\n",
+            "? directory/\n",
+            "! ignored.txt\n",
+        ));
+
+        assert_eq!((changed, untracked), (3, 2));
+    }
+
+    #[test]
     fn counts_the_rows_each_file_of_a_patch_renders() {
         let stats = parse_patch_stats(concat!(
             "diff --git a/src/main.rs b/src/main.rs\n",
@@ -1874,6 +2209,216 @@ mod tests {
     }
 
     #[test]
+    fn changes_the_fingerprint_only_when_a_ref_moves() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-fingerprint-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("tracked.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+
+        let initial = repository_fingerprint(path.clone());
+        let repeated = repository_fingerprint(path.clone());
+        write("tracked.txt", "changed\n");
+        let edited = repository_fingerprint(path.clone());
+        run(&["commit", "--quiet", "--all", "--message", "change"]);
+        let committed = repository_fingerprint(path.clone());
+        run(&["branch", "feature"]);
+        let branched = repository_fingerprint(path.clone());
+        run(&["checkout", "--quiet", "feature"]);
+        let checked_out = repository_fingerprint(path.clone());
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(initial, repeated);
+        assert_eq!(initial, edited);
+        assert_ne!(initial, committed);
+        assert_ne!(committed, branched);
+        // The branch points at the commit HEAD already sat on, so only the symbolic ref moved.
+        assert_ne!(branched, checked_out);
+    }
+
+    #[test]
+    fn finds_the_commit_a_branch_was_squashed_into() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-squash-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        let sha = |reference: &str| git_output(&path, &["rev-parse", reference]).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("shared.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+
+        // Squashed straight onto the branch point, so the trees match.
+        run(&["checkout", "--quiet", "-b", "onto-tip"]);
+        write("onto-tip.txt", "one\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "first"]);
+        write("onto-tip.txt", "one\ntwo\n");
+        run(&["commit", "--quiet", "--all", "--message", "second"]);
+        let onto_tip = sha("HEAD");
+        run(&["checkout", "--quiet", "main"]);
+        run(&["merge", "--quiet", "--squash", "onto-tip"]);
+        run(&["commit", "--quiet", "--message", "Merge branch 'onto-tip'"]);
+        let onto_tip_target = sha("HEAD");
+
+        // Squashed after main moved on, so only the net change still matches.
+        run(&["checkout", "--quiet", "-b", "after-drift", &onto_tip_target]);
+        write("after-drift.txt", "alpha\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "drifting work"]);
+        let after_drift = sha("HEAD");
+        run(&["checkout", "--quiet", "main"]);
+        write("unrelated.txt", "meanwhile\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "unrelated work on main"]);
+        run(&["merge", "--quiet", "--squash", "after-drift"]);
+        run(&["commit", "--quiet", "--message", "Merge branch 'after-drift'"]);
+        let after_drift_target = sha("HEAD");
+
+        // Genuinely unmerged, and must not be paired with anything.
+        run(&["checkout", "--quiet", "-b", "still-open", "main"]);
+        write("still-open.txt", "wip\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "work in progress"]);
+        let still_open = sha("HEAD");
+        run(&["checkout", "--quiet", "main"]);
+
+        let primary = primary_reference(&path).unwrap();
+        let edges: HashMap<_, _> = local_squash_merges(&path).into_iter().collect();
+        let open_target = squash_merge_target(&path, &still_open, &primary);
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(edges.get(&onto_tip), Some(&onto_tip_target), "tree match failed");
+        assert_eq!(edges.get(&after_drift), Some(&after_drift_target), "patch id fallback failed");
+        assert_eq!(open_target, None);
+        assert!(!edges.contains_key(&still_open));
+    }
+
+    #[test]
+    fn diffs_the_working_tree_including_untracked_files() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-worktree-diff-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("kept.txt", "one\ntwo\nthree\n");
+        write("removed.txt", "gone\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        write("kept.txt", "one\nchanged\nthree\n");
+        fs::remove_file(Path::new(&path).join("removed.txt")).unwrap();
+        write("untracked.txt", "fresh\n\nlines\n");
+        fs::write(Path::new(&path).join(".gitignore"), "ignored.txt\n").unwrap();
+        write("ignored.txt", "invisible\n");
+
+        let comparison = compare_refs(path.clone(), "HEAD".to_string(), WORKTREE_REF.to_string()).unwrap();
+        let untracked = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), None, Some("untracked.txt".to_string()));
+        let modified = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), Some("kept.txt".to_string()), Some("kept.txt".to_string()));
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(comparison.head_sha, WORKTREE_REF);
+        let names: Vec<_> = comparison.files.iter().map(|file| (file.status.as_str(), file.new_path.as_deref(), file.old_path.as_deref())).collect();
+        assert!(names.contains(&("modified", Some("kept.txt"), Some("kept.txt"))), "{names:?}");
+        assert!(names.contains(&("deleted", None, Some("removed.txt"))), "{names:?}");
+        // .gitignore is untracked too, but the ignored file it names must not be listed.
+        assert!(names.contains(&("added", Some("untracked.txt"), None)), "{names:?}");
+        assert!(!names.iter().any(|(_, new, _)| *new == Some("ignored.txt")), "{names:?}");
+
+        let untracked_stat = comparison.files.iter().find(|file| file.new_path.as_deref() == Some("untracked.txt")).unwrap();
+        assert_eq!((untracked_stat.additions, untracked_stat.deletions), (3, 0));
+
+        let untracked = untracked.unwrap();
+        assert!(untracked.hunks[0].contains("+fresh"), "{:?}", untracked.hunks);
+        assert_eq!(untracked.new_content.as_deref(), Some("fresh\n\nlines\n"));
+        assert_eq!(untracked.old_content, None);
+
+        let modified = modified.unwrap();
+        assert!(modified.hunks[0].contains("+one\nchanged") || modified.hunks[0].contains("+changed"), "{:?}", modified.hunks);
+        assert_eq!(modified.new_content.as_deref(), Some("one\nchanged\nthree\n"));
+        assert_eq!(modified.old_content.as_deref(), Some("one\ntwo\nthree\n"));
+    }
+
+    #[test]
+    fn counts_uncommitted_changes_in_every_worktree() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-worktree-status-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let linked = format!("{path}-linked");
+        let _ = fs::remove_dir_all(&path);
+        let _ = fs::remove_dir_all(&linked);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |directory: &str, name: &str, contents: &str| {
+            fs::write(Path::new(directory).join(name), contents).unwrap()
+        };
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write(&path, "tracked.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["worktree", "add", "--quiet", "-b", "feature", &linked]);
+        write(&path, "tracked.txt", "changed\n");
+        write(&path, "untracked.txt", "new\n");
+        write(&linked, "tracked.txt", "changed in the linked worktree\n");
+
+        let statuses = worktree_status(path.clone()).unwrap();
+        let clean = {
+            write(&path, "tracked.txt", "base\n");
+            fs::remove_file(Path::new(&path).join("untracked.txt")).unwrap();
+            write(&linked, "tracked.txt", "base\n");
+            worktree_status(path.clone()).unwrap()
+        };
+        let _ = fs::remove_dir_all(&linked);
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(statuses.len(), 2);
+        let main = statuses.iter().find(|status| status.branch == "main").unwrap();
+        assert_eq!((main.changed_files, main.untracked_files), (1, 1));
+        let feature = statuses.iter().find(|status| status.branch == "feature").unwrap();
+        assert_eq!((feature.changed_files, feature.untracked_files), (1, 0));
+        assert!(clean.iter().all(|status| status.changed_files == 0 && status.untracked_files == 0));
+    }
+
+    #[test]
     fn predicts_the_first_conflicting_commit_of_a_rebase() {
         let path = env::temp_dir()
             .join(format!("git-nav-prediction-{}", std::process::id()))
@@ -2026,6 +2571,9 @@ pub fn run() {
             open_worktree,
             project_snapshot,
             stream_commit_graph,
+            repository_fingerprint,
+            branch_sync,
+            worktree_status,
             inferred_squash_merge_edges,
             fetch_and_sync_pull_requests,
             squashed_branch_candidates,

@@ -10,17 +10,21 @@ import {
   GRAPH_MIN_WIDTH,
   graphCanvasHeight,
   isCurrentCheckout,
+  refSyncLabel,
   relativeDate,
   splitRefLabel,
+  syncDescription,
+  unpushedHashes,
+  type BranchSync,
 } from "./commit-graph"
 
-function commit(hash: string, parents: string[] = []) {
+function commit(hash: string, parents: string[] = [], refs: string[] = []) {
   return {
     hash,
     parents,
     author: "Ada",
     date: "2026-01-01T00:00:00Z",
-    refs: [],
+    refs,
     subject: hash,
     lane: 0,
     parentLanes: [],
@@ -165,7 +169,9 @@ describe("displayRefs", () => {
         branch: "main",
         label: "main · origin",
         checkedOut: false,
+        remote: false,
         tag: false,
+        sync: null,
         worktrees: [],
       },
     ])
@@ -192,7 +198,9 @@ describe("displayRefs", () => {
         branch: "feature",
         label: "feature",
         checkedOut: true,
+        remote: false,
         tag: false,
+        sync: null,
         worktrees: [],
       },
     ])
@@ -204,7 +212,9 @@ describe("displayRefs", () => {
         branch: null,
         label: "origin/main",
         checkedOut: true,
+        remote: true,
         tag: false,
+        sync: null,
         worktrees: [],
       },
     ])
@@ -216,14 +226,18 @@ describe("displayRefs", () => {
         branch: "main",
         label: "main",
         checkedOut: false,
+        remote: false,
         tag: false,
+        sync: null,
         worktrees: [],
       },
       {
         branch: null,
         label: "v1.0.0",
         checkedOut: false,
+        remote: false,
         tag: true,
+        sync: null,
         worktrees: [],
       },
     ])
@@ -299,5 +313,99 @@ describe("graphCanvasHeight", () => {
 
   test("stays at zero for a viewport shorter than the header", () => {
     expect(graphCanvasHeight(0)).toBe(0)
+  })
+})
+
+describe("unpushedHashes", () => {
+  test("marks commits above the remote ref", () => {
+    const commits = [
+      commit("a", ["b"]),
+      commit("b", ["c"], ["main"]),
+      commit("c", ["d"], ["origin/main"]),
+      commit("d"),
+    ]
+
+    expect([...unpushedHashes(commits)]).toEqual(["a", "b"])
+  })
+
+  test("treats a branch without a remote ref as entirely unpushed", () => {
+    expect([...unpushedHashes(linear)]).toEqual(["a", "b", "c", "d"])
+  })
+
+  test("carries the remote through a merge to both parents", () => {
+    const commits = [
+      commit("merge", ["a", "x"], ["origin/main"]),
+      commit("a", ["base"]),
+      commit("x", ["base"]),
+      commit("base"),
+    ]
+
+    expect([...unpushedHashes(commits)]).toEqual([])
+  })
+
+  test("keeps a side branch unpushed when only the trunk is on the remote", () => {
+    const commits = [
+      commit("side", ["base"]),
+      commit("trunk", ["base"], ["origin/main"]),
+      commit("base"),
+    ]
+
+    expect([...unpushedHashes(commits)]).toEqual(["side"])
+  })
+
+  test("ignores tags and local branches that shadow a remote name", () => {
+    const commits = [
+      commit("a", ["b"], ["tag: v1"]),
+      commit("b", [], ["HEAD -> origin/main"]),
+    ]
+
+    expect([...unpushedHashes(commits)]).toEqual(["a"])
+  })
+})
+
+describe("branch sync", () => {
+  const sync = (overrides: Partial<BranchSync> = {}): BranchSync => ({
+    branch: "feature",
+    upstream: "origin/feature",
+    ahead: 0,
+    behind: 0,
+    isGone: false,
+    ...overrides,
+  })
+  const ref = (value: BranchSync | null) =>
+    displayRefs(["feature"], [], value ? new Map([[value.branch, value]]) : undefined)[0]
+
+  test("attaches sync state to local branches only", () => {
+    const refs = displayRefs(["main", "origin/staging", "tag: v1"], [], new Map([["main", sync({ branch: "main" })]]))
+    expect(refs.map((entry) => entry.sync?.branch ?? null)).toEqual(["main", null, null])
+  })
+
+  test("marks standalone remote refs", () => {
+    const refs = displayRefs(["main", "origin/staging", "tag: v1"])
+    expect(refs.map((entry) => entry.remote)).toEqual([false, true, false])
+  })
+
+  test("shows nothing extra when a branch matches its upstream", () => {
+    expect(refSyncLabel(ref(sync()))).toBe(null)
+    expect(syncDescription(ref(sync()))).toBe("In sync with origin/feature")
+  })
+
+  test("counts commits in each direction", () => {
+    expect(refSyncLabel(ref(sync({ ahead: 3 })))).toBe("↑3")
+    expect(refSyncLabel(ref(sync({ behind: 2 })))).toBe("↓2")
+    expect(refSyncLabel(ref(sync({ ahead: 3, behind: 2 })))).toBe("↑3 ↓2")
+    expect(syncDescription(ref(sync({ ahead: 3, behind: 2 })))).toBe("origin/feature: 3 ahead, 2 behind")
+  })
+
+  test("separates a branch that was never pushed from one whose upstream is gone", () => {
+    expect(refSyncLabel(ref(sync({ upstream: null })))).toBe("local")
+    expect(syncDescription(ref(sync({ upstream: null })))).toBe("Not pushed to a remote")
+    expect(refSyncLabel(ref(sync({ isGone: true })))).toBe("gone")
+    expect(syncDescription(ref(sync({ isGone: true })))).toBe("origin/feature is gone from the remote")
+  })
+
+  test("reports no state without sync data", () => {
+    expect(refSyncLabel(ref(null))).toBe(null)
+    expect(syncDescription(ref(null))).toBe(null)
   })
 })

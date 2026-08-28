@@ -10,7 +10,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@workspace
 import { useTheme } from "@/components/theme-provider"
 import { drawCommitGraph } from "../commit-graph/commit-graph-canvas"
 import { commitFromTuple, displayRefs, GRAPH_COLORS, ROW_HEIGHT, type Commit, type CommitBatch } from "../commit-graph/commit-graph"
-import type { DiffPanelParams } from "../repository/repository-window"
+import { WORKTREE_REF, type DiffPanelParams } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
 const LARGE_DIFF_LINES = 1200
@@ -75,6 +75,10 @@ type FileTreeNode = {
   path: string
   file: ChangedFile | null
   children: FileTreeNode[]
+}
+
+function refLabel(reference: string) {
+  return reference === WORKTREE_REF ? "Working tree" : reference
 }
 
 function fileName(file: ChangedFile) {
@@ -222,7 +226,7 @@ function ReferencePicker({ label, onCommit, onBranch, path }: { label: string; o
 
   useEffect(() => {
     if (canvas.current && scroll.height > 0) {
-      drawCommitGraph(canvas.current, commits, virtualRows, scroll.top, scroll.height, [])
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top, height: scroll.height, squashMergeEdges: [] })
     }
   }, [commits, scroll, virtualRows])
 
@@ -372,8 +376,8 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
   const [refs, setRefs] = useState<SelectedRefs>({
     base: params.baseRef,
     head: params.headRef,
-    baseLabel: params.baseRef,
-    headLabel: params.headRef,
+    baseLabel: refLabel(params.baseRef),
+    headLabel: refLabel(params.headRef),
   })
   const [comparison, setComparison] = useState<Comparison | null>(null)
   const [error, setError] = useState<string | null>(null)

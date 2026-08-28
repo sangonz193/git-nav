@@ -27,6 +27,9 @@ export type DiffPanelParams = RepositoryPanelParams & {
   headRef: string
 }
 
+// Matches the sentinel the diff commands accept in place of a commit; not a legal ref name.
+export const WORKTREE_REF = ":worktree"
+
 const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
 
 function addGraphPanel(containerApi: IWatermarkPanelProps["containerApi"] | IDockviewHeaderActionsProps["containerApi"], params: RepositoryPanelParams, referencePanel?: IDockviewHeaderActionsProps["activePanel"]) {
