@@ -12,10 +12,23 @@ import { drawCommitGraph } from "../commit-graph/commit-graph-canvas"
 import { commitFromTuple, displayRefs, GRAPH_COLORS, ROW_HEIGHT, type Commit, type CommitBatch } from "../commit-graph/commit-graph"
 import type { DiffPanelParams } from "../repository/repository-window"
 
+const MAX_CONCURRENT_DIFF_LOADS = 4
+const LARGE_DIFF_LINES = 1200
+const DIFF_ROW_HEIGHT = 22.4
+const HUNK_ROW_HEIGHT = 29
+const FILE_HEADER_HEIGHT = 34
+const COLLAPSED_BODY_HEIGHT = 44
+
 type ChangedFile = {
   status: string
   oldPath: string | null
   newPath: string | null
+  additions: number
+  deletions: number
+  isBinary: boolean
+  splitRows: number
+  unifiedRows: number
+  hunkRows: number
 }
 
 type Comparison = {
@@ -40,9 +53,15 @@ type FileDiff = {
   isBinary: boolean
 }
 
-type LoadedFileDiff = FileDiff & {
-  key: string
+type DiffData = {
+  oldFile: { fileName: string | null; content: string | null }
+  newFile: { fileName: string | null; content: string | null }
+  hunks: string[]
 }
+
+type DiffEntry =
+  | { state: "loaded"; data: DiffData }
+  | { state: "error"; message: string }
 
 type SelectedRefs = {
   base: string
@@ -64,6 +83,18 @@ function fileName(file: ChangedFile) {
 
 function fileKey(file: ChangedFile) {
   return `${file.status}:${file.oldPath}:${file.newPath}`
+}
+
+function isLargeDiff(file: ChangedFile) {
+  return file.additions + file.deletions > LARGE_DIFF_LINES
+}
+
+function estimatedBodyHeight(file: ChangedFile, mode: DiffModeEnum) {
+  if (file.isBinary || isLargeDiff(file)) {
+    return COLLAPSED_BODY_HEIGHT
+  }
+  const rows = mode & DiffModeEnum.Split ? file.splitRows : file.unifiedRows
+  return Math.round(rows * DIFF_ROW_HEIGHT + file.hunkRows * HUNK_ROW_HEIGHT)
 }
 
 function fileTree(files: ChangedFile[]) {
@@ -92,17 +123,28 @@ function fileTree(files: ChangedFile[]) {
   return root.children
 }
 
-function FileTree({ files, onSelect, selectedFile }: { files: FileTreeNode[]; onSelect: (file: ChangedFile) => void; selectedFile: ChangedFile | null }) {
-  return files.map((node) => <FileTreeNode key={node.path} level={0} node={node} onSelect={onSelect} selectedFile={selectedFile} />)
+function flattenTree(nodes: FileTreeNode[], files: ChangedFile[] = []) {
+  for (const node of nodes) {
+    if (node.file) {
+      files.push(node.file)
+    }
+    flattenTree(node.children, files)
+  }
+  return files
 }
 
-function FileTreeNode({ level, node, onSelect, selectedFile }: { level: number; node: FileTreeNode; onSelect: (file: ChangedFile) => void; selectedFile: ChangedFile | null }) {
+function FileTree({ files, onSelect, activeKey }: { files: FileTreeNode[]; onSelect: (file: ChangedFile) => void; activeKey: string | null }) {
+  return files.map((node) => <FileTreeNode activeKey={activeKey} key={node.path} level={0} node={node} onSelect={onSelect} />)
+}
+
+function FileTreeNode({ level, node, onSelect, activeKey }: { level: number; node: FileTreeNode; onSelect: (file: ChangedFile) => void; activeKey: string | null }) {
   const [open, setOpen] = useState(true)
   const paddingLeft = 8 + level * 16
 
   if (node.file) {
+    const key = fileKey(node.file)
     return (
-      <button className={`diff-file${selectedFile === node.file ? " is-selected" : ""}`} key={fileKey(node.file)} onClick={() => onSelect(node.file!)} style={{ paddingLeft }} type="button">
+      <button className={`diff-file${key === activeKey ? " is-selected" : ""}`} key={key} onClick={() => onSelect(node.file!)} style={{ paddingLeft }} type="button">
         <span className="diff-file-status">{node.file.status.slice(0, 1).toUpperCase()}</span>
         <span className="truncate">{node.name}</span>
       </button>
@@ -117,7 +159,7 @@ function FileTreeNode({ level, node, onSelect, selectedFile }: { level: number; 
         <span className="truncate">{node.name}</span>
       </button>
       {open && <div className="diff-folder-children">
-        {node.children.map((child) => <FileTreeNode key={child.path} level={level + 1} node={child} onSelect={onSelect} selectedFile={selectedFile} />)}
+        {node.children.map((child) => <FileTreeNode activeKey={activeKey} key={child.path} level={level + 1} node={child} onSelect={onSelect} />)}
       </div>}
     </div>
   )
@@ -235,6 +277,96 @@ function ReferencePicker({ label, onCommit, onBranch, path }: { label: string; o
   )
 }
 
+function useDiffLoader(repoPath: string, comparison: Comparison | null) {
+  const [entries, setEntries] = useState<Record<string, DiffEntry>>({})
+  const loader = useRef({ queued: [] as ChangedFile[], started: new Set<string>(), inFlight: 0 })
+
+  const reset = useCallback(() => {
+    loader.current = { queued: [], started: new Set(), inFlight: 0 }
+    setEntries({})
+  }, [])
+
+  // A request replaces the queue, so files scrolled past before a worker picked them up free their slot.
+  const request = useCallback((files: ChangedFile[]) => {
+    if (!comparison) {
+      return
+    }
+    const state = loader.current
+    state.queued = files.filter((file) => !state.started.has(fileKey(file)))
+    const drain = async () => {
+      for (let file = state.queued.shift(); file; file = state.queued.shift()) {
+        const key = fileKey(file)
+        state.started.add(key)
+        const entry = await invoke<FileDiff>("diff_file", {
+          repoPath,
+          baseSha: comparison.baseSha,
+          headSha: comparison.headSha,
+          oldPath: file.oldPath,
+          newPath: file.newPath,
+        })
+          .then((diff): DiffEntry => ({
+            state: "loaded",
+            data: {
+              oldFile: { fileName: diff.oldFileName, content: diff.oldContent },
+              newFile: { fileName: diff.newFileName, content: diff.newContent },
+              hunks: diff.hunks,
+            },
+          }))
+          .catch((message: unknown): DiffEntry => ({ state: "error", message: String(message) }))
+        if (loader.current !== state) {
+          return
+        }
+        setEntries((current) => ({ ...current, [key]: entry }))
+      }
+    }
+    while (state.inFlight < MAX_CONCURRENT_DIFF_LOADS && state.queued.length > 0) {
+      state.inFlight += 1
+      void drain().finally(() => {
+        state.inFlight -= 1
+      })
+    }
+  }, [comparison, repoPath])
+
+  return { entries, request, reset }
+}
+
+function FileDiffCard({ entry, expanded, file, mode, onExpand, theme, wrap }: { entry: DiffEntry | undefined; expanded: boolean; file: ChangedFile; mode: DiffModeEnum; onExpand: () => void; theme: "light" | "dark"; wrap: boolean }) {
+  const body = () => {
+    if (file.isBinary) {
+      return <p className="diff-file-card-notice">Binary file changed</p>
+    }
+    if (entry?.state === "error") {
+      return <p className="diff-file-card-notice text-destructive">{entry.message}</p>
+    }
+    if (entry?.state === "loaded") {
+      return <DiffView data={entry.data} diffViewHighlight diffViewMode={mode} diffViewTheme={theme} diffViewWrap={wrap} />
+    }
+    if (isLargeDiff(file) && !expanded) {
+      return (
+        <p className="diff-file-card-notice">
+          Large diff with {(file.additions + file.deletions).toLocaleString()} changed lines
+          <Button onClick={onExpand} size="sm" type="button" variant="outline">Show diff</Button>
+        </p>
+      )
+    }
+    return <div style={{ height: estimatedBodyHeight(file, mode) }} />
+  }
+
+  return (
+    <article className="diff-file-card">
+      <header className="diff-file-card-header">
+        <span className="diff-file-status">{file.status.slice(0, 1).toUpperCase()}</span>
+        <span className="diff-file-card-path truncate">{fileName(file)}</span>
+        {!file.isBinary && <span className="diff-file-card-stat">
+          <span className="text-emerald-400">+{file.additions}</span>
+          <span className="text-rose-400">−{file.deletions}</span>
+        </span>}
+      </header>
+      {body()}
+    </article>
+  )
+}
+
 export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
   const { theme } = useTheme()
   const [refs, setRefs] = useState<SelectedRefs>({
@@ -244,20 +376,34 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
     headLabel: params.headRef,
   })
   const [comparison, setComparison] = useState<Comparison | null>(null)
-  const [selectedFile, setSelectedFile] = useState<ChangedFile | null>(null)
-  const [diff, setDiff] = useState<LoadedFileDiff | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState(DiffModeEnum.Split)
   const [wrap, setWrap] = useState(false)
-  const files = useMemo(() => fileTree(comparison?.files ?? []), [comparison])
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+  const scrollElement = useRef<HTMLDivElement>(null)
+  const pendingScroll = useRef<string | null>(null)
+  const { entries, request, reset } = useDiffLoader(params.path, comparison)
+  const tree = useMemo(() => fileTree(comparison?.files ?? []), [comparison])
+  const files = useMemo(() => flattenTree(tree), [tree])
+  const diffTheme = theme === "light" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark"
+
+  const rowVirtualizer = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => scrollElement.current,
+    estimateSize: (index) => FILE_HEADER_HEIGHT + estimatedBodyHeight(files[index], mode),
+    getItemKey: (index) => fileKey(files[index]),
+    overscan: 2,
+  })
+  const virtualRows = rowVirtualizer.getVirtualItems()
 
   useEffect(() => {
     let cancelled = false
     invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head })
       .then((nextComparison) => {
         if (!cancelled) {
+          reset()
+          setExpanded(new Set())
           setComparison(nextComparison)
-          setSelectedFile(nextComparison.files[0] ?? null)
           setError(null)
         }
       })
@@ -269,38 +415,40 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
     return () => {
       cancelled = true
     }
-  }, [params.path, refs])
+  }, [params.path, refs, reset])
+
+  // Measured heights belong to the previous comparison or layout, so drop them and start over.
+  useEffect(() => {
+    rowVirtualizer.measure()
+    rowVirtualizer.scrollToOffset(0)
+  }, [comparison, rowVirtualizer])
 
   useEffect(() => {
-    if (!comparison || !selectedFile) {
-      return
-    }
-    let cancelled = false
-    const selectedKey = fileKey(selectedFile)
-    invoke<FileDiff>("diff_file", {
-      repoPath: params.path,
-      baseSha: comparison.baseSha,
-      headSha: comparison.headSha,
-      oldPath: selectedFile.oldPath,
-      newPath: selectedFile.newPath,
-    })
-      .then((nextDiff) => {
-        if (!cancelled) {
-          setDiff({ ...nextDiff, key: selectedKey })
-          setError(null)
-        }
-      })
-      .catch((message: unknown) => {
-        if (!cancelled) {
-          setError(String(message))
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [comparison, params.path, selectedFile])
+    rowVirtualizer.measure()
+  }, [mode, rowVirtualizer, wrap])
 
-  const selectedDiff = diff?.key === (selectedFile ? fileKey(selectedFile) : null) ? diff : null
+  useEffect(() => {
+    request(virtualRows.map((row) => files[row.index]).filter((file) => !file.isBinary && (!isLargeDiff(file) || expanded.has(fileKey(file)))))
+  }, [expanded, files, request, virtualRows])
+
+  const scrollOffset = rowVirtualizer.scrollOffset ?? 0
+  const activeIndex = virtualRows.find((row) => row.end > scrollOffset + 1)?.index
+  const activeKey = activeIndex === undefined ? null : fileKey(files[activeIndex])
+  const scrollToFile = useCallback((file: ChangedFile) => {
+    pendingScroll.current = fileKey(file)
+    rowVirtualizer.scrollToIndex(files.indexOf(file), { align: "start" })
+  }, [files, rowVirtualizer])
+
+  // The first scroll aims at estimated heights, so aim again once the target has rendered its real diff.
+  useEffect(() => {
+    const key = pendingScroll.current
+    if (key && entries[key]) {
+      pendingScroll.current = null
+      rowVirtualizer.scrollToIndex(files.findIndex((file) => fileKey(file) === key), { align: "start" })
+    }
+  }, [entries, files, rowVirtualizer])
+  const fileList = useMemo(() => <FileTree activeKey={activeKey} files={tree} onSelect={scrollToFile} />, [activeKey, scrollToFile, tree])
+
   const selectCommit = (side: "base" | "head", commit: Commit) => {
     setRefs((current) => side === "base"
       ? { ...current, base: commit.hash, baseLabel: commit.hash.slice(0, 8) }
@@ -335,29 +483,33 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
       <ResizablePanelGroup className="diff-content" orientation="horizontal">
         <ResizablePanel defaultSize="22%" maxSize="40%" minSize="15%">
           <nav aria-label="Changed files" className="diff-file-list">
-            <FileTree files={files} onSelect={setSelectedFile} selectedFile={selectedFile} />
+            {fileList}
             {comparison?.files.length === 0 && <p className="diff-empty">No changed files</p>}
           </nav>
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel minSize="40%">
-          <div className="diff-view-container">
+          <div className="diff-view-container" ref={scrollElement}>
             {error && <p className="diff-empty text-destructive">{error}</p>}
-            {selectedDiff?.isBinary && <p className="diff-empty">Binary file changed</p>}
-            {selectedDiff && !selectedDiff.isBinary && <DiffView
-              data={{
-                oldFile: { fileName: selectedDiff.oldFileName, content: selectedDiff.oldContent },
-                newFile: { fileName: selectedDiff.newFileName, content: selectedDiff.newContent },
-                hunks: selectedDiff.hunks,
-              }}
-              diffViewHighlight
-              diffViewMode={mode}
-              diffViewTheme={theme === "light" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark"}
-              diffViewWrap={wrap}
-            />}
             {!comparison && !error && <p className="diff-empty">Loading comparison…</p>}
-            {comparison && !selectedFile && comparison.files.length > 0 && <p className="diff-empty">Select a file</p>}
-            {selectedFile && !selectedDiff && !error && <p className="diff-empty">Loading file…</p>}
+            <div className="diff-file-space" style={{ height: rowVirtualizer.getTotalSize() }}>
+              {virtualRows.map((row) => {
+                const file = files[row.index]
+                return (
+                  <div className="diff-file-row" data-index={row.index} key={row.key} ref={rowVirtualizer.measureElement} style={{ top: row.start }}>
+                    <FileDiffCard
+                      entry={entries[fileKey(file)]}
+                      expanded={expanded.has(fileKey(file))}
+                      file={file}
+                      mode={mode}
+                      onExpand={() => setExpanded((current) => new Set(current).add(fileKey(file)))}
+                      theme={diffTheme}
+                      wrap={wrap}
+                    />
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>

@@ -606,8 +606,58 @@ body {
 }
 
 .diff-view-container {
+  height: 100%;
   min-width: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.diff-file-space {
+  position: relative;
+  width: 100%;
+}
+
+.diff-file-row {
+  left: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.diff-file-card {
+  border-bottom: 1px solid rgb(255 255 255 / 8%);
+}
+
+.diff-file-card-header {
+  align-items: center;
+  background: #131316;
+  border-bottom: 1px solid rgb(255 255 255 / 8%);
+  display: flex;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.diff-file-card-path {
+  min-width: 0;
+}
+
+.diff-file-card-stat {
+  display: flex;
+  font-variant-numeric: tabular-nums;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.diff-file-card-notice {
+  align-items: center;
+  color: #a1a1aa;
+  display: flex;
+  gap: 12px;
+  height: 44px;
+  padding: 0 12px;
 }
 
 .diff-empty {

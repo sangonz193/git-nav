@@ -48,6 +48,22 @@ struct ChangedFile {
     status: String,
     old_path: Option<String>,
     new_path: Option<String>,
+    additions: u32,
+    deletions: u32,
+    is_binary: bool,
+    split_rows: u32,
+    unified_rows: u32,
+    hunk_rows: u32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct FileStat {
+    additions: u32,
+    deletions: u32,
+    is_binary: bool,
+    split_rows: u32,
+    unified_rows: u32,
+    hunk_rows: u32,
 }
 
 #[derive(Serialize)]
@@ -296,9 +312,74 @@ fn resolve_commit(path: &str, reference: &str) -> Result<String, String> {
         .and_then(|value| (!value.is_empty()).then_some(value).ok_or_else(|| format!("Could not resolve {reference}.")))
 }
 
+/// Counts the rows `@git-diff-view` renders for one file: every patch body line becomes a unified
+/// row, while split mode pairs a run of deletions with the additions that follow it.
+fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
+    let mut files: Vec<FileStat> = Vec::new();
+    let (mut deletions, mut additions) = (0u32, 0u32);
+    for line in patch.lines() {
+        let ends_block = !matches!(line.as_bytes().first(), Some(b'+') | Some(b'\\'))
+            && !(line.starts_with('-') && additions == 0);
+        if let Some(file) = files.last_mut().filter(|_| ends_block) {
+            file.split_rows += deletions.max(additions);
+            file.additions += additions;
+            file.deletions += deletions;
+            deletions = 0;
+            additions = 0;
+        }
+        if line.starts_with("diff --git ") {
+            files.push(FileStat::default());
+            continue;
+        }
+        let Some(file) = files.last_mut() else {
+            continue;
+        };
+        if line.starts_with("Binary files ") || line == "GIT binary patch" {
+            file.is_binary = true;
+            continue;
+        }
+        if line.starts_with("@@ ") {
+            file.hunk_rows += 1;
+            continue;
+        }
+        if file.hunk_rows == 0 {
+            continue;
+        }
+        match line.as_bytes().first() {
+            Some(b'+') => {
+                additions += 1;
+                file.unified_rows += 1;
+            }
+            Some(b'-') => {
+                deletions += 1;
+                file.unified_rows += 1;
+            }
+            Some(b'\\') => {}
+            _ => {
+                file.split_rows += 1;
+                file.unified_rows += 1;
+            }
+        }
+    }
+    if let Some(file) = files.last_mut() {
+        file.split_rows += deletions.max(additions);
+        file.additions += additions;
+        file.deletions += deletions;
+    }
+    for file in &mut files {
+        // The view closes every file that still hides lines with one more expandable row.
+        if file.hunk_rows > 0 {
+            file.hunk_rows += 1;
+        }
+    }
+    files
+}
+
 fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<ChangedFile>, String> {
     let output = git_output_bytes(path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--name-status", "-z", base_sha, head_sha])
         .ok_or_else(|| "git diff failed.".to_string())?;
+    // The patch lists files in the same order as --name-status, so its per-file stats zip by index.
+    let stats = parse_patch_stats(&git_output_allow_empty(path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3", base_sha, head_sha])?);
     let fields = output
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty())
@@ -326,7 +407,18 @@ fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<Chang
             }
             _ => (Some(first_path.clone()), Some(first_path), "modified"),
         };
-        files.push(ChangedFile { status: status.to_string(), old_path, new_path });
+        let stat = stats.get(files.len()).copied().unwrap_or_default();
+        files.push(ChangedFile {
+            status: status.to_string(),
+            old_path,
+            new_path,
+            additions: stat.additions,
+            deletions: stat.deletions,
+            is_binary: stat.is_binary,
+            split_rows: stat.split_rows,
+            unified_rows: stat.unified_rows,
+            hunk_rows: stat.hunk_rows,
+        });
     }
     Ok(files)
 }
@@ -1091,7 +1183,7 @@ fn delete_branch(repo_path: String, branch: String) -> Result<(), String> {
     git_output_allow_empty(&repo_path, &["branch", "-D", "--", &branch]).map(|_| ())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
     let base_sha = resolve_commit(&repo_path, &base_ref)?;
     let head_sha = resolve_commit(&repo_path, &head_ref)?;
@@ -1140,7 +1232,7 @@ fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSel
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn diff_file(
     repo_path: String,
     base_sha: String,
@@ -1149,9 +1241,9 @@ fn diff_file(
     new_path: Option<String>,
 ) -> Result<FileDiff, String> {
     let path = new_path.as_ref().or(old_path.as_ref()).ok_or_else(|| "No file path was provided.".to_string())?;
-    let numstat = git_output_allow_empty(&repo_path, &["diff", "--no-ext-diff", "--numstat", &base_sha, &head_sha, "--", path])?;
-    let is_binary = numstat.lines().next().is_some_and(|line| line.starts_with("-\t-\t"));
-    if is_binary {
+    let patch = git_output_allow_empty(&repo_path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3", &base_sha, &head_sha, "--", path])?;
+    // Content lines in a patch always carry a leading marker, so an unprefixed header is git's own.
+    if patch.lines().any(|line| line.starts_with("Binary files ") || line == "GIT binary patch") {
         return Ok(FileDiff {
             old_file_name: old_path,
             new_file_name: new_path,
@@ -1164,7 +1256,6 @@ fn diff_file(
 
     let old_content = old_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{base_sha}:{path}")])).transpose()?;
     let new_content = new_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{head_sha}:{path}")])).transpose()?;
-    let patch = git_output_allow_empty(&repo_path, &["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3", &base_sha, &head_sha, "--", path])?;
 
     Ok(FileDiff {
         old_file_name: old_path,
@@ -1549,6 +1640,36 @@ mod tests {
         assert!(worktrees[2].is_detached);
         assert!(worktrees[2].is_prunable);
         assert_eq!(worktrees[2].branch, "Detached HEAD");
+    }
+
+    #[test]
+    fn counts_the_rows_each_file_of_a_patch_renders() {
+        let stats = parse_patch_stats(concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "--- a/src/main.rs\n",
+            "+++ b/src/main.rs\n",
+            "@@ -1,5 +1,5 @@\n",
+            " context\n",
+            "-old one\n",
+            "-old two\n",
+            "+new one\n",
+            " context\n",
+            "@@ -20,3 +20,4 @@\n",
+            " context\n",
+            "+added\n",
+            "diff --git a/logo.png b/logo.png\n",
+            "Binary files a/logo.png and b/logo.png differ\n",
+        ));
+
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].additions, 2);
+        assert_eq!(stats[0].deletions, 2);
+        // Three context rows, a paired two-for-one replacement, and a lone addition.
+        assert_eq!(stats[0].split_rows, 6);
+        assert_eq!(stats[0].unified_rows, 7);
+        assert_eq!(stats[0].hunk_rows, 3);
+        assert!(stats[1].is_binary);
+        assert_eq!(stats[1].hunk_rows, 0);
     }
 
     #[test]
