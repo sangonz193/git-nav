@@ -17,6 +17,70 @@ use tauri::{
 
 mod server;
 
+/// The one list of IPC commands. It emits both the Tauri handler and the `Command` enum the HTTP
+/// server matches on, so a new command cannot reach one surface without the other refusing to build.
+macro_rules! commands {
+    ($($name:ident),* $(,)?) => {
+        #[allow(non_camel_case_types)]
+        pub enum IpcCommand { $($name),* }
+
+        impl IpcCommand {
+            pub const ALL: &'static [IpcCommand] = &[$(IpcCommand::$name),*];
+
+            pub fn name(&self) -> &'static str {
+                match self { $(IpcCommand::$name => stringify!($name)),* }
+            }
+        }
+
+        fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+            tauri::generate_handler![$($name),*]
+        }
+    };
+}
+
+commands![
+    recent_projects,
+    open_repository,
+    update_command,
+    open_worktree,
+    project_snapshot,
+    stream_commit_graph,
+    repository_fingerprint,
+    branch_sync,
+    worktree_status,
+    inferred_squash_merge_edges,
+    fetch_and_sync_pull_requests,
+    squashed_branch_candidates,
+    preview_cleanup_candidates,
+    delete_squashed_branches,
+    delete_branch,
+    compare_refs,
+    reference_picker_commits,
+    select_branch_range,
+    diff_file,
+    predict_rebase_conflicts,
+    branch_operation_state,
+    repository_state,
+    merge_base,
+    rebase_onto,
+    checkout_ref,
+    push_ref,
+    pull_branch,
+    merge_ref,
+    predict_merge_conflicts,
+    create_branch,
+    rename_branch,
+    create_tag,
+    delete_tag,
+    cherry_pick_range,
+    revert_range,
+    reset_current,
+    stash_list,
+    stash_changes,
+    stash_action,
+    undo_ref_updates,
+];
+
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
@@ -3531,48 +3595,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenWorktrees::default())
-        .invoke_handler(tauri::generate_handler![
-            recent_projects,
-            open_repository,
-            update_command,
-            open_worktree,
-            project_snapshot,
-            stream_commit_graph,
-            repository_fingerprint,
-            branch_sync,
-            worktree_status,
-            inferred_squash_merge_edges,
-            fetch_and_sync_pull_requests,
-            squashed_branch_candidates,
-            preview_cleanup_candidates,
-            delete_squashed_branches,
-            delete_branch,
-            compare_refs,
-            reference_picker_commits,
-            select_branch_range,
-            diff_file,
-            predict_rebase_conflicts,
-            branch_operation_state,
-            repository_state,
-            merge_base,
-            rebase_onto,
-            checkout_ref,
-            push_ref,
-            pull_branch,
-            merge_ref,
-            predict_merge_conflicts,
-            create_branch,
-            rename_branch,
-            create_tag,
-            delete_tag,
-            cherry_pick_range,
-            revert_range,
-            reset_current,
-            stash_list,
-            stash_changes,
-            stash_action,
-            undo_ref_updates
-        ])
+        .invoke_handler(invoke_handler())
         .setup(move |app| {
             if let Some(path) = &repository_path {
                 open_repository_window(app.handle(), path)?;
