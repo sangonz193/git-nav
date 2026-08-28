@@ -2,19 +2,27 @@ import { describe, expect, test } from "bun:test"
 
 import {
   ancestryPath,
+  branchesContaining,
   commitSelection,
   displayRefs,
   fitGraphWidth,
   GRAPH_HEADER_HEIGHT,
   GRAPH_MAX_WIDTH,
   GRAPH_MIN_WIDTH,
+  GRAPH_CANVAS_OVERSCAN,
   graphCanvasHeight,
   isCurrentCheckout,
+  laneColor,
+  parentEdgeColor,
+  refKind,
+  refSelection,
   refSyncLabel,
   relativeDate,
   splitRefLabel,
+  startsLane,
   syncDescription,
   unpushedHashes,
+  unpushedLanes,
   type BranchSync,
 } from "./commit-graph"
 
@@ -169,7 +177,6 @@ describe("displayRefs", () => {
         branch: "main",
         label: "main · origin",
         checkedOut: false,
-        remote: false,
         tag: false,
         sync: null,
         worktrees: [],
@@ -198,7 +205,6 @@ describe("displayRefs", () => {
         branch: "feature",
         label: "feature",
         checkedOut: true,
-        remote: false,
         tag: false,
         sync: null,
         worktrees: [],
@@ -212,7 +218,6 @@ describe("displayRefs", () => {
         branch: null,
         label: "origin/main",
         checkedOut: true,
-        remote: true,
         tag: false,
         sync: null,
         worktrees: [],
@@ -226,7 +231,6 @@ describe("displayRefs", () => {
         branch: "main",
         label: "main",
         checkedOut: false,
-        remote: false,
         tag: false,
         sync: null,
         worktrees: [],
@@ -235,7 +239,6 @@ describe("displayRefs", () => {
         branch: null,
         label: "v1.0.0",
         checkedOut: false,
-        remote: false,
         tag: true,
         sync: null,
         worktrees: [],
@@ -307,8 +310,8 @@ describe("fitGraphWidth", () => {
 })
 
 describe("graphCanvasHeight", () => {
-  test("leaves room for the header so the canvas ends at the bottom of the viewport", () => {
-    expect(graphCanvasHeight(400) + GRAPH_HEADER_HEIGHT).toBe(400)
+  test("covers the viewport under the header with a margin at each end", () => {
+    expect(graphCanvasHeight(400)).toBe(400 - GRAPH_HEADER_HEIGHT + 2 * GRAPH_CANVAS_OVERSCAN)
   })
 
   test("stays at zero for a viewport shorter than the header", () => {
@@ -380,9 +383,9 @@ describe("branch sync", () => {
     expect(refs.map((entry) => entry.sync?.branch ?? null)).toEqual(["main", null, null])
   })
 
-  test("marks standalone remote refs", () => {
+  test("separates standalone remote refs from local branches and tags", () => {
     const refs = displayRefs(["main", "origin/staging", "tag: v1"])
-    expect(refs.map((entry) => entry.remote)).toEqual([false, true, false])
+    expect(refs.map(refKind)).toEqual(["branch", "remote", "tag"])
   })
 
   test("shows nothing extra when a branch matches its upstream", () => {
@@ -407,5 +410,147 @@ describe("branch sync", () => {
   test("reports no state without sync data", () => {
     expect(refSyncLabel(ref(null))).toBe(null)
     expect(syncDescription(ref(null))).toBe(null)
+  })
+})
+
+describe("branchesContaining", () => {
+  const branched = [
+    commit("a", ["b"], ["topic"]),
+    commit("b", ["c"], ["main"]),
+    commit("c", ["d"]),
+    commit("d"),
+  ]
+
+  test("finds every branch whose tip still reaches the selected commit", () => {
+    expect(branchesContaining(branched, 2).map((entry) => entry.branch)).toEqual(["main", "topic"])
+  })
+
+  test("ignores branches that cannot reach the selected commit", () => {
+    expect(branchesContaining(branched, 0).map((entry) => entry.branch)).toEqual(["topic"])
+  })
+
+  test("ignores a branch on an unrelated line of history", () => {
+    const forked = [
+      commit("a", ["c"], ["topic"]),
+      commit("x", ["c"], ["other"]),
+      commit("c"),
+    ]
+
+    expect(branchesContaining(forked, 0).map((entry) => entry.branch)).toEqual(["topic"])
+  })
+})
+
+describe("refKind", () => {
+  test("separates local branches, remote branches and tags", () => {
+    const [local] = displayRefs(["main"])
+    const [remote] = displayRefs(["origin/release"])
+    const [tag] = displayRefs(["tag: v1.0.0"])
+
+    expect(refKind(local)).toBe("branch")
+    expect(refKind(remote)).toBe("remote")
+    expect(refKind(tag)).toBe("tag")
+  })
+
+  test("carries the ref kind into the selection", () => {
+    const [tag] = displayRefs(["tag: v1.0.0"])
+
+    expect(refSelection(tag, "abc")).toEqual({ kind: "tag", ref: tag, sha: "abc" })
+  })
+})
+
+describe("commitSelection", () => {
+  test("reports the branches that can carry the selected range", () => {
+    const branched = [
+      commit("a", ["b"], ["topic"]),
+      commit("b", ["c"], ["main"]),
+      commit("c"),
+    ]
+
+    expect(commitSelection(branched, 1, 1)?.branches.map((entry) => entry.branch)).toEqual(["main", "topic"])
+  })
+})
+
+describe("unpushedLanes", () => {
+  function laned(hash: string, parents: string[], lane: number, parentLanes: number[], activeLanes: boolean[], refs: string[] = []) {
+    return { ...commit(hash, parents, refs), lane, parentLanes, activeLanes }
+  }
+
+  test("shades a lane on the rows it only passes through", () => {
+    const commits = [
+      laned("a", ["c"], 0, [0], [true]),
+      laned("b", ["c"], 1, [1], [true, true], ["origin/pushed"]),
+      laned("c", [], 0, [], []),
+    ]
+
+    const masks = unpushedLanes(commits, unpushedHashes(commits))
+
+    expect(masks[0]).toBe(0b1)
+    expect(masks[1]).toBe(0b1)
+  })
+
+  test("leaves a pushed lane alone", () => {
+    const commits = [
+      laned("a", ["c"], 0, [0], [true], ["origin/main"]),
+      laned("b", ["c"], 1, [1], [true, true]),
+      laned("c", [], 0, [], []),
+    ]
+
+    const masks = unpushedLanes(commits, unpushedHashes(commits))
+
+    expect(masks[0]).toBe(0)
+    expect(masks[1]).toBe(0b10)
+  })
+})
+
+describe("parentEdgeColor", () => {
+  const mergeCommit = { ...commit("m", ["f", "g"]), lane: 3, parentLanes: [3, 4] }
+
+  test("keeps the commit colour on the line it continues", () => {
+    expect(parentEdgeColor(mergeCommit, 0, 3)).toBe(laneColor(3))
+  })
+
+  test("gives a merged branch the colour of the lane it lands on", () => {
+    expect(parentEdgeColor(mergeCommit, 1, 4)).toBe(laneColor(4))
+  })
+
+  test("follows a merged branch that bends into another lane", () => {
+    expect(parentEdgeColor(mergeCommit, 1, 1)).toBe(laneColor(1))
+  })
+})
+
+describe("startsLane", () => {
+  function laned(hash: string, lane: number, parentLanes: number[], activeLanes: boolean[]) {
+    return { ...commit(hash), lane, parentLanes, activeLanes }
+  }
+
+  // A merge whose second parent is already awaited by a lane running down the graph joins that lane.
+  const joining = [
+    laned("above", 4, [4], [true, true, true, true, true]),
+    laned("merge", 4, [4, 3], [true, true, true, true, true]),
+    laned("parent", 3, [3], [true, true, true, true]),
+  ]
+
+  test("counts the lane a commit continues on", () => {
+    expect(startsLane(joining, 1, 4)).toBe(true)
+  })
+
+  test("leaves a lane that was already carrying a line to the commit that opened it", () => {
+    expect(startsLane(joining, 1, 3)).toBe(false)
+  })
+
+  test("counts a lane a merge opens for the branch it brings in", () => {
+    const opening = [
+      laned("above", 4, [4], [false, false, false, false, true]),
+      laned("merge", 4, [4, 3], [false, false, false, true, true]),
+    ]
+
+    expect(startsLane(opening, 1, 3)).toBe(true)
+  })
+
+  test("leaves a joined lane with the state of the line it belongs to", () => {
+    const masks = unpushedLanes(joining, new Set(["merge"]))
+
+    expect(masks[1] & 0b1000).toBe(0)
+    expect(masks[1] & 0b10000).not.toBe(0)
   })
 })

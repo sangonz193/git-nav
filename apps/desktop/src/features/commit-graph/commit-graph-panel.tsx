@@ -5,15 +5,16 @@ import { Channel, invoke } from "@tauri-apps/api/core"
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Terminal, Trash2, TriangleAlert, Undo2, X } from "lucide-react"
+import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Tag, Terminal, Undo2, X } from "lucide-react"
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_COLORS, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, refName, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type SquashMergeInference } from "./commit-graph"
-import { OperationMenuItems, type OperationPlan, type RebaseResult, type RefMenuComponents, type RefUpdate } from "./commit-operations"
+import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
+import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
+import { clearConflictPredictions, PENDING_OPERATION_LABELS, type CompletedOperation, type OperationRequest, type PendingOperation, type RefMenuComponents, type RefUpdate, type RepositoryState, type StashEntry } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
 import type { Project } from "../repository/project"
 
@@ -23,7 +24,7 @@ const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
-const REBASE_UNDO_TIMEOUT = 30_000
+const UNDO_TIMEOUT = 30_000
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
 type BranchSelection = { baseSha: string, headSha: string, baseLabel: string, headLabel: string }
 type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBranches: boolean }
@@ -31,15 +32,14 @@ type CleanResult = { report: string } | { result: BranchCleanup }
 type CleanupCandidate = { branch: string, reasons: CleanupReason[] }
 type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch"
 type RangeDrag = { anchorIndex: number, focusIndex: number }
-type RebaseUndo = { branch: string, onto: string, updates: RefUpdate[] }
+type SelectedRef = { ref: DisplayRef, sha: string }
 type SelectionRange = { anchorHash: string, focusHash: string }
-type PendingOperation = "rebase" | "merge" | "cherryPick" | "bisect"
 type WorktreeStatus = { path: string, branch: string, head: string, isDetached: boolean, changedFiles: number, untrackedFiles: number, pendingOperation: PendingOperation | null }
 type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
 type ViewMode = "graph" | "branches"
-const PENDING_OPERATION_LABELS: Record<PendingOperation, string> = { rebase: "rebasing", merge: "merging", cherryPick: "cherry-picking", bisect: "bisecting" }
-const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
-const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
+const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Label: ContextMenuLabel, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
+const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
+const SELECTION_LABELS = { branch: "Branch", remote: "Remote branch", tag: "Tag" }
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
 const commitColumnHelper = createColumnHelper<typeof commitTableFeatures, Commit>()
 const commitColumns = commitColumnHelper.columns([
@@ -58,14 +58,16 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [cleanOptions, setCleanOptions] = useState<CleanOptions>({ deleteMergedPullRequestBranches: true, deleteMergedBranches: false })
   const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(null)
   const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(null)
-  const [branchToDelete, setBranchToDelete] = useState<string | null>(null)
-  const [rebasePlan, setRebasePlan] = useState<OperationPlan | null>(null)
-  const [rebaseUndo, setRebaseUndo] = useState<RebaseUndo | null>(null)
+  const [request, setRequest] = useState<OperationRequest | null>(null)
+  const [completed, setCompleted] = useState<CompletedOperation | null>(null)
   const [graphVersion, setGraphVersion] = useState(0)
   const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
   const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(new Map())
   const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(null)
+  const [selectedRef, setSelectedRef] = useState<SelectedRef | null>(null)
+  const [repository, setRepository] = useState<RepositoryState | null>(null)
+  const [stashes, setStashes] = useState<StashEntry[]>([])
   const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
@@ -100,6 +102,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     invoke<WorktreeStatus[]>("worktree_status", { repoPath: params.path })
       .then(setWorktreeStatuses)
       .catch(() => undefined)
+    invoke<RepositoryState>("repository_state", { repoPath: params.path })
+      .then(setRepository)
+      .catch(() => undefined)
+    invoke<StashEntry[]>("stash_list", { repoPath: params.path })
+      .then(setStashes)
+      .catch(() => undefined)
   }, [params.path])
   const table = useTable({
     columnResizeMode: "onChange",
@@ -124,7 +132,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       : currentCheckoutIndex * ROW_HEIGHT >= scroll.top + scroll.height
         ? "down"
         : null
-  const selection = useMemo(() => {
+  const commitsSelection = useMemo(() => {
     if (rangeDrag) {
       return commitSelection(commits, rangeDrag.anchorIndex, rangeDrag.focusIndex)
     }
@@ -135,9 +143,19 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     const focusIndex = commits.findIndex((commit) => commit.hash === selectionRange.focusHash)
     return anchorIndex === -1 || focusIndex === -1 ? null : commitSelection(commits, anchorIndex, focusIndex)
   }, [commits, rangeDrag, selectionRange])
-  const selectedHashes = useMemo(() => new Set(selection?.commits.map((commit) => commit.hash)), [selection])
-  const selectionBranch = selection && displayRefs(selection.tip.refs).find((ref) => ref.branch)?.branch
+  // A ref selection outlives the graph it was made on, so it is re-read from the commit it sits on after every
+  // refresh and falls back to what it was made from while the graph it belongs to is still streaming in.
+  const selection = useMemo<Selection | null>(() => {
+    if (!selectedRef) {
+      return commitsSelection
+    }
+    const commit = commits.find((candidate) => candidate.hash === selectedRef.sha)
+    const ref = commit && displayRefs(commit.refs, checkedOutWorktrees, branchSync).find((candidate) => refName(candidate) === refName(selectedRef.ref))
+    return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
+  }, [branchSync, checkedOutWorktrees, commits, commitsSelection, selectedRef])
+  const selectedHashes = useMemo(() => new Set(commitsSelection?.commits.map((commit) => commit.hash)), [commitsSelection])
   const unpushed = useMemo(() => unpushedHashes(commits), [commits])
+  const unpushedLaneMasks = useMemo(() => unpushedLanes(commits, unpushed), [commits, unpushed])
   // The oldest unpushed commit is the top of the local segment, so it is the useful place to land.
   const oldestUnpushedIndex = useMemo(() => {
     for (let index = commits.length - 1; index >= 0; index -= 1) {
@@ -218,35 +236,10 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     mutationFn: ({ path, target }: { path: string, target: WorktreeTarget }) => invoke("open_worktree", { path, target }),
     onError: (message) => setError(String(message)),
   })
-  const deleteBranchMutation = useMutation({
-    mutationFn: (branch: string) => invoke("delete_branch", { repoPath: params.path, branch }),
-    onSuccess: () => {
-      setBranchToDelete(null)
-      refreshGraph()
-    },
-    onError: (message) => setError(String(message)),
-  })
-  const rebaseMutation = useMutation({
-    mutationFn: (plan: OperationPlan) => invoke<RebaseResult>("rebase_onto", { repoPath: params.path, onto: plan.onto, upstream: plan.upstream, branch: plan.branch }),
-    onMutate: () => {
-      setError(null)
-      setRebaseUndo(null)
-    },
-    onSuccess: (result, plan) => {
-      setRebasePlan(null)
-      if (result.outcome === "failed") {
-        setError([result.message, ...result.files].join("\n"))
-        return
-      }
-      setRebaseUndo({ branch: result.branch, onto: plan.onto, updates: result.updates })
-      refreshGraph()
-    },
-    onError: (message) => setError(String(message)),
-  })
-  const undoRebaseMutation = useMutation({
+  const undoMutation = useMutation({
     mutationFn: (updates: RefUpdate[]) => invoke("undo_ref_updates", { repoPath: params.path, updates }),
     onSuccess: () => {
-      setRebaseUndo(null)
+      setCompleted(null)
       refreshGraph()
     },
     onError: (message) => setError(String(message)),
@@ -377,12 +370,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }, [cleanupReport])
 
   useEffect(() => {
-    if (!rebaseUndo) {
+    if (!completed) {
       return
     }
-    const timeout = window.setTimeout(() => setRebaseUndo(null), REBASE_UNDO_TIMEOUT)
+    const timeout = window.setTimeout(() => setCompleted(null), UNDO_TIMEOUT)
     return () => window.clearTimeout(timeout)
-  }, [rebaseUndo])
+  }, [completed])
 
   useEffect(() => {
     if (isCleanConfirmationOpen) {
@@ -416,23 +409,23 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }, [params.path, refreshWorktreeStatus])
 
   useEffect(() => {
-    if (!selectionRange) {
+    if (!selection) {
       return
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setSelectionRange(null)
+        clearSelection()
       }
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [selectionRange])
+  }, [selection])
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top, height: graphCanvasHeight(scroll.height), squashMergeEdges, unpushed, width: graphWidth })
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth })
     }
-  }, [commits, graphWidth, scroll, squashMergeEdges, unpushed, virtualRows])
+  }, [commits, graphWidth, scroll, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
 
   function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
     const originX = "touches" in event ? event.touches[0].clientX : event.clientX
@@ -545,6 +538,22 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     })
   }
 
+  // A stash entry records the working tree against the commit it was made from, which is its first parent.
+  function openStashDiff(entry: StashEntry) {
+    const referencePanel = containerApi.getPanel(api.id)
+    if (!referencePanel) {
+      setError("Could not open a stash diff.")
+      return
+    }
+    containerApi.addPanel({
+      component: "diff",
+      id: `repository-diff-${crypto.randomUUID()}`,
+      params: { ...params, baseRef: `${entry.sha}^`, headRef: entry.sha },
+      position: { direction: "within", referencePanel },
+      title: `Stash: ${entry.name}`,
+    })
+  }
+
   function openRangeDiff({ base, tip }: CommitSelection) {
     const referencePanel = containerApi.getPanel(api.id)
     if (!base || !referencePanel) {
@@ -560,12 +569,47 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     })
   }
 
+  function selectionSummary(selection: Selection) {
+    return selection.kind === "commits"
+      ? `${selection.commits.length} commit${selection.commits.length === 1 ? "" : "s"}${selection.branches[0] ? ` · ${selection.branches[0].branch}` : ""}`
+      : `${SELECTION_LABELS[selection.kind]} · ${refName(selection.ref)}`
+  }
+
+  function clearSelection() {
+    setSelectionRange(null)
+    setSelectedRef(null)
+  }
+
+  function selectRef(ref: DisplayRef, sha: string) {
+    setSelectionRange(null)
+    setSelectedRef((current) => current && refName(current.ref) === refName(ref) && current.sha === sha ? null : { ref, sha })
+  }
+
+  function onOperationCompleted(result: CompletedOperation) {
+    setRequest(null)
+    setCompleted(result)
+    clearConflictPredictions()
+    refreshWorktreeStatus()
+    refreshGraph()
+  }
+
+  function rowHeader(index: number) {
+    const target = rowTarget(index)
+    return target.commits.length === 1 ? target.tip.hash.slice(0, 8) : `${target.commits.length} commits`
+  }
+
+  // Right-clicking inside the selection keeps it whole, and right-clicking outside it acts on the row under the pointer.
+  function rowTarget(index: number) {
+    return selectedHashes.has(commits[index].hash) && commitsSelection ? commitsSelection : commitSelection(commits, index, index)!
+  }
+
   function startRangeDrag(event: ReactPointerEvent<HTMLElement>, index: number) {
     const scroll = scrollElement.current
     const space = graphSpace.current
     if (event.button !== 0 || !scroll || !space || (event.target as HTMLElement).closest(".commit-ref")) {
       return
     }
+    setSelectedRef(null)
     const anchorIndex = event.shiftKey && selectionRange
       ? commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
       : index
@@ -638,25 +682,38 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       : index
     const rangeAnchorIndex = anchorIndex === -1 ? index : anchorIndex
     if (ancestryPath(commits, rangeAnchorIndex, index).length > 0) {
+      setSelectedRef(null)
       setSelectionRange({ anchorHash: commits[rangeAnchorIndex].hash, focusHash: commits[index].hash })
     }
   }
 
+  function menuHeader({ Label, Separator }: RefMenuComponents, name: string, detail?: string | null) {
+    return (
+      <>
+        <Label>
+          <span className="block max-w-64 truncate text-foreground">{name}</span>
+          {detail && <span className="block max-w-64 truncate font-normal">{detail}</span>}
+        </Label>
+        <Separator />
+      </>
+    )
+  }
+
   function refMenuItems(ref: DisplayRef, sha: string, components: RefMenuComponents) {
     const { Item, Sub, SubContent, SubTrigger } = components
-    const { branch } = ref
     const reference = refName(ref)
     return (
       <>
+        {menuHeader(components, reference, syncDescription(ref) ?? SELECTION_LABELS[refKind(ref)])}
+        <OperationMenuItems components={components} onSelect={setRequest} repository={repository} source={selection} target={refSelection(ref, sha)} />
         <Item onSelect={() => openRefDiff(reference)}>
           <GitCompareArrows />
-          Compare with main
+          {`Compare with ${repository?.defaultBranch ?? "the default branch"}`}
         </Item>
         <Item onSelect={() => copyText(reference)}>
           <Copy />
           Copy ref name
         </Item>
-        <OperationMenuItems components={components} onConfirm={setRebasePlan} repoPath={params.path} source={selection} targetRef={ref} targetSha={sha} />
         {ref.worktrees.length > 0 && (
           <Sub>
             <SubTrigger>
@@ -688,22 +745,41 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             </SubContent>
           </Sub>
         )}
-        {branch && !ref.checkedOut && ref.worktrees.length === 0 && (
-          <Item onSelect={() => setBranchToDelete(branch)}>
-            <Trash2 />
-            Delete branch
-          </Item>
-        )}
       </>
     )
   }
 
   function refMenuEntry(ref: DisplayRef, sha: string, key: string, components: RefMenuComponents) {
-    const { Sub, SubContent, SubTrigger } = components
+    const { Item, Sub, SubContent, SubTrigger } = components
     return (
       <Sub key={key}>
         <SubTrigger>{ref.label}</SubTrigger>
-        <SubContent>{refMenuItems(ref, sha, components)}</SubContent>
+        <SubContent>
+          <Item onSelect={() => selectRef(ref, sha)}>
+            <GitBranch />
+            {`Select ${refName(ref)}`}
+          </Item>
+          {refMenuItems(ref, sha, components)}
+        </SubContent>
+      </Sub>
+    )
+  }
+
+  function stashMenuEntry(entry: StashEntry, components: RefMenuComponents) {
+    const { Item, Sub, SubContent, SubTrigger } = components
+    return (
+      <Sub key={entry.sha}>
+        <SubTrigger>
+          <span className="min-w-0 truncate">{`${entry.name}${entry.branch ? ` · ${entry.branch}` : ""}`}</span>
+        </SubTrigger>
+        <SubContent>
+          {menuHeader(components, entry.name, entry.message)}
+          <OperationMenuItems components={components} onSelect={setRequest} repository={repository} source={null} target={{ kind: "stash", entry }} />
+          <Item onSelect={() => openStashDiff(entry)}>
+            <FileDiff />
+            Show stashed changes
+          </Item>
+        </SubContent>
       </Sub>
     )
   }
@@ -744,31 +820,41 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   function refChip(ref: DisplayRef, sha: string, key?: string) {
     const { start, end } = splitRefLabel(ref.label)
     const sync = refSyncLabel(ref)
-    const chip = (
-      <span
-        aria-label={ref.checkedOut ? "Currently checked out" : ref.worktrees.length ? "Checked out in another worktree" : undefined}
-        className={`commit-ref${ref.checkedOut ? " commit-ref-current" : ""}${ref.remote ? " commit-ref-remote" : ""}`}
-        title={[ref.label, syncDescription(ref), ...ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`)].filter(Boolean).join("\n")}
-      >
-        {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}
-        <span className="commit-ref-label">
-          <span className="commit-ref-label-start">{start}</span>
-          {end && <span className="commit-ref-label-end">{end}</span>}
-        </span>
-        {sync && <span className="commit-ref-sync">{sync}</span>}
-      </span>
-    )
+    const kind = refKind(ref)
+    const [worktree] = ref.worktrees
+    const selected = selectedRef !== null && refName(selectedRef.ref) === refName(ref) && selectedRef.sha === sha
     return (
-      <DropdownMenu key={key}>
-        <ContextMenu>
-          {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
-          <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
-            <DropdownMenuTrigger asChild>{chip}</DropdownMenuTrigger>
-          </ContextMenuTrigger>
-          <ContextMenuContent>{refMenuItems(ref, sha, contextMenuComponents)}</ContextMenuContent>
-        </ContextMenu>
-        <DropdownMenuContent>{refMenuItems(ref, sha, dropdownMenuComponents)}</DropdownMenuContent>
-      </DropdownMenu>
+      <ContextMenu key={key}>
+        {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
+        <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
+          <button
+            aria-label={ref.checkedOut ? "Currently checked out" : ref.worktrees.length ? "Checked out in another worktree" : undefined}
+            aria-pressed={selected}
+            className={`commit-ref commit-ref-${kind}${ref.checkedOut ? " commit-ref-current" : ""}${selected ? " commit-ref-selected" : ""}`}
+            // Keyboard activation arrives as a click with no pointer behind it.
+            onClick={(event) => event.detail === 0 && selectRef(ref, sha)}
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              // Selecting on click would also answer the stray click a context menu leaves behind when it closes over this chip.
+              if (event.button === 0) {
+                selectRef(ref, sha)
+              }
+            }}
+            title={[ref.label, syncDescription(ref), ...ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`)].filter(Boolean).join("\n")}
+            type="button"
+          >
+            {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}
+            {!ref.checkedOut && worktree && <span className="commit-ref-worktree">{worktree.name}</span>}
+            {kind === "tag" && <Tag />}
+            <span className="commit-ref-label">
+              <span className="commit-ref-label-start">{start}</span>
+              {end && <span className="commit-ref-label-end">{end}</span>}
+            </span>
+            {sync && <span className={`commit-ref-sync${ref.sync?.isGone ? " commit-ref-sync-gone" : ""}`}>{sync}</span>}
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>{refMenuItems(ref, sha, contextMenuComponents)}</ContextMenuContent>
+      </ContextMenu>
     )
   }
 
@@ -789,6 +875,19 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
               {`${unpushed.size} unpushed`}
             </Button>
           )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" title="Stashed changes" type="button" variant="ghost">
+                <Archive />
+                {stashes.length > 0 ? stashes.length : "Stash"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <OperationMenuItems components={dropdownMenuComponents} onSelect={setRequest} repository={repository} source={null} target={{ kind: "worktree" }} />
+              {stashes.map((entry) => stashMenuEntry(entry, dropdownMenuComponents))}
+              {stashes.length === 0 && !repository?.isDirty && <DropdownMenuItem disabled>Nothing is stashed</DropdownMenuItem>}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="icon" title="Clean merged branches" type="button" variant="ghost">
             {cleanMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Broom />}
           </Button>
@@ -863,7 +962,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
           {virtualRows.map((row) => {
             const commit = commits[row.index]
-            const refColor = GRAPH_COLORS[commit.lane % GRAPH_COLORS.length]
+            const refColor = laneColor(commit.lane)
             const currentCheckout = isCurrentCheckout(commit.refs)
             const selected = selectedHashes.has(commit.hash)
             const refs = displayRefs(commit.refs, checkedOutWorktrees, branchSync)
@@ -879,7 +978,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                     {viewMode === "graph" && overflowRefs.length > 0 && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <span className="commit-ref">{`+${overflowRefs.length}`}</span>
+                          <button className="commit-ref" onPointerDown={(event) => event.stopPropagation()} title={overflowRefs.map((ref) => ref.label).join("\n")} type="button">
+                            {`+${overflowRefs.length}`}
+                          </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent>
                           {overflowRefs.map((ref, index) => refMenuEntry(ref, commit.hash, `${ref.label}-${index}`, dropdownMenuComponents))}
@@ -898,20 +999,14 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                   </article>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
-                  <ContextMenuItem onSelect={() => copyText(commit.hash)}>
-                    <Copy />
-                    Copy SHA
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => copyText(commit.subject)}>
-                    <Copy />
-                    Copy commit subject
-                  </ContextMenuItem>
+                  {menuHeader(contextMenuComponents, rowHeader(row.index), commit.subject || "(no subject)")}
+                  <OperationMenuItems components={contextMenuComponents} onSelect={setRequest} repository={repository} source={selection} target={rowTarget(row.index)} />
                   <ContextMenuItem disabled={commit.parents.length === 0} onSelect={() => openCommitDiff(commit)}>
                     <FileDiff />
                     Show commit diff
                   </ContextMenuItem>
-                  {selected && selection && (
-                    <ContextMenuItem disabled={!selection.base} onSelect={() => openRangeDiff(selection)}>
+                  {selected && commitsSelection && commitsSelection.commits.length > 1 && (
+                    <ContextMenuItem disabled={!commitsSelection.base} onSelect={() => openRangeDiff(commitsSelection)}>
                       <GitCompareArrows />
                       Diff selected range
                     </ContextMenuItem>
@@ -928,6 +1023,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                       </ContextMenuSubContent>
                     </ContextMenuSub>
                   )}
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={() => copyText(commit.hash)}>
+                    <Copy />
+                    Copy SHA
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => copyText(commit.subject)}>
+                    <Copy />
+                    Copy commit subject
+                  </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
             )
@@ -942,14 +1046,21 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       )}
       {selection && (
         <div className="commit-graph-selection-bar">
-          <span className="commit-graph-selection-summary">
-            {`${selection.commits.length} commit${selection.commits.length === 1 ? "" : "s"}${selectionBranch ? ` · ${selectionBranch}` : ""}`}
-          </span>
-          <Button disabled={!selection.base} onClick={() => openRangeDiff(selection)} size="xs" title="Diff the selected range" type="button" variant="outline">
-            <FileDiff />
-            Diff
-          </Button>
-          <Button onClick={() => setSelectionRange(null)} size="xs" title="Clear the selection" type="button" variant="ghost">
+          <span className="commit-graph-selection-summary">{selectionSummary(selection)}</span>
+          {selection.kind === "commits"
+            ? (
+              <Button disabled={!selection.base} onClick={() => openRangeDiff(selection)} size="xs" title="Diff the selected range" type="button" variant="outline">
+                <FileDiff />
+                Diff
+              </Button>
+            )
+            : (
+              <Button onClick={() => openRefDiff(refName(selection.ref))} size="xs" title={`Diff ${refName(selection.ref)} against the default branch`} type="button" variant="outline">
+                <FileDiff />
+                Diff
+              </Button>
+            )}
+          <Button onClick={clearSelection} size="xs" title="Clear the selection" type="button" variant="ghost">
             <X />
             Clear
           </Button>
@@ -958,13 +1069,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       {commits.length === 0 && !error && <p className="commit-graph-status">Loading commits…</p>}
       {error && <p className="commit-graph-status text-destructive">{error}</p>}
       {cleanupReport && <p className="commit-graph-cleanup-report">{cleanupReport}</p>}
-      {rebaseUndo && (
+      {completed && (
         <div className="commit-graph-cleanup-report flex items-center gap-3">
-          <span>{`Rebased ${rebaseUndo.branch} onto ${rebaseUndo.onto}.`}</span>
-          <Button disabled={undoRebaseMutation.isPending} onClick={() => undoRebaseMutation.mutate(rebaseUndo.updates)} size="xs" type="button" variant="outline">
-            <Undo2 />
-            {undoRebaseMutation.isPending ? "Undoing…" : "Undo"}
-          </Button>
+          <span>{completed.summary}</span>
+          {completed.updates.length > 0 && (
+            <Button disabled={undoMutation.isPending} onClick={() => undoMutation.mutate(completed.updates)} size="xs" type="button" variant="outline">
+              <Undo2 />
+              {undoMutation.isPending ? "Undoing…" : "Undo"}
+            </Button>
+          )}
         </div>
       )}
       <AlertDialog onOpenChange={setIsCleanConfirmationOpen} open={isCleanConfirmationOpen}>
@@ -1014,52 +1127,18 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <AlertDialog onOpenChange={(open) => !open && setBranchToDelete(null)} open={branchToDelete !== null}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete {branchToDelete}?</AlertDialogTitle>
-            <AlertDialogDescription>This permanently deletes the local branch.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteBranchMutation.isPending}>Cancel</AlertDialogCancel>
-            <Button disabled={deleteBranchMutation.isPending} onClick={() => branchToDelete && deleteBranchMutation.mutate(branchToDelete)} type="button" variant="destructive">
-              {deleteBranchMutation.isPending ? "Deleting…" : "Delete branch"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <AlertDialog onOpenChange={(open) => !open && setRebasePlan(null)} open={rebasePlan !== null}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Rebase {rebasePlan?.branch} onto {rebasePlan?.onto}?</AlertDialogTitle>
-            <AlertDialogDescription>This rewrites the selected commits and moves {rebasePlan?.branch} to the result.</AlertDialogDescription>
-          </AlertDialogHeader>
-          {rebasePlan && rebasePlan.warnings.length > 0 && (
-            <ul className="grid gap-2 text-sm">
-              {rebasePlan.warnings.map((warning) => (
-                <li className="flex items-start gap-2" key={warning.message}>
-                  <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-400" />
-                  <div className="min-w-0">
-                    <p>{warning.message}</p>
-                    {warning.files && (
-                      <ul className="font-mono text-xs text-muted-foreground">
-                        {warning.files.map((file) => <li key={file}>{file}</li>)}
-                      </ul>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          <code className="overflow-x-auto rounded-lg border p-3 font-mono text-xs whitespace-pre">{rebasePlan?.argv.join(" ")}</code>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={rebaseMutation.isPending}>Cancel</AlertDialogCancel>
-            <Button disabled={rebaseMutation.isPending} onClick={() => rebasePlan && rebaseMutation.mutate(rebasePlan)} type="button">
-              {rebaseMutation.isPending ? "Rebasing…" : "Rebase"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {request && (
+        <OperationDialog
+          onClose={() => setRequest(null)}
+          onCompleted={onOperationCompleted}
+          onFailed={(message) => {
+            setRequest(null)
+            setError(message)
+          }}
+          repoPath={params.path}
+          request={request}
+        />
+      )}
     </main>
   )
 }

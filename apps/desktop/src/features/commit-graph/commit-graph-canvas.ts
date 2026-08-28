@@ -1,4 +1,10 @@
-import { GRAPH_COLORS, GRAPH_GUTTER, GRAPH_WIDTH, LANE_WIDTH, ROW_HEIGHT, type Commit } from "./commit-graph"
+import { GRAPH_GUTTER, GRAPH_WIDTH, LANE_WIDTH, laneColor, parentEdgeColor, ROW_HEIGHT, startsLane, type Commit } from "./commit-graph"
+
+// Unpushed work keeps the colour of the branch it belongs to and gives up some of its weight instead.
+const UNPUSHED_ALPHA = 0.45
+// Fading each stroke on its own would darken every place two of them overlap, so they are collected on one
+// layer at full strength and that layer is faded once.
+let unpushedLayer: HTMLCanvasElement | null = null
 
 type CommitGraphDrawing = {
   canvas: HTMLCanvasElement
@@ -8,10 +14,28 @@ type CommitGraphDrawing = {
   height: number
   squashMergeEdges: { branchIndex: number; targetIndex: number }[]
   unpushed?: Set<string>
+  unpushedLanes?: number[]
   width?: number
 }
 
-export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squashMergeEdges, unpushed, width = GRAPH_WIDTH }: CommitGraphDrawing) {
+function unpushedContext(pixelWidth: number, pixelHeight: number, ratio: number, width: number, height: number) {
+  unpushedLayer ??= document.createElement("canvas")
+  if (unpushedLayer.width !== pixelWidth || unpushedLayer.height !== pixelHeight) {
+    unpushedLayer.width = pixelWidth
+    unpushedLayer.height = pixelHeight
+  }
+  const context = unpushedLayer.getContext("2d")
+  if (!context) {
+    return null
+  }
+  context.setTransform(ratio, 0, 0, ratio, 0, 0)
+  context.clearRect(0, 0, width, height)
+  context.lineWidth = 2
+  context.lineCap = "round"
+  return context
+}
+
+export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squashMergeEdges, unpushed, unpushedLanes, width = GRAPH_WIDTH }: CommitGraphDrawing) {
   const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
   const pixelWidth = Math.ceil(width * ratio)
@@ -22,6 +46,9 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
     canvas.style.width = `${width}px`
     canvas.style.height = `${height}px`
   }
+  // Sticky would hold the canvas still while the columns scroll out from under it, so the row it belongs to
+  // carries it sideways and the scroll offset it was drawn for places it down the page.
+  canvas.style.transform = `translateY(${scrollTop}px)`
 
   const context = canvas.getContext("2d")
   if (!context) {
@@ -33,8 +60,18 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
   context.lineWidth = 2
   context.lineCap = "round"
 
-  context.lineWidth = 1.5
-  context.setLineDash([3, 4])
+  const local = unpushedContext(pixelWidth, pixelHeight, ratio, width, height)
+  let hasLocal = false
+  const layerFor = (isLocal: boolean) => {
+    hasLocal ||= isLocal && Boolean(local)
+    return isLocal && local ? local : context
+  }
+
+  const layers = [context, local].filter((layer) => layer !== null)
+  for (const layer of layers) {
+    layer.lineWidth = 1.5
+    layer.setLineDash([3, 4])
+  }
   for (const { branchIndex, targetIndex } of squashMergeEdges) {
     const branchY = branchIndex * ROW_HEIGHT - scrollTop + ROW_HEIGHT / 2
     const targetY = targetIndex * ROW_HEIGHT - scrollTop + ROW_HEIGHT / 2
@@ -46,14 +83,18 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
     const branchX = GRAPH_GUTTER + branch.lane * LANE_WIDTH
     const targetX = GRAPH_GUTTER + target.lane * LANE_WIDTH
     const middleY = (branchY + targetY) / 2
-    context.strokeStyle = GRAPH_COLORS[branch.lane % GRAPH_COLORS.length]
-    context.beginPath()
-    context.moveTo(branchX, branchY)
-    context.bezierCurveTo(branchX, middleY, targetX, middleY, targetX, targetY)
-    context.stroke()
+    // The edge belongs to the branch that was squashed away, so it carries that branch's weight.
+    const layer = layerFor(unpushed?.has(branch.hash) ?? false)
+    layer.strokeStyle = laneColor(branch.lane)
+    layer.beginPath()
+    layer.moveTo(branchX, branchY)
+    layer.bezierCurveTo(branchX, middleY, targetX, middleY, targetX, targetY)
+    layer.stroke()
   }
-  context.setLineDash([])
-  context.lineWidth = 2
+  for (const layer of layers) {
+    layer.setLineDash([])
+    layer.lineWidth = 2
+  }
 
   for (const item of items) {
     const commit = commits[item.index]
@@ -64,66 +105,77 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
     const startY = item.start - scrollTop + ROW_HEIGHT / 2
     const endY = startY + ROW_HEIGHT
     const startX = GRAPH_GUTTER + commit.lane * LANE_WIDTH
-    const color = GRAPH_COLORS[commit.lane % GRAPH_COLORS.length]
+    const isLocal = unpushed?.has(commit.hash) ?? false
     const previousCommit = commits[item.index - 1]
     const previousActiveLanes = previousCommit?.activeLanes ?? []
 
+    const previousLanes = unpushedLanes?.[item.index - 1] ?? 0
     for (let lane = 0; lane < previousActiveLanes.length; lane += 1) {
-      if (!previousActiveLanes[lane] || previousCommit?.parentLanes.includes(lane) || !commit.incomingLanes.includes(lane)) {
+      if (!previousActiveLanes[lane] || startsLane(commits, item.index - 1, lane) || !commit.incomingLanes.includes(lane)) {
         continue
       }
+      const target = layerFor(Boolean(previousLanes & (1 << lane)))
       const x = GRAPH_GUTTER + lane * LANE_WIDTH
-      context.strokeStyle = GRAPH_COLORS[lane % GRAPH_COLORS.length]
-      context.beginPath()
-      context.moveTo(x, startY - ROW_HEIGHT)
+      target.strokeStyle = laneColor(lane)
+      target.beginPath()
+      target.moveTo(x, startY - ROW_HEIGHT)
       if (x !== startX) {
-        context.bezierCurveTo(x, startY - ROW_HEIGHT / 2, startX, startY - ROW_HEIGHT / 2, startX, startY)
+        target.bezierCurveTo(x, startY - ROW_HEIGHT / 2, startX, startY - ROW_HEIGHT / 2, startX, startY)
       } else {
-        context.lineTo(x, startY)
+        target.lineTo(x, startY)
       }
-      context.stroke()
+      target.stroke()
     }
 
+    const activeLanes = unpushedLanes?.[item.index] ?? 0
     const nextCommit = commits[item.index + 1]
     for (let lane = 0; lane < commit.activeLanes.length; lane += 1) {
-      if (!commit.activeLanes[lane] || commit.parentLanes.includes(lane) || nextCommit?.incomingLanes.includes(lane)) {
+      if (!commit.activeLanes[lane] || startsLane(commits, item.index, lane) || nextCommit?.incomingLanes.includes(lane)) {
         continue
       }
+      const target = layerFor(Boolean(activeLanes & (1 << lane)))
       const x = GRAPH_GUTTER + lane * LANE_WIDTH
-      context.strokeStyle = GRAPH_COLORS[lane % GRAPH_COLORS.length]
-      context.beginPath()
-      context.moveTo(x, startY)
-      context.lineTo(x, endY)
-      context.stroke()
+      target.strokeStyle = laneColor(lane)
+      target.beginPath()
+      target.moveTo(x, startY)
+      target.lineTo(x, endY)
+      target.stroke()
     }
 
-    for (const parentLane of commit.parentLanes) {
+    const own = layerFor(isLocal)
+    for (const [index, parentLane] of commit.parentLanes.entries()) {
       const endLane = nextCommit?.incomingLanes.includes(parentLane) ? nextCommit.lane : parentLane
       const endX = GRAPH_GUTTER + endLane * LANE_WIDTH
-      context.strokeStyle = color
-      context.beginPath()
-      context.moveTo(startX, startY)
+      own.strokeStyle = parentEdgeColor(commit, index, endLane)
+      own.beginPath()
+      own.moveTo(startX, startY)
       if (startX === endX) {
-        context.lineTo(endX, endY)
+        own.lineTo(endX, endY)
       } else {
-        context.bezierCurveTo(startX, startY + ROW_HEIGHT / 2, endX, endY - ROW_HEIGHT / 2, endX, endY)
+        own.bezierCurveTo(startX, startY + ROW_HEIGHT / 2, endX, endY - ROW_HEIGHT / 2, endX, endY)
       }
-      context.stroke()
+      own.stroke()
     }
 
-    context.fillStyle = color
-    context.beginPath()
-    context.arc(startX, startY, 4, 0, Math.PI * 2)
-    context.fill()
+    own.fillStyle = laneColor(commit.lane)
+    own.beginPath()
+    own.arc(startX, startY, 4, 0, Math.PI * 2)
+    own.fill()
 
     // The canvas sits above the rows, so punching the centre out lets the row background read through as a hollow node.
-    if (unpushed?.has(commit.hash)) {
-      context.save()
-      context.globalCompositeOperation = "destination-out"
-      context.beginPath()
-      context.arc(startX, startY, 2, 0, Math.PI * 2)
-      context.fill()
-      context.restore()
+    if (isLocal) {
+      own.save()
+      own.globalCompositeOperation = "destination-out"
+      own.beginPath()
+      own.arc(startX, startY, 2, 0, Math.PI * 2)
+      own.fill()
+      own.restore()
     }
+  }
+
+  if (local && hasLocal) {
+    context.globalAlpha = UNPUSHED_ALPHA
+    context.drawImage(local.canvas, 0, 0, width, height)
+    context.globalAlpha = 1
   }
 }

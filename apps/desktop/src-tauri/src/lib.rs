@@ -172,24 +172,23 @@ struct RefUpdate {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompletedRebase {
-    branch: String,
-    head_sha: String,
+struct CompletedOperation {
+    summary: String,
     updates: Vec<RefUpdate>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FailedRebase {
+struct FailedOperation {
     message: String,
     files: Vec<String>,
 }
 
 #[derive(Serialize)]
 #[serde(tag = "outcome", rename_all = "camelCase")]
-enum RebaseResult {
-    Completed(CompletedRebase),
-    Failed(FailedRebase),
+enum OperationResult {
+    Completed(CompletedOperation),
+    Failed(FailedOperation),
 }
 
 struct WorktreeRecord {
@@ -1222,9 +1221,7 @@ fn stream_commit_graph(
     repo_path: String,
     on_batch: Channel<Vec<Vec<serde_json::Value>>>,
 ) -> Result<(), String> {
-    let mut reserved_tip = primary_reference(&repo_path)
-        .and_then(|reference| resolve_commit(&repo_path, &reference))
-        .ok();
+    let mut reserved_tip = reserved_lane_tip(&repo_path);
     let mut child = Command::new("git")
         .args([
             "--no-optional-locks",
@@ -1366,8 +1363,14 @@ async fn delete_squashed_branches(
 }
 
 #[tauri::command]
-fn delete_branch(repo_path: String, branch: String) -> Result<(), String> {
-    git_output_allow_empty(&repo_path, &["branch", "-D", "--", &branch]).map(|_| ())
+fn delete_branch(repo_path: String, branch: String) -> Result<OperationResult, String> {
+    run_worktree_operation(
+        &repo_path,
+        &repo_path,
+        format!("Deleted {branch}."),
+        &["branch", "--delete", "--force", "--", &branch],
+        None,
+    )
 }
 
 fn parse_branch_sync(output: &str) -> Vec<BranchSync> {
@@ -1743,23 +1746,30 @@ fn parse_ref_shas(output: &str) -> HashMap<String, String> {
         .collect()
 }
 
-fn branch_shas(repo_path: &str) -> Result<HashMap<String, String>, String> {
-    git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"])
-        .map(|output| parse_ref_shas(&output))
+fn ref_shas(repo_path: &str) -> Result<HashMap<String, String>, String> {
+    git_output_allow_empty(
+        repo_path,
+        &["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads", "refs/tags", "refs/remotes"],
+    )
+    .map(|output| parse_ref_shas(&output))
 }
 
 fn changed_refs(before: &HashMap<String, String>, after: &HashMap<String, String>) -> Vec<RefUpdate> {
-    let mut updates = before
-        .iter()
-        .filter_map(|(reference, sha)| {
-            let current = after.get(reference)?;
-            (current != sha).then(|| RefUpdate {
+    let mut updates: Vec<_> = before
+        .keys()
+        .chain(after.keys())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .filter_map(|reference| {
+            let was = before.get(reference).cloned().unwrap_or_default();
+            let now = after.get(reference).cloned().unwrap_or_default();
+            (was != now).then(|| RefUpdate {
                 reference: reference.clone(),
-                before: sha.clone(),
-                after: current.clone(),
+                before: was,
+                after: now,
             })
         })
-        .collect::<Vec<_>>();
+        .collect();
     updates.sort_by(|left, right| left.reference.cmp(&right.reference));
     updates
 }
@@ -1770,18 +1780,17 @@ fn conflicted_files(worktree: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn failed_rebase(worktree: &str, output: &Output) -> RebaseResult {
-    RebaseResult::Failed(FailedRebase {
+fn failed_operation(worktree: &str, output: &Output) -> OperationResult {
+    OperationResult::Failed(FailedOperation {
         files: conflicted_files(worktree),
-        message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        message: git_error_message(output),
     })
 }
 
-fn completed_rebase(repo_path: &str, branch: &str, before: &HashMap<String, String>) -> Result<RebaseResult, String> {
-    Ok(RebaseResult::Completed(CompletedRebase {
-        head_sha: resolve_commit(repo_path, &format!("refs/heads/{branch}"))?,
-        branch: branch.to_string(),
-        updates: changed_refs(before, &branch_shas(repo_path)?),
+fn completed_operation(repo_path: &str, summary: String, before: &HashMap<String, String>) -> Result<OperationResult, String> {
+    Ok(OperationResult::Completed(CompletedOperation {
+        summary,
+        updates: changed_refs(before, &ref_shas(repo_path)?),
     }))
 }
 
@@ -1803,12 +1812,13 @@ fn discard_temporary_worktree(repo_path: &str, worktree: &str) {
     let _ = fs::remove_dir_all(worktree);
 }
 
-fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, branch: &str) -> Result<RebaseResult, String> {
+fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, branch: &str) -> Result<OperationResult, String> {
     let reference = format!("refs/heads/{branch}");
     resolve_commit(repo_path, &reference)?;
     resolve_commit(repo_path, onto)?;
     resolve_commit(repo_path, upstream)?;
-    let before = branch_shas(repo_path)?;
+    let summary = format!("Rebased {branch} onto {onto}.");
+    let before = ref_shas(repo_path)?;
 
     if let Some(worktree) = worktree_for_branch(repo_path, branch)? {
         if pending_operation(&worktree).is_some() {
@@ -1819,9 +1829,9 @@ fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, branch: &str)
         }
         let output = git_result(&worktree, &["rebase", "--onto", onto, upstream, branch])?;
         if output.status.success() {
-            return completed_rebase(repo_path, branch, &before);
+            return completed_operation(repo_path, summary, &before);
         }
-        let failure = failed_rebase(&worktree, &output);
+        let failure = failed_operation(&worktree, &output);
         let _ = git_result(&worktree, &["rebase", "--abort"]);
         return Ok(failure);
     }
@@ -1831,9 +1841,9 @@ fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, branch: &str)
     git_output_allow_empty(repo_path, &["worktree", "add", "--detach", &worktree, &reference])?;
     let result = git_result(&worktree, &["rebase", "--onto", onto, upstream, branch]).and_then(|output| {
         if output.status.success() {
-            completed_rebase(repo_path, branch, &before)
+            completed_operation(repo_path, summary, &before)
         } else {
-            Ok(failed_rebase(&worktree, &output))
+            Ok(failed_operation(&worktree, &output))
         }
     });
     discard_temporary_worktree(repo_path, &worktree);
@@ -1855,10 +1865,18 @@ fn restore_refs(repo_path: &str, updates: &[RefUpdate]) -> Result<(), String> {
         if worktree_is_dirty(&worktree)? {
             return Err(format!("{worktree} has uncommitted changes."));
         }
+        if update.before.is_empty() {
+            return Err(format!("{branch} is checked out at {worktree}."));
+        }
         worktrees.push(worktree);
     }
     for update in updates {
-        git_output_allow_empty(repo_path, &["update-ref", &update.reference, &update.before, &update.after])?;
+        let arguments = match (update.before.as_str(), update.after.as_str()) {
+            ("", after) => vec!["update-ref", "-d", &update.reference, after],
+            (before, "") => vec!["update-ref", &update.reference, before],
+            (before, after) => vec!["update-ref", &update.reference, before, after],
+        };
+        git_output_allow_empty(repo_path, &arguments)?;
     }
     for worktree in worktrees {
         git_output_allow_empty(&worktree, &["reset", "--hard"])?;
@@ -1889,7 +1907,7 @@ async fn rebase_onto(
     onto: String,
     upstream: String,
     branch: String,
-) -> Result<RebaseResult, String> {
+) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || rebase_branch_onto(&repo_path, &onto, &upstream, &branch))
         .await
         .map_err(|error| error.to_string())?
@@ -1900,6 +1918,584 @@ async fn undo_ref_updates(repo_path: String, updates: Vec<RefUpdate>) -> Result<
     tauri::async_runtime::spawn_blocking(move || restore_refs(&repo_path, &updates))
         .await
         .map_err(|error| error.to_string())?
+}
+
+fn git_error_message(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        "Git exited without a message.".to_string()
+    } else {
+        stdout
+    }
+}
+
+fn pending_operation_label(operation: &PendingOperation) -> &'static str {
+    match operation {
+        PendingOperation::Rebase => "rebasing",
+        PendingOperation::Merge => "merging",
+        PendingOperation::CherryPick => "cherry-picking",
+        PendingOperation::Bisect => "bisecting",
+    }
+}
+
+fn is_ancestor(repo_path: &str, ancestor: &str, descendant: &str) -> bool {
+    git_result(repo_path, &["merge-base", "--is-ancestor", ancestor, descendant])
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+// Lane 0 belongs to the default branch, and a local branch that is only ahead of its remote is the same
+// line of history, so the reservation starts at whichever of the two can reach the other.
+fn reserved_lane_tip(repo_path: &str) -> Option<String> {
+    let primary = primary_reference(repo_path).ok()?;
+    let primary_sha = resolve_commit(repo_path, &primary).ok()?;
+    let Some(local) = primary.strip_prefix("origin/") else {
+        return Some(primary_sha);
+    };
+    let Ok(local_sha) = resolve_commit(repo_path, &format!("refs/heads/{local}")) else {
+        return Some(primary_sha);
+    };
+    Some(if is_ancestor(repo_path, &primary_sha, &local_sha) {
+        local_sha
+    } else {
+        primary_sha
+    })
+}
+
+fn ensure_ref_name(repo_path: &str, prefix: &str, name: &str) -> Result<(), String> {
+    let reference = format!("{prefix}{name}");
+    let output = git_result(repo_path, &["check-ref-format", &reference])?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{name} is not a name Git can use."))
+    }
+}
+
+fn idle_worktree(repo_path: &str) -> Result<String, String> {
+    let worktree = worktree_path(repo_path)?;
+    if let Some(operation) = pending_operation(&worktree) {
+        return Err(format!("This worktree is already {}.", pending_operation_label(&operation)));
+    }
+    Ok(worktree)
+}
+
+fn run_worktree_operation(
+    repo_path: &str,
+    worktree: &str,
+    summary: String,
+    arguments: &[&str],
+    abort: Option<&[&str]>,
+) -> Result<OperationResult, String> {
+    let before = ref_shas(repo_path)?;
+    let output = git_result(worktree, arguments)?;
+    if output.status.success() {
+        return completed_operation(repo_path, summary, &before);
+    }
+    let failure = failed_operation(worktree, &output);
+    if let Some(abort) = abort {
+        let _ = git_result(worktree, abort);
+    }
+    Ok(failure)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryState {
+    current_branch: Option<String>,
+    head_sha: Option<String>,
+    is_detached: bool,
+    is_dirty: bool,
+    pending_operation: Option<PendingOperation>,
+    default_branch: Option<String>,
+    remote: Option<String>,
+}
+
+#[tauri::command(async)]
+fn merge_base(repo_path: String, left: String, right: String) -> Result<String, String> {
+    let left = resolve_commit(&repo_path, &left)?;
+    let right = resolve_commit(&repo_path, &right)?;
+    git_output(&repo_path, &["merge-base", &left, &right])
+        .ok_or_else(|| "These refs share no common history.".to_string())
+}
+
+#[tauri::command(async)]
+fn repository_state(repo_path: String) -> Result<RepositoryState, String> {
+    let worktree = worktree_path(&repo_path)?;
+    let current_branch = git_output(&worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let remotes = git_output_allow_empty(&repo_path, &["remote"]).unwrap_or_default();
+    let remote = remotes
+        .lines()
+        .find(|name| *name == "origin")
+        .or_else(|| remotes.lines().next())
+        .map(str::to_string);
+    Ok(RepositoryState {
+        head_sha: resolve_commit(&worktree, "HEAD").ok(),
+        is_detached: current_branch.is_none(),
+        is_dirty: worktree_is_dirty(&worktree)?,
+        pending_operation: pending_operation(&worktree),
+        default_branch: primary_reference(&repo_path).ok(),
+        current_branch,
+        remote,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckoutOptions {
+    create: Option<String>,
+    track: bool,
+    detach: bool,
+    stash: bool,
+}
+
+const CHECKOUT_STASH_MESSAGE: &str = "git-nav: set aside before checkout";
+
+fn checkout_reference(repo_path: &str, reference: &str, options: &CheckoutOptions) -> Result<OperationResult, String> {
+    let worktree = idle_worktree(repo_path)?;
+    if let Some(name) = &options.create {
+        ensure_ref_name(repo_path, "refs/heads/", name)?;
+    }
+    let mut arguments = vec!["switch".to_string()];
+    if options.detach {
+        arguments.push("--detach".to_string());
+    } else if let Some(name) = &options.create {
+        arguments.push("-c".to_string());
+        arguments.push(name.clone());
+        if options.track {
+            arguments.push("--track".to_string());
+        }
+    } else if options.track {
+        arguments.push("--track".to_string());
+    }
+    arguments.push(reference.to_string());
+    let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+    let before = ref_shas(repo_path)?;
+
+    if options.stash {
+        let stashed = git_result(&worktree, &["stash", "push", "--include-untracked", "--message", CHECKOUT_STASH_MESSAGE])?;
+        if !stashed.status.success() {
+            return Ok(failed_operation(&worktree, &stashed));
+        }
+    }
+
+    let output = git_result(&worktree, &arguments)?;
+    if !output.status.success() {
+        if options.stash {
+            let _ = git_result(&worktree, &["stash", "pop"]);
+        }
+        return Ok(failed_operation(&worktree, &output));
+    }
+
+    let landed = options.create.clone().unwrap_or_else(|| reference.to_string());
+    let mut summary = format!("Checked out {landed}.");
+    if options.stash && !git_result(&worktree, &["stash", "pop"])?.status.success() {
+        summary = format!("{summary} The set aside changes did not reapply, so they are still in the stash.");
+    }
+    completed_operation(repo_path, summary, &before)
+}
+
+#[tauri::command]
+async fn checkout_ref(repo_path: String, reference: String, options: CheckoutOptions) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || checkout_reference(&repo_path, &reference, &options))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PushOptions {
+    remote: String,
+    force: bool,
+    set_upstream: bool,
+    delete: bool,
+}
+
+fn push_reference(repo_path: &str, reference: &str, options: &PushOptions) -> Result<OperationResult, String> {
+    let worktree = worktree_path(repo_path)?;
+    let mut arguments = vec!["push".to_string()];
+    if options.force {
+        arguments.push("--force-with-lease".to_string());
+        arguments.push("--force-if-includes".to_string());
+    }
+    if options.set_upstream {
+        arguments.push("--set-upstream".to_string());
+    }
+    if options.delete {
+        arguments.push("--delete".to_string());
+    }
+    arguments.push(options.remote.clone());
+    arguments.push(reference.to_string());
+    let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+    let output = git_result(&worktree, &arguments)?;
+    if !output.status.success() {
+        return Ok(failed_operation(&worktree, &output));
+    }
+    let summary = if options.delete {
+        format!("Deleted {reference} from {}.", options.remote)
+    } else {
+        format!("Pushed {reference} to {}.", options.remote)
+    };
+    // Rewinding the local remote-tracking ref would hide the push rather than reverse it, so this reports no undo.
+    Ok(OperationResult::Completed(CompletedOperation { summary, updates: Vec::new() }))
+}
+
+#[tauri::command]
+async fn push_ref(repo_path: String, reference: String, options: PushOptions) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || push_reference(&repo_path, &reference, &options))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn upstream_of(repo_path: &str, branch: &str) -> Result<String, String> {
+    git_output(repo_path, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")])
+        .ok_or_else(|| format!("{branch} has no upstream branch."))
+}
+
+fn fast_forward_branch(repo_path: &str, branch: &str) -> Result<OperationResult, String> {
+    let upstream = upstream_of(repo_path, branch)?;
+    let (remote, remote_branch) = upstream
+        .split_once('/')
+        .ok_or_else(|| format!("Could not read the remote of {upstream}."))?;
+    let before = ref_shas(repo_path)?;
+    let fetched = git_result(repo_path, &["fetch", remote, remote_branch])?;
+    if !fetched.status.success() {
+        return Ok(OperationResult::Failed(FailedOperation { message: git_error_message(&fetched), files: Vec::new() }));
+    }
+
+    let summary = format!("Fast-forwarded {branch} to {upstream}.");
+    if let Some(worktree) = worktree_for_branch(repo_path, branch)? {
+        if pending_operation(&worktree).is_some() {
+            return Err(format!("{worktree} has a Git operation in progress."));
+        }
+        let output = git_result(&worktree, &["merge", "--ff-only", &upstream])?;
+        if !output.status.success() {
+            return Ok(failed_operation(&worktree, &output));
+        }
+        return completed_operation(repo_path, summary, &before);
+    }
+
+    let refspec = format!("{remote_branch}:{branch}");
+    let output = git_result(repo_path, &["fetch", remote, &refspec])?;
+    if !output.status.success() {
+        return Ok(OperationResult::Failed(FailedOperation { message: git_error_message(&output), files: Vec::new() }));
+    }
+    completed_operation(repo_path, summary, &before)
+}
+
+#[tauri::command]
+async fn pull_branch(repo_path: String, branch: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || fast_forward_branch(&repo_path, &branch))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeOptions {
+    mode: String,
+    message: Option<String>,
+}
+
+fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeOptions) -> Result<OperationResult, String> {
+    resolve_commit(repo_path, source)?;
+    let worktree = worktree_for_branch(repo_path, into)?
+        .ok_or_else(|| format!("{into} is not checked out in any worktree."))?;
+    if let Some(operation) = pending_operation(&worktree) {
+        return Err(format!("{worktree} is already {}.", pending_operation_label(&operation)));
+    }
+    if worktree_is_dirty(&worktree)? {
+        return Err(format!("{worktree} has uncommitted changes."));
+    }
+
+    let mut arguments = vec!["merge".to_string(), "--no-edit".to_string()];
+    match options.mode.as_str() {
+        "noFastForward" => arguments.push("--no-ff".to_string()),
+        "fastForwardOnly" => arguments.push("--ff-only".to_string()),
+        "squash" => arguments.push("--squash".to_string()),
+        _ => {}
+    }
+    if let Some(message) = options.message.as_ref().filter(|message| !message.trim().is_empty()) {
+        arguments.push("--message".to_string());
+        arguments.push(message.clone());
+    }
+    arguments.push(source.to_string());
+    let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+    let summary = if options.mode == "squash" {
+        format!("Squashed {source} into the working tree of {into}, ready to commit.")
+    } else {
+        format!("Merged {source} into {into}.")
+    };
+    run_worktree_operation(repo_path, &worktree, summary, &arguments, Some(&["merge", "--abort"]))
+}
+
+#[tauri::command]
+async fn merge_ref(repo_path: String, source: String, into: String, options: MergeOptions) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || merge_into_branch(&repo_path, &source, &into, &options))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn predicted_merge_conflicts(repo_path: &str, source: &str, into: &str) -> Result<ConflictPrediction, String> {
+    let Some(version) = git_version(repo_path) else {
+        return Ok(ConflictPrediction::Unknown { reason: "Could not read the installed Git version.".to_string() });
+    };
+    if version < MINIMUM_MERGE_TREE_VERSION {
+        let (major, minor) = MINIMUM_MERGE_TREE_VERSION;
+        return Ok(ConflictPrediction::Unknown {
+            reason: format!("Predicting conflicts requires Git {major}.{minor} or newer."),
+        });
+    }
+    let source_sha = resolve_commit(repo_path, source)?;
+    let into_sha = resolve_commit(repo_path, into)?;
+    if is_ancestor(repo_path, &source_sha, &into_sha) || is_ancestor(repo_path, &into_sha, &source_sha) {
+        return Ok(ConflictPrediction::Clean);
+    }
+    let output = git_result(repo_path, &["merge-tree", "-z", "--write-tree", "--name-only", &into_sha, &source_sha])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match output.status.code() {
+        Some(0) => Ok(ConflictPrediction::Clean),
+        Some(1) => Ok(ConflictPrediction::Conflicts(PredictedConflict {
+            commit: source_sha,
+            subject: git_output(repo_path, &["log", "-1", "--format=%s", source]).unwrap_or_default(),
+            files: parse_merge_tree_output(&stdout)?.1,
+        })),
+        _ => Ok(ConflictPrediction::Unknown { reason: git_error_message(&output) }),
+    }
+}
+
+#[tauri::command]
+async fn predict_merge_conflicts(repo_path: String, source: String, into: String) -> Result<ConflictPrediction, String> {
+    tauri::async_runtime::spawn_blocking(move || predicted_merge_conflicts(&repo_path, &source, &into))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchOptions {
+    checkout: bool,
+    track: bool,
+}
+
+fn create_branch_at(repo_path: &str, name: &str, start_point: &str, options: &BranchOptions) -> Result<OperationResult, String> {
+    ensure_ref_name(repo_path, "refs/heads/", name)?;
+    resolve_commit(repo_path, start_point)?;
+    if options.checkout {
+        return checkout_reference(
+            repo_path,
+            start_point,
+            &CheckoutOptions { create: Some(name.to_string()), track: options.track, detach: false, stash: false },
+        );
+    }
+    let mut arguments = vec!["branch"];
+    if options.track {
+        arguments.push("--track");
+    }
+    arguments.push(name);
+    arguments.push(start_point);
+    run_worktree_operation(repo_path, repo_path, format!("Created {name} at {start_point}."), &arguments, None)
+}
+
+#[tauri::command]
+async fn create_branch(repo_path: String, name: String, start_point: String, options: BranchOptions) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || create_branch_at(&repo_path, &name, &start_point, &options))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn rename_branch(repo_path: String, branch: String, name: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_ref_name(&repo_path, "refs/heads/", &name)?;
+        run_worktree_operation(
+            &repo_path,
+            &repo_path,
+            format!("Renamed {branch} to {name}."),
+            &["branch", "--move", &branch, &name],
+            None,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn create_tag(repo_path: String, name: String, target: String, message: Option<String>) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_ref_name(&repo_path, "refs/tags/", &name)?;
+        resolve_commit(&repo_path, &target)?;
+        let annotation = message.filter(|message| !message.trim().is_empty());
+        let mut arguments = vec!["tag"];
+        if let Some(message) = &annotation {
+            arguments.push("--annotate");
+            arguments.push("--message");
+            arguments.push(message);
+        }
+        arguments.push(&name);
+        arguments.push(&target);
+        run_worktree_operation(&repo_path, &repo_path, format!("Tagged {target} as {name}."), &arguments, None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn delete_tag(repo_path: String, name: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_worktree_operation(&repo_path, &repo_path, format!("Deleted tag {name}."), &["tag", "--delete", &name], None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn cherry_pick_range(repo_path: String, base: String, tip: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let worktree = idle_worktree(&repo_path)?;
+        if worktree_is_dirty(&worktree)? {
+            return Err("This worktree has uncommitted changes.".to_string());
+        }
+        let range = format!("{base}..{tip}");
+        run_worktree_operation(
+            &repo_path,
+            &worktree,
+            format!("Cherry-picked {range}."),
+            &["cherry-pick", &range],
+            Some(&["cherry-pick", "--abort"]),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn revert_range(repo_path: String, base: String, tip: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let worktree = idle_worktree(&repo_path)?;
+        if worktree_is_dirty(&worktree)? {
+            return Err("This worktree has uncommitted changes.".to_string());
+        }
+        let range = format!("{base}..{tip}");
+        run_worktree_operation(
+            &repo_path,
+            &worktree,
+            format!("Reverted {range}."),
+            &["revert", "--no-edit", &range],
+            Some(&["revert", "--abort"]),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn reset_current(repo_path: String, target: String, mode: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let worktree = idle_worktree(&repo_path)?;
+        let sha = resolve_commit(&repo_path, &target)?;
+        let flag = match mode.as_str() {
+            "soft" => "--soft",
+            "hard" => "--hard",
+            _ => "--mixed",
+        };
+        run_worktree_operation(
+            &repo_path,
+            &worktree,
+            format!("Reset to {}.", &sha[..8.min(sha.len())]),
+            &["reset", flag, &sha],
+            None,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StashEntry {
+    name: String,
+    sha: String,
+    message: String,
+    branch: Option<String>,
+    date: String,
+}
+
+fn parse_stash_entries(output: &str) -> Vec<StashEntry> {
+    output
+        .split('\0')
+        .filter(|record| !record.trim().is_empty())
+        .filter_map(|record| {
+            let mut fields = record.trim_start_matches('\n').split('\u{1f}');
+            let name = fields.next()?.to_string();
+            let sha = fields.next()?.to_string();
+            let subject = fields.next().unwrap_or_default();
+            let date = fields.next().unwrap_or_default().to_string();
+            // Git writes "WIP on main: 1a2b3c subject" for an automatic message and "On main: text" for a named one.
+            let (branch, message) = match subject.split_once(": ") {
+                Some((source, message)) => (
+                    source
+                        .strip_prefix("WIP on ")
+                        .or_else(|| source.strip_prefix("On "))
+                        .map(str::to_string),
+                    message.to_string(),
+                ),
+                None => (None, subject.to_string()),
+            };
+            Some(StashEntry { name, sha, message, branch, date })
+        })
+        .collect()
+}
+
+#[tauri::command(async)]
+fn stash_list(repo_path: String) -> Result<Vec<StashEntry>, String> {
+    let output = git_output_allow_empty(
+        &repo_path,
+        &["stash", "list", "-z", "--format=%gd%x1f%H%x1f%gs%x1f%aI"],
+    )?;
+    Ok(parse_stash_entries(&output))
+}
+
+#[tauri::command]
+async fn stash_changes(repo_path: String, message: Option<String>, include_untracked: bool) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let worktree = idle_worktree(&repo_path)?;
+        let mut arguments = vec!["stash".to_string(), "push".to_string()];
+        if include_untracked {
+            arguments.push("--include-untracked".to_string());
+        }
+        if let Some(message) = message.as_ref().filter(|message| !message.trim().is_empty()) {
+            arguments.push("--message".to_string());
+            arguments.push(message.clone());
+        }
+        let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
+        run_worktree_operation(&repo_path, &worktree, "Stashed the uncommitted changes.".to_string(), &arguments, None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn stash_action(repo_path: String, name: String, sha: String, action: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let worktree = idle_worktree(&repo_path)?;
+        // The reflog selector shifts as entries come and go, so the sha the menu was built from has to still be there.
+        if resolve_commit(&repo_path, &name)? != sha {
+            return Err("The stash list changed. Refresh and try again.".to_string());
+        }
+        let (verb, summary) = match action.as_str() {
+            "pop" => ("pop", format!("Restored {name} and removed it from the stash.")),
+            "drop" => ("drop", format!("Dropped {name}.")),
+            _ => ("apply", format!("Applied {name}.")),
+        };
+        run_worktree_operation(&repo_path, &worktree, summary, &["stash", verb, &name], None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -2196,16 +2792,35 @@ mod tests {
     }
 
     #[test]
-    fn reports_only_the_refs_an_operation_moved() {
+    fn reports_the_refs_an_operation_moved_created_and_deleted() {
         let before = parse_ref_shas("refs/heads/main\0aaa\nrefs/heads/topic\0bbb\nrefs/heads/other\0ccc");
-        let after = parse_ref_shas("refs/heads/main\0aaa\nrefs/heads/topic\0ddd");
+        let after = parse_ref_shas("refs/heads/main\0aaa\nrefs/heads/topic\0ddd\nrefs/tags/v1\0eee");
 
         let updates = changed_refs(&before, &after);
 
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].reference, "refs/heads/topic");
-        assert_eq!(updates[0].before, "bbb");
-        assert_eq!(updates[0].after, "ddd");
+        assert_eq!(updates.len(), 3);
+        assert_eq!(updates[0].reference, "refs/heads/other");
+        assert_eq!((updates[0].before.as_str(), updates[0].after.as_str()), ("ccc", ""));
+        assert_eq!(updates[1].reference, "refs/heads/topic");
+        assert_eq!((updates[1].before.as_str(), updates[1].after.as_str()), ("bbb", "ddd"));
+        assert_eq!(updates[2].reference, "refs/tags/v1");
+        assert_eq!((updates[2].before.as_str(), updates[2].after.as_str()), ("", "eee"));
+    }
+
+    #[test]
+    fn reads_the_branch_and_message_of_each_stash_entry() {
+        let entries = parse_stash_entries(concat!(
+            "stash@{0}\u{1f}aaa\u{1f}WIP on main: 1a2b3c4 last commit\u{1f}2026-01-01T00:00:00+00:00\0",
+            "stash@{1}\u{1f}bbb\u{1f}On feature: named work\u{1f}2026-01-02T00:00:00+00:00\0",
+        ));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "stash@{0}");
+        assert_eq!(entries[0].sha, "aaa");
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert_eq!(entries[0].message, "1a2b3c4 last commit");
+        assert_eq!(entries[1].branch.as_deref(), Some("feature"));
+        assert_eq!(entries[1].message, "named work");
     }
 
     #[test]
@@ -2500,8 +3115,155 @@ mod tests {
         fs::remove_dir_all(&path).unwrap();
 
         assert!(matches!(prediction, ConflictPrediction::Clean));
-        assert!(matches!(rebase, RebaseResult::Completed(_)));
+        assert!(matches!(rebase, OperationResult::Completed(_)));
         assert_eq!(replayed.lines().collect::<Vec<_>>(), vec!["add a file"]);
+    }
+
+    fn scratch_repository(name: &str) -> (String, impl Fn(&[&str])) {
+        let path = env::temp_dir()
+            .join(format!("git-nav-{name}-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run_path = path.clone();
+        let run = move |arguments: &[&str]| {
+            let output = git_result(&run_path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        (path, run)
+    }
+
+    #[test]
+    fn reserves_lane_zero_for_the_local_branch_that_is_ahead_of_its_remote() {
+        let (path, run) = scratch_repository("lane-tip");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+        run(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        let base = resolve_commit(&path, "refs/heads/main").unwrap();
+        let synced = reserved_lane_tip(&path);
+
+        run(&["commit", "--quiet", "--allow-empty", "--message", "ahead"]);
+        let local = resolve_commit(&path, "refs/heads/main").unwrap();
+        let ahead = reserved_lane_tip(&path);
+
+        run(&["checkout", "--quiet", "-b", "other", &base]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "remote side"]);
+        run(&["update-ref", "refs/remotes/origin/main", "refs/heads/other"]);
+        run(&["checkout", "--quiet", "main"]);
+        let remote = resolve_commit(&path, "refs/heads/other").unwrap();
+        let diverged = reserved_lane_tip(&path);
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(synced.as_deref(), Some(base.as_str()));
+        assert_eq!(ahead.as_deref(), Some(local.as_str()));
+        // Divergence is not one line of history, so the remote keeps the lane and the local branch takes its own.
+        assert_eq!(diverged.as_deref(), Some(remote.as_str()));
+    }
+
+    #[test]
+    fn carries_uncommitted_work_across_a_stashed_checkout() {
+        let (path, run) = scratch_repository("checkout-stash");
+        fs::write(Path::new(&path).join("tracked.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["branch", "topic"]);
+        fs::write(Path::new(&path).join("tracked.txt"), "work in progress\n").unwrap();
+
+        let result = checkout_reference(
+            &path,
+            "topic",
+            &CheckoutOptions { create: None, track: false, detach: false, stash: true },
+        )
+        .unwrap();
+        let branch = git_output(&path, &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        let restored = fs::read_to_string(Path::new(&path).join("tracked.txt")).unwrap();
+        let stashes = git_output_allow_empty(&path, &["stash", "list"]).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(result, OperationResult::Completed(_)));
+        assert_eq!(branch, "topic");
+        assert_eq!(restored, "work in progress\n");
+        assert!(stashes.trim().is_empty());
+    }
+
+    #[test]
+    fn aborts_a_conflicted_merge_and_leaves_the_worktree_alone() {
+        let (path, run) = scratch_repository("merge-conflict");
+        let write = |contents: &str| fs::write(Path::new(&path).join("shared.txt"), contents).unwrap();
+        write("base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "topic"]);
+        write("topic\n");
+        run(&["commit", "--quiet", "--all", "--message", "topic"]);
+        run(&["checkout", "--quiet", "main"]);
+        write("main\n");
+        run(&["commit", "--quiet", "--all", "--message", "main"]);
+
+        let options = MergeOptions { mode: "default".to_string(), message: None };
+        let result = merge_into_branch(&path, "topic", "main", &options).unwrap();
+        let pending = pending_operation(&path);
+        let dirty = worktree_is_dirty(&path).unwrap();
+        let head = git_output(&path, &["log", "-1", "--format=%s"]).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        let OperationResult::Failed(failure) = result else {
+            panic!("a conflicting merge should not complete");
+        };
+        assert_eq!(failure.files, vec!["shared.txt".to_string()]);
+        assert!(pending.is_none());
+        assert!(!dirty);
+        assert_eq!(head, "main");
+    }
+
+    #[test]
+    fn reports_the_moved_branch_of_a_fast_forward_merge() {
+        let (path, run) = scratch_repository("merge-forward");
+        fs::write(Path::new(&path).join("file.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        let base = resolve_commit(&path, "refs/heads/main").unwrap();
+        run(&["checkout", "--quiet", "-b", "topic"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "ahead"]);
+        let topic = resolve_commit(&path, "refs/heads/topic").unwrap();
+        run(&["checkout", "--quiet", "main"]);
+
+        let options = MergeOptions { mode: "default".to_string(), message: None };
+        let result = merge_into_branch(&path, "topic", "main", &options).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        let OperationResult::Completed(completed) = result else {
+            panic!("a fast-forward merge should complete");
+        };
+        assert_eq!(completed.updates.len(), 1);
+        assert_eq!(completed.updates[0].reference, "refs/heads/main");
+        assert_eq!((completed.updates[0].before.as_str(), completed.updates[0].after.as_str()), (base.as_str(), topic.as_str()));
+    }
+
+    #[test]
+    fn undoes_a_created_branch_by_deleting_it() {
+        let (path, run) = scratch_repository("undo-create");
+        fs::write(Path::new(&path).join("file.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+
+        let result = create_branch_at(&path, "topic", "main", &BranchOptions { checkout: false, track: false }).unwrap();
+        let OperationResult::Completed(completed) = result else {
+            panic!("creating a branch should complete");
+        };
+        restore_refs(&path, &completed.updates).unwrap();
+        let branches = git_output_allow_empty(&path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(completed.updates.len(), 1);
+        assert_eq!(completed.updates[0].reference, "refs/heads/topic");
+        assert_eq!(completed.updates[0].before, "");
+        assert_eq!(branches.lines().collect::<Vec<_>>(), vec!["main"]);
     }
 }
 
@@ -2586,7 +3348,24 @@ pub fn run() {
             diff_file,
             predict_rebase_conflicts,
             branch_operation_state,
+            repository_state,
+            merge_base,
             rebase_onto,
+            checkout_ref,
+            push_ref,
+            pull_branch,
+            merge_ref,
+            predict_merge_conflicts,
+            create_branch,
+            rename_branch,
+            create_tag,
+            delete_tag,
+            cherry_pick_range,
+            revert_range,
+            reset_current,
+            stash_list,
+            stash_changes,
+            stash_action,
             undo_ref_updates
         ])
         .setup(move |app| {

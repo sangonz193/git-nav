@@ -34,17 +34,28 @@ export type DisplayRef = {
   branch: string | null
   label: string
   checkedOut: boolean
-  remote: boolean
   tag: boolean
   sync: BranchSync | null
   worktrees: CheckedOutWorktree[]
 }
 
+export type RefKind = "branch" | "remote" | "tag"
+
 export type CommitSelection = {
+  kind: "commits"
+  branches: { branch: string, sha: string }[]
   commits: Commit[]
   tip: Commit
   base: Commit | null
 }
+
+export type RefSelection = {
+  kind: RefKind
+  ref: DisplayRef
+  sha: string
+}
+
+export type Selection = CommitSelection | RefSelection
 
 export const ROW_HEIGHT = 32
 export const GRAPH_HEADER_HEIGHT = 32
@@ -56,9 +67,13 @@ export const GRAPH_MAX_WIDTH = 480
 export const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#22d3ee", "#fb923c"]
 const REF_TAIL_LENGTH = 8
 
-// The canvas is pinned below the sticky header, so a full viewport height would overflow the scrolled content and drag the canvas off that anchor at the end of the scroll.
+// The canvas is placed by hand on every scroll frame, so it reaches past the viewport to cover what a fast
+// scroll uncovers before the next frame lands.
+export const GRAPH_CANVAS_OVERSCAN = 2 * ROW_HEIGHT
+
 export function graphCanvasHeight(viewportHeight: number) {
-  return Math.max(0, viewportHeight - GRAPH_HEADER_HEIGHT)
+  const visible = Math.max(0, viewportHeight - GRAPH_HEADER_HEIGHT)
+  return visible === 0 ? 0 : visible + 2 * GRAPH_CANVAS_OVERSCAN
 }
 
 export function clampGraphWidth(width: number) {
@@ -77,6 +92,16 @@ export function fitGraphWidth(commits: Commit[]) {
     }
   }
   return clampGraphWidth(GRAPH_GUTTER + lanes * LANE_WIDTH)
+}
+
+export function laneColor(lane: number) {
+  return GRAPH_COLORS[lane % GRAPH_COLORS.length]
+}
+
+// The first parent continues the line the commit is already on, and every other parent is the tip of a branch
+// it merged in, which is drawn on the lane that parent lands on.
+export function parentEdgeColor(commit: Commit, parentIndex: number, endLane: number) {
+  return laneColor(parentIndex === 0 ? commit.lane : endLane)
 }
 
 export function isCurrentCheckout(refs: string[]) {
@@ -102,6 +127,35 @@ export function unpushedHashes(commits: Commit[]) {
     }
   }
   return unpushed
+}
+
+// A merge edge can land on a lane that is already carrying a line, in which case it joins that line rather than
+// opening it, and only the commit that opens a lane draws the segment leaving it.
+export function startsLane(commits: Commit[], index: number, lane: number) {
+  const commit = commits[index]
+  return commit.parentLanes.includes(lane) && (lane === commit.lane || !commits[index - 1]?.activeLanes[lane])
+}
+
+// A lane keeps drawing the edge of the commit that last claimed it, so the rows it merely passes through
+// belong to that commit and have to read the same as the rest of its line.
+export function unpushedLanes(commits: Commit[], unpushed: Set<string>) {
+  const owners: boolean[] = []
+  return commits.map((commit, index) => {
+    const local = unpushed.has(commit.hash)
+    for (const lane of commit.parentLanes) {
+      if (startsLane(commits, index, lane)) {
+        owners[lane] = local
+      }
+    }
+    let mask = 0
+    // Beyond the width a graph can show there is nothing left to shade, so the mask stops at the bits a number holds.
+    for (let lane = 0; lane < commit.activeLanes.length && lane < 31; lane += 1) {
+      if (commit.activeLanes[lane] && owners[lane]) {
+        mask |= 1 << lane
+      }
+    }
+    return mask
+  })
 }
 
 export function commitFromTuple([hash, parents, author, date, refs, subject, lane, parentLanes, laneCount, incomingLanes, activeLanes]: CommitBatch[number]): Commit {
@@ -155,7 +209,38 @@ export function commitSelection(commits: Commit[], indexA: number, indexB: numbe
     return null
   }
   const [baseHash] = path[path.length - 1].parents
-  return { commits: path, tip: path[0], base: baseHash ? commits.find((commit) => commit.hash === baseHash) ?? null : null }
+  return {
+    kind: "commits",
+    branches: branchesContaining(commits, Math.min(indexA, indexB)),
+    commits: path,
+    tip: path[0],
+    base: baseHash ? commits.find((commit) => commit.hash === baseHash) ?? null : null,
+  }
+}
+
+export function refKind(ref: DisplayRef): RefKind {
+  return ref.tag ? "tag" : ref.branch ? "branch" : "remote"
+}
+
+export function refSelection(ref: DisplayRef, sha: string): RefSelection {
+  return { kind: refKind(ref), ref, sha }
+}
+
+// Rewriting a range needs a branch that holds it, and a branch holds it when its tip still reaches the newest
+// selected commit. The nearest such tip comes first because it carries the fewest unselected commits along.
+export function branchesContaining(commits: Commit[], tipIndex: number) {
+  const branches: { branch: string, sha: string }[] = []
+  for (let index = tipIndex; index >= 0; index -= 1) {
+    if (commits[index].refs.length === 0) {
+      continue
+    }
+    for (const ref of displayRefs(commits[index].refs)) {
+      if (ref.branch && ancestryPath(commits, index, tipIndex).length > 0) {
+        branches.push({ branch: ref.branch, sha: commits[index].hash })
+      }
+    }
+  }
+  return branches
 }
 
 export function relativeDate(value: string) {
@@ -246,23 +331,23 @@ export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorkt
     if (hasRemote) {
       consumed.add(remote)
     }
-    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, remote: false, tag: false, sync: branchSync?.get(branch) ?? null, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
+    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, tag: false, sync: branchSync?.get(branch) ?? null, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
   }
 
   for (const ref of branchRefs) {
     if (!consumed.has(ref) && ref !== "origin/HEAD") {
-      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, remote: ref.startsWith("origin/"), tag: false, sync: null, worktrees: [] })
+      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, tag: false, sync: null, worktrees: [] })
     }
   }
 
   for (const ref of refs) {
     if (ref.startsWith("tag: ")) {
-      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, remote: false, tag: true, sync: null, worktrees: [] })
+      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, tag: true, sync: null, worktrees: [] })
     }
   }
 
   if (checkedOut?.startsWith("origin/")) {
-    result.push({ branch: null, label: checkedOut, checkedOut: true, remote: true, tag: false, sync: null, worktrees: [] })
+    result.push({ branch: null, label: checkedOut, checkedOut: true, tag: false, sync: null, worktrees: [] })
   }
 
   return result.sort((a, b) => refPriority(a) - refPriority(b))

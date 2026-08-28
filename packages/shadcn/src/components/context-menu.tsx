@@ -36,6 +36,19 @@ function ContextMenuItem({ className, ...props }: React.ComponentProps<typeof Co
   )
 }
 
+function ContextMenuLabel({ className, ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Label>) {
+  return (
+    <ContextMenuPrimitive.Label
+      className={cn("px-2 py-1.5 text-xs font-medium text-muted-foreground", className)}
+      {...props}
+    />
+  )
+}
+
+function ContextMenuSeparator({ className, ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Separator>) {
+  return <ContextMenuPrimitive.Separator className={cn("-mx-1 my-1 h-px bg-border", className)} {...props} />
+}
+
 function ContextMenuSubTrigger({ children, className, ...props }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger>) {
   return (
     <ContextMenuPrimitive.SubTrigger
@@ -65,4 +78,4 @@ function ContextMenuSubContent({ className, ...props }: React.ComponentProps<typ
   )
 }
 
-export { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger }
+export { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger }

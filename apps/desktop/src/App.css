@@ -188,10 +188,10 @@ body {
 }
 
 .commit-graph-canvas {
-  left: auto;
+  left: 0;
   pointer-events: none;
-  position: sticky;
-  top: var(--graph-header-height, 32px);
+  position: absolute;
+  top: 0;
   width: var(--graph-width, 112px);
   z-index: 1;
 }
@@ -366,6 +366,11 @@ body {
   opacity: 0.9;
 }
 
+/* An upstream that was deleted is the one genuinely stale thing a chip can report. */
+.commit-ref-sync-gone {
+  color: #fbbf24;
+}
+
 .commit-ref-current .commit-ref-sync {
   color: inherit;
   opacity: 0.75;
@@ -391,15 +396,16 @@ button.commit-ref-changes:hover {
   background: rgb(251 191 36 / 24%);
 }
 
+/* A ref that only exists on the remote keeps the colour of its line and gives up its fill, so it ranks
+   below the local branches without losing the branch it belongs to. */
 .commit-ref-remote {
-  background: color-mix(in srgb, var(--muted-foreground) 10%, transparent);
-  border-color: color-mix(in srgb, var(--muted-foreground) 26%, transparent);
-  color: var(--muted-foreground);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--commit-ref-color) 28%, transparent);
+  color: color-mix(in srgb, var(--commit-ref-color) 55%, var(--muted-foreground));
 }
 
-.commit-ref-remote[aria-haspopup="menu"]:hover,
-.commit-ref-remote[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--muted-foreground) 22%, transparent);
+.commit-ref-tag {
+  background: transparent;
 }
 
 .commit-ref-current {
@@ -409,18 +415,25 @@ button.commit-ref-changes:hover {
   font-weight: 600;
 }
 
-.commit-ref[aria-haspopup="menu"] {
-  cursor: pointer;
-}
-
-.commit-ref[aria-haspopup="menu"]:hover,
+button.commit-ref:hover,
 .commit-ref[aria-expanded="true"] {
   background: color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
 }
 
-.commit-ref-current[aria-haspopup="menu"]:hover,
+button.commit-ref-remote:hover,
+button.commit-ref-tag:hover,
+.commit-ref-remote[aria-expanded="true"],
+.commit-ref-tag[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--commit-ref-color) 18%, transparent);
+}
+
+button.commit-ref-current:hover,
 .commit-ref-current[aria-expanded="true"] {
   background: color-mix(in srgb, var(--commit-ref-color) 84%, #09090b);
+}
+
+.commit-ref-selected {
+  box-shadow: 0 0 0 1px var(--background), 0 0 0 2px var(--commit-ref-color);
 }
 
 .commit-ref-head {
@@ -438,6 +451,19 @@ button.commit-ref-changes:hover {
   background: transparent;
   border: 1px solid color-mix(in srgb, #09090b 45%, transparent);
   padding: 0 2px;
+}
+
+.commit-ref-worktree {
+  border: 1px solid color-mix(in srgb, var(--commit-ref-color) 45%, transparent);
+  border-radius: 2px;
+  flex: none;
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.4;
+  max-width: 60px;
+  overflow: hidden;
+  padding: 0 2px;
+  text-overflow: ellipsis;
 }
 
 .commit-graph-status {
