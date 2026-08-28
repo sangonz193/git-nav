@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "bun --filter=desktop run build",
+    "bump": "bun scripts/bump.ts",
     "build:package": "bun --filter=git-nav run build:package",
     "dev": "bun --filter=desktop run dev",
     "dev:web": "bun --filter=desktop run dev:web",
