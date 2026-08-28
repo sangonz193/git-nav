@@ -16,6 +16,7 @@ import {
 } from "@workspace/shadcn/components/dropdown-menu"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
+import { panelId } from "../../lib/panel-id"
 
 export type RepositoryPanelParams = {
   name: string
@@ -35,7 +36,7 @@ const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
 function addGraphPanel(containerApi: IWatermarkPanelProps["containerApi"] | IDockviewHeaderActionsProps["containerApi"], params: RepositoryPanelParams, referencePanel?: IDockviewHeaderActionsProps["activePanel"]) {
   containerApi.addPanel({
     component: "graph",
-    id: `repository-graph-${crypto.randomUUID()}`,
+    id: panelId("graph"),
     params,
     ...(referencePanel ? { position: { direction: "within" as const, referencePanel } } : {}),
     title: "Graph",
@@ -45,7 +46,7 @@ function addGraphPanel(containerApi: IWatermarkPanelProps["containerApi"] | IDoc
 function addDiffPanel(containerApi: IDockviewHeaderActionsProps["containerApi"], params: RepositoryPanelParams, referencePanel: IDockviewHeaderActionsProps["activePanel"]) {
   containerApi.addPanel({
     component: "diff",
-    id: `repository-diff-${crypto.randomUUID()}`,
+    id: panelId("diff"),
     params: { ...params, baseRef: "HEAD~1", headRef: "HEAD" },
     position: { direction: "within", referencePanel },
     title: "Diff",

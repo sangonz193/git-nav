@@ -15,6 +15,9 @@ use tauri::{
     WindowEvent,
 };
 
+mod server;
+
+const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
@@ -231,6 +234,23 @@ struct RecentRepositories {
     repositories: Vec<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectoryEntry {
+    name: String,
+    path: String,
+    is_repository: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectoryListing {
+    path: String,
+    parent: Option<String>,
+    is_repository: bool,
+    entries: Vec<DirectoryEntry>,
+}
+
 #[derive(Clone)]
 struct OpenWorktree {
     project_id: String,
@@ -240,23 +260,25 @@ struct OpenWorktree {
 #[derive(Default)]
 struct OpenWorktrees(Mutex<HashMap<String, OpenWorktree>>);
 
-fn recent_repositories_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
+/// Mirrors Tauri's `app_data_dir` so the desktop app and `git-nav serve` share one store.
+fn data_dir() -> Result<PathBuf, String> {
+    let data_dir = dirs::data_dir()
+        .ok_or_else(|| "Could not locate the user data directory.".to_string())?
+        .join(APPLICATION_IDENTIFIER);
     fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
-    Ok(data_dir.join("recent-repositories.json"))
+    Ok(data_dir)
 }
 
-fn pull_request_database_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
-    Ok(data_dir.join("pull-requests.sqlite3"))
+fn recent_repositories_path() -> Result<PathBuf, String> {
+    data_dir().map(|dir| dir.join("recent-repositories.json"))
 }
 
-fn load_recent_paths(app: &AppHandle) -> Result<Vec<String>, String> {
-    let path = recent_repositories_path(app)?;
+fn pull_request_database_path() -> Result<PathBuf, String> {
+    data_dir().map(|dir| dir.join("pull-requests.sqlite3"))
+}
+
+fn load_recent_paths() -> Result<Vec<String>, String> {
+    let path = recent_repositories_path()?;
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -274,8 +296,8 @@ fn load_recent_paths(app: &AppHandle) -> Result<Vec<String>, String> {
         .map_err(|error| error.to_string())
 }
 
-fn save_recent_path(app: &AppHandle, repository_path: &str) -> Result<(), String> {
-    let mut paths = load_recent_paths(app)?;
+fn save_recent_path(repository_path: &str) -> Result<(), String> {
+    let mut paths = load_recent_paths()?;
     paths.retain(|path| path != repository_path);
     paths.insert(0, repository_path.to_string());
     paths.truncate(MAX_RECENT_REPOSITORIES);
@@ -285,7 +307,7 @@ fn save_recent_path(app: &AppHandle, repository_path: &str) -> Result<(), String
         repositories: Vec::new(),
     })
     .map_err(|error| error.to_string())?;
-    fs::write(recent_repositories_path(app)?, contents).map_err(|error| error.to_string())
+    fs::write(recent_repositories_path()?, contents).map_err(|error| error.to_string())
 }
 
 fn git_output(path: &str, arguments: &[&str]) -> Option<String> {
@@ -948,6 +970,71 @@ fn cleanup_candidates(
     Ok(candidates)
 }
 
+/// Backs the browser folder picker, which has no equivalent of the native directory dialog.
+fn directory_listing(path: Option<&str>) -> Result<DirectoryListing, String> {
+    let path = match path.filter(|path| !path.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => dirs::home_dir().ok_or_else(|| "Could not locate the home directory.".to_string())?,
+    };
+    let path = fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut entries = fs::read_dir(&path)
+        .map_err(|error| format!("{}: {error}", path.display()))?
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .map(|entry| {
+            let path = entry.path();
+            DirectoryEntry {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                is_repository: path.join(".git").exists(),
+                path: path.to_string_lossy().into_owned(),
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.name.to_lowercase());
+
+    Ok(DirectoryListing {
+        parent: path
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned()),
+        is_repository: path.join(".git").exists(),
+        path: path.to_string_lossy().into_owned(),
+        entries,
+    })
+}
+
+fn cleanup_database_path(options: &CleanupOptions) -> Result<Option<PathBuf>, String> {
+    options
+        .delete_merged_pull_request_branches
+        .then(pull_request_database_path)
+        .transpose()
+}
+
+fn delete_cleanup_candidates(
+    repo_path: &str,
+    options: &CleanupOptions,
+    database_path: Option<PathBuf>,
+) -> Result<BranchCleanup, String> {
+    let candidates = cleanup_candidates(repo_path, options, database_path)?
+        .into_iter()
+        .map(|candidate| candidate.branch)
+        .collect::<Vec<_>>();
+    let mut deleted = Vec::new();
+    let mut failed = Vec::new();
+    for branch in &candidates {
+        if git_succeeds(repo_path, &["branch", "-D", "--", branch]) {
+            deleted.push(branch.clone());
+        } else {
+            failed.push(branch.clone());
+        }
+    }
+    Ok(BranchCleanup {
+        candidates,
+        deleted,
+        failed,
+    })
+}
+
 fn parse_worktree_records(output: &str) -> Vec<WorktreeRecord> {
     let mut worktrees = Vec::new();
 
@@ -1034,17 +1121,26 @@ fn project_at(path: &str, open_worktrees: &OpenWorktrees) -> Result<Project, Str
     })
 }
 
-#[tauri::command]
-fn recent_projects(
-    app: AppHandle,
-    open_worktrees: tauri::State<OpenWorktrees>,
-) -> Result<Vec<Project>, String> {
+fn recent_project_list(open_worktrees: &OpenWorktrees) -> Result<Vec<Project>, String> {
     let mut project_ids = HashSet::new();
-    Ok(load_recent_paths(&app)?
+    Ok(load_recent_paths()?
         .into_iter()
-        .filter_map(|path| project_at(&path, &open_worktrees).ok())
+        .filter_map(|path| project_at(&path, open_worktrees).ok())
         .filter(|project| project_ids.insert(project.id.clone()))
         .collect())
+}
+
+/// Canonicalizes a user-supplied path to its worktree root and records it as recently opened.
+fn remember_repository(path: &str, open_worktrees: &OpenWorktrees) -> Result<Project, String> {
+    let worktree_path = worktree_path(path)?;
+    let project = project_at(&worktree_path, open_worktrees)?;
+    save_recent_path(&project.path)?;
+    Ok(project)
+}
+
+#[tauri::command]
+fn recent_projects(open_worktrees: tauri::State<OpenWorktrees>) -> Result<Vec<Project>, String> {
+    recent_project_list(&open_worktrees)
 }
 
 #[tauri::command]
@@ -1056,9 +1152,8 @@ fn project_snapshot(
 }
 
 fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
+    let project = remember_repository(path, &app.state::<OpenWorktrees>())?;
     let worktree_path = worktree_path(path)?;
-    let project = project_at(&worktree_path, &app.state::<OpenWorktrees>())?;
-    save_recent_path(app, &project.path)?;
     let label = format!(
         "repository-{}",
         worktree_path.as_bytes().iter().fold(0u64, |hash, byte| hash
@@ -1216,17 +1311,17 @@ fn parse_commit(
     ])
 }
 
-#[tauri::command]
-fn stream_commit_graph(
-    repo_path: String,
-    on_batch: Channel<Vec<Vec<serde_json::Value>>>,
+/// Feeds `on_batch` as `git log` produces rows; returning `Err` from it stops the walk early.
+fn walk_commit_graph(
+    repo_path: &str,
+    mut on_batch: impl FnMut(Vec<Vec<serde_json::Value>>) -> Result<(), String>,
 ) -> Result<(), String> {
-    let mut reserved_tip = reserved_lane_tip(&repo_path);
+    let mut reserved_tip = reserved_lane_tip(repo_path);
     let mut child = Command::new("git")
         .args([
             "--no-optional-locks",
             "-C",
-            &repo_path,
+            repo_path,
             "log",
             "--all",
             "--topo-order",
@@ -1242,6 +1337,15 @@ fn stream_commit_graph(
     let mut lanes = Vec::new();
     let mut batch = Vec::with_capacity(COMMIT_BATCH_SIZE);
 
+    // A send failure means the receiver is gone, so stop git rather than walking the whole history.
+    let mut deliver = |batch| match on_batch(batch) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = child.kill();
+            Err(error)
+        }
+    };
+
     for line in BufReader::new(stdout).lines() {
         let line = line.map_err(|error| error.to_string())?;
         if let Some(commit) = parse_commit(&line, &mut lanes, &mut reserved_tip) {
@@ -1249,13 +1353,13 @@ fn stream_commit_graph(
         }
 
         if batch.len() == COMMIT_BATCH_SIZE {
-            on_batch.send(batch).map_err(|error| error.to_string())?;
+            deliver(batch)?;
             batch = Vec::with_capacity(COMMIT_BATCH_SIZE);
         }
     }
 
     if !batch.is_empty() {
-        on_batch.send(batch).map_err(|error| error.to_string())?;
+        deliver(batch)?;
     }
 
     let status = child.wait().map_err(|error| error.to_string())?;
@@ -1286,8 +1390,18 @@ fn repository_fingerprint(repo_path: String) -> String {
 }
 
 #[tauri::command]
-async fn inferred_squash_merge_edges(app: AppHandle, repo_path: String) -> Vec<(String, String)> {
-    let Ok(database_path) = pull_request_database_path(&app) else {
+fn stream_commit_graph(
+    repo_path: String,
+    on_batch: Channel<Vec<Vec<serde_json::Value>>>,
+) -> Result<(), String> {
+    walk_commit_graph(&repo_path, |batch| {
+        on_batch.send(batch).map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+async fn inferred_squash_merge_edges(repo_path: String) -> Vec<(String, String)> {
+    let Ok(database_path) = pull_request_database_path() else {
         return Vec::new();
     };
     tauri::async_runtime::spawn_blocking(move || inferred_squash_merges(&repo_path, database_path))
@@ -1296,16 +1410,16 @@ async fn inferred_squash_merge_edges(app: AppHandle, repo_path: String) -> Vec<(
 }
 
 #[tauri::command]
-async fn fetch_and_sync_pull_requests(app: AppHandle, repo_path: String) -> Result<(), String> {
-    let database_path = pull_request_database_path(&app)?;
+async fn fetch_and_sync_pull_requests(repo_path: String) -> Result<(), String> {
+    let database_path = pull_request_database_path()?;
     tauri::async_runtime::spawn_blocking(move || fetch_and_sync_repository(&repo_path, database_path))
         .await
         .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-async fn squashed_branch_candidates(app: AppHandle, repo_path: String) -> Result<Vec<String>, String> {
-    let database_path = pull_request_database_path(&app)?;
+async fn squashed_branch_candidates(repo_path: String) -> Result<Vec<String>, String> {
+    let database_path = pull_request_database_path()?;
     tauri::async_runtime::spawn_blocking(move || merged_branch_candidates(&repo_path, database_path))
         .await
         .map_err(|error| error.to_string())?
@@ -1313,14 +1427,10 @@ async fn squashed_branch_candidates(app: AppHandle, repo_path: String) -> Result
 
 #[tauri::command]
 async fn preview_cleanup_candidates(
-    app: AppHandle,
     repo_path: String,
     options: CleanupOptions,
 ) -> Result<Vec<CleanupCandidate>, String> {
-    let database_path = options
-        .delete_merged_pull_request_branches
-        .then(|| pull_request_database_path(&app))
-        .transpose()?;
+    let database_path = cleanup_database_path(&options)?;
     tauri::async_runtime::spawn_blocking(move || {
         cleanup_candidates(&repo_path, &options, database_path)
     })
@@ -1330,33 +1440,12 @@ async fn preview_cleanup_candidates(
 
 #[tauri::command]
 async fn delete_squashed_branches(
-    app: AppHandle,
     repo_path: String,
     options: CleanupOptions,
 ) -> Result<BranchCleanup, String> {
-    let database_path = options
-        .delete_merged_pull_request_branches
-        .then(|| pull_request_database_path(&app))
-        .transpose()?;
+    let database_path = cleanup_database_path(&options)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let candidates = cleanup_candidates(&repo_path, &options, database_path)?
-            .into_iter()
-            .map(|candidate| candidate.branch)
-            .collect::<Vec<_>>();
-        let mut deleted = Vec::new();
-        let mut failed = Vec::new();
-        for branch in &candidates {
-            if git_succeeds(&repo_path, &["branch", "-D", "--", branch]) {
-                deleted.push(branch.clone());
-            } else {
-                failed.push(branch.clone());
-            }
-        }
-        Ok(BranchCleanup {
-            candidates,
-            deleted,
-            failed,
-        })
+        delete_cleanup_candidates(&repo_path, &options, database_path)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1413,28 +1502,31 @@ fn branch_sync(repo_path: String) -> Result<Vec<BranchSync>, String> {
     Ok(parse_branch_sync(&output))
 }
 
-#[tauri::command(async)]
-fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
-    let base_sha = resolve_commit(&repo_path, &base_ref)?;
+fn comparison(repo_path: &str, base_ref: &str, head_ref: &str) -> Result<Comparison, String> {
+    let base_sha = resolve_commit(repo_path, base_ref)?;
     if head_ref == WORKTREE_REF {
         return Ok(Comparison {
-            files: worktree_changed_files(&repo_path, &base_sha)?,
+            files: worktree_changed_files(repo_path, &base_sha)?,
             base_sha,
             head_sha: WORKTREE_REF.to_string(),
         });
     }
-    let head_sha = resolve_commit(&repo_path, &head_ref)?;
+    let head_sha = resolve_commit(repo_path, head_ref)?;
     Ok(Comparison {
-        files: changed_files(&repo_path, &base_sha, &head_sha)?,
+        files: changed_files(repo_path, &base_sha, &head_sha)?,
         base_sha,
         head_sha,
     })
 }
 
-#[tauri::command]
-fn reference_picker_commits(repo_path: String) -> Result<Vec<Vec<serde_json::Value>>, String> {
+#[tauri::command(async)]
+fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
+    comparison(&repo_path, &base_ref, &head_ref)
+}
+
+fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
     let output = git_output_allow_empty(
-        &repo_path,
+        repo_path,
         &[
             "log",
             "--all",
@@ -1451,11 +1543,15 @@ fn reference_picker_commits(repo_path: String) -> Result<Vec<Vec<serde_json::Val
 }
 
 #[tauri::command]
-fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSelection, String> {
-    let primary = primary_reference(&repo_path)?;
-    let primary_sha = resolve_commit(&repo_path, &primary)?;
-    let head_sha = resolve_commit(&repo_path, &reference)?;
-    let base_sha = git_output_allow_empty(&repo_path, &["merge-base", &primary_sha, &head_sha])?
+fn reference_picker_commits(repo_path: String) -> Result<Vec<Vec<serde_json::Value>>, String> {
+    picker_commits(&repo_path)
+}
+
+fn branch_range(repo_path: &str, reference: &str) -> Result<BranchSelection, String> {
+    let primary = primary_reference(repo_path)?;
+    let primary_sha = resolve_commit(repo_path, &primary)?;
+    let head_sha = resolve_commit(repo_path, reference)?;
+    let base_sha = git_output_allow_empty(repo_path, &["merge-base", &primary_sha, &head_sha])?
         .trim()
         .to_string();
     if base_sha.is_empty() {
@@ -1465,8 +1561,13 @@ fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSel
         base_sha,
         head_sha,
         base_label: format!("merge-base({primary}, {reference})"),
-        head_label: reference,
+        head_label: reference.to_string(),
     })
+}
+
+#[tauri::command]
+fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSelection, String> {
+    branch_range(&repo_path, &reference)
 }
 
 // git diff cannot see an untracked file, so an empty patch means falling back to an empty left side.
@@ -1480,20 +1581,19 @@ fn worktree_patch(repo_path: &str, base_sha: &str, path: &str) -> Result<String,
     String::from_utf8(output.stdout).map_err(|error| error.to_string())
 }
 
-#[tauri::command(async)]
-fn diff_file(
-    repo_path: String,
-    base_sha: String,
-    head_sha: String,
+fn file_diff(
+    repo_path: &str,
+    base_sha: &str,
+    head_sha: &str,
     old_path: Option<String>,
     new_path: Option<String>,
 ) -> Result<FileDiff, String> {
     let path = new_path.as_ref().or(old_path.as_ref()).ok_or_else(|| "No file path was provided.".to_string())?;
     let is_worktree = head_sha == WORKTREE_REF;
     let patch = if is_worktree {
-        worktree_patch(&repo_path, &base_sha, path)?
+        worktree_patch(repo_path, base_sha, path)?
     } else {
-        git_output_allow_empty(&repo_path, &[&PATCH_ARGUMENTS[..], &[base_sha.as_str(), head_sha.as_str(), "--", path]].concat())?
+        git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], &[base_sha, head_sha, "--", path]].concat())?
     };
     // Content lines in a patch always carry a leading marker, so an unprefixed header is git's own.
     if patch.lines().any(|line| line.starts_with("Binary files ") || line == "GIT binary patch") {
@@ -1507,12 +1607,12 @@ fn diff_file(
         });
     }
 
-    let old_content = old_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{base_sha}:{path}")])).transpose()?;
+    let old_content = old_path.as_ref().map(|path| git_output_allow_empty(repo_path, &["show", &format!("{base_sha}:{path}")])).transpose()?;
     let new_content = if is_worktree {
-        let root = worktree_path(&repo_path)?;
+        let root = worktree_path(repo_path)?;
         new_path.as_ref().map(|path| fs::read_to_string(Path::new(&root).join(path)).map_err(|error| error.to_string())).transpose()?
     } else {
-        new_path.as_ref().map(|path| git_output_allow_empty(&repo_path, &["show", &format!("{head_sha}:{path}")])).transpose()?
+        new_path.as_ref().map(|path| git_output_allow_empty(repo_path, &["show", &format!("{head_sha}:{path}")])).transpose()?
     };
 
     Ok(FileDiff {
@@ -1523,6 +1623,17 @@ fn diff_file(
         hunks: (!patch.is_empty()).then_some(vec![patch]).unwrap_or_default(),
         is_binary: false,
     })
+}
+
+#[tauri::command(async)]
+fn diff_file(
+    repo_path: String,
+    base_sha: String,
+    head_sha: String,
+    old_path: Option<String>,
+    new_path: Option<String>,
+) -> Result<FileDiff, String> {
+    file_diff(&repo_path, &base_sha, &head_sha, old_path, new_path)
 }
 
 fn git_result(path: &str, arguments: &[&str]) -> Result<Output, String> {
@@ -3277,17 +3388,14 @@ fn update_command() -> Option<String> {
     env::var("GIT_NAV_UPDATE_COMMAND").ok()
 }
 
-#[tauri::command]
-fn open_worktree(app: AppHandle, path: String, target: String) -> Result<(), String> {
-    if target == "git-nav" {
-        return open_repository_window(&app, &path);
-    }
+/// Launches a worktree in another local application. In server mode this runs on the host machine.
+fn launch_worktree(path: &str, target: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let arguments = match target.as_str() {
-            "vscode" => vec!["-a", "Visual Studio Code", &path],
-            "terminal" => vec!["-a", "Terminal", &path],
-            "finder" => vec![path.as_str()],
+        let arguments = match target {
+            "vscode" => vec!["-a", "Visual Studio Code", path],
+            "terminal" => vec!["-a", "Terminal", path],
+            "finder" => vec![path],
             _ => return Err("Unknown worktree target.".to_string()),
         };
         Command::new("open")
@@ -3300,14 +3408,105 @@ fn open_worktree(app: AppHandle, path: String, target: String) -> Result<(), Str
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, path, target);
+        let _ = (path, target);
         Err("Opening worktrees outside Git Nav is currently supported on macOS only.".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_worktree(app: AppHandle, path: String, target: String) -> Result<(), String> {
+    if target == "git-nav" {
+        return open_repository_window(&app, &path);
+    }
+    launch_worktree(&path, &target)
+}
+
+const SERVE_USAGE: &str = "\
+Usage: git-nav serve [options]
+
+Options:
+      --host <address>  Interface to bind (default 127.0.0.1; use 0.0.0.0 for other devices)
+      --port <number>   Port to listen on (default 4300)
+      --token <value>   Shared secret required to open the app (default: randomly generated)
+      --no-token        Serve without authentication
+";
+
+struct ServeArguments {
+    host: std::net::IpAddr,
+    port: u16,
+    token: Option<String>,
+}
+
+fn parse_serve_arguments(args: &[String]) -> Result<ServeArguments, String> {
+    let mut host = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    let mut port = 4300;
+    let mut token = None;
+    let mut generate_token = true;
+    let mut index = 0;
+
+    while let Some(argument) = args.get(index) {
+        index += 1;
+        let mut value = || {
+            args.get(index)
+                .cloned()
+                .ok_or_else(|| format!("{argument} needs a value."))
+                .inspect(|_| index += 1)
+        };
+        match argument.as_str() {
+            "--host" => host = value()?.parse().map_err(|_| "Invalid --host.".to_string())?,
+            "--port" => port = value()?.parse().map_err(|_| "Invalid --port.".to_string())?,
+            "--token" => {
+                token = Some(value()?);
+                generate_token = false;
+            }
+            "--no-token" => generate_token = false,
+            "--help" | "-h" => return Err(SERVE_USAGE.to_string()),
+            _ => return Err(format!("Unknown option {argument}.\n\n{SERVE_USAGE}")),
+        }
+    }
+
+    if generate_token {
+        token = Some(generated_token());
+    }
+
+    Ok(ServeArguments { host, port, token })
+}
+
+fn generated_token() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("could not generate a token");
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn serve(args: &[String]) {
+    let arguments = match parse_serve_arguments(args) {
+        Ok(arguments) => arguments,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    };
+
+    let runtime = tokio::runtime::Runtime::new().expect("could not start the async runtime");
+    if let Err(error) = runtime.block_on(server::serve(server::Options {
+        host: arguments.host,
+        port: arguments.port,
+        token: arguments.token,
+    })) {
+        eprintln!("{error}");
+        std::process::exit(1);
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<_> = env::args().collect();
+
+    if args.get(1).is_some_and(|argument| argument == "serve") {
+        serve(&args[2..]);
+        return;
+    }
+
     let cwd = env::current_dir()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();

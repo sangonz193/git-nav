@@ -71,8 +71,8 @@ const REF_TAIL_LENGTH = 8
 // scroll uncovers before the next frame lands.
 export const GRAPH_CANVAS_OVERSCAN = 2 * ROW_HEIGHT
 
-export function graphCanvasHeight(viewportHeight: number) {
-  const visible = Math.max(0, viewportHeight - GRAPH_HEADER_HEIGHT)
+export function graphCanvasHeight(viewportHeight: number, headerHeight = GRAPH_HEADER_HEIGHT) {
+  const visible = Math.max(0, viewportHeight - headerHeight)
   return visible === 0 ? 0 : visible + 2 * GRAPH_CANVAS_OVERSCAN
 }
 

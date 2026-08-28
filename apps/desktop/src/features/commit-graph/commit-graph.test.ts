@@ -314,6 +314,10 @@ describe("graphCanvasHeight", () => {
     expect(graphCanvasHeight(400)).toBe(400 - GRAPH_HEADER_HEIGHT + 2 * GRAPH_CANVAS_OVERSCAN)
   })
 
+  test("uses the active header height for coarse pointers", () => {
+    expect(graphCanvasHeight(500, 44)).toBe(500 - 44 + 2 * GRAPH_CANVAS_OVERSCAN)
+  })
+
   test("stays at zero for a viewport shorter than the header", () => {
     expect(graphCanvasHeight(0)).toBe(0)
   })

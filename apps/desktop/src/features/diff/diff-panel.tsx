@@ -1,5 +1,5 @@
 import { DiffModeEnum, DiffView } from "@git-diff-view/react"
-import { invoke } from "@tauri-apps/api/core"
+import { invoke } from "@/lib/ipc"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { IDockviewPanelProps } from "dockview-react"
 import { ChevronDown, ChevronRight, FileCode2, Folder, FolderOpen, WrapText } from "lucide-react"

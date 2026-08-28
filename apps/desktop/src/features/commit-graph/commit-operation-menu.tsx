@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query"
-import { invoke } from "@tauri-apps/api/core"
+import { invoke } from "@/lib/ipc"
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
 import { TriangleAlert } from "lucide-react"

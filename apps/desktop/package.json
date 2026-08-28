@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "dev:web": "bun run scripts/dev-web.ts",
     "build": "tsc -b && vite build",
     "tauri": "tauri",
     "lint": "eslint",

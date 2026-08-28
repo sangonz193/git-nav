@@ -1,7 +1,9 @@
 import { columnResizingFeature, columnSizingFeature, createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
-import { Channel, invoke } from "@tauri-apps/api/core"
+import { invoke, stream } from "@/lib/ipc"
+import { panelId } from "@/lib/panel-id"
+import { openWorktree, type WorktreeTarget } from "@/lib/navigation"
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
@@ -12,7 +14,7 @@ import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Co
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, PENDING_OPERATION_LABELS, type CompletedOperation, type OperationRequest, type PendingOperation, type RefMenuComponents, type RefUpdate, type RepositoryState, type StashEntry } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
@@ -24,6 +26,7 @@ const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
+const COARSE_POINTER_ROW_HEIGHT = 44
 const UNDO_TIMEOUT = 30_000
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
 type BranchSelection = { baseSha: string, headSha: string, baseLabel: string, headLabel: string }
@@ -35,7 +38,6 @@ type RangeDrag = { anchorIndex: number, focusIndex: number }
 type SelectedRef = { ref: DisplayRef, sha: string }
 type SelectionRange = { anchorHash: string, focusHash: string }
 type WorktreeStatus = { path: string, branch: string, head: string, isDetached: boolean, changedFiles: number, untrackedFiles: number, pendingOperation: PendingOperation | null }
-type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
 type ViewMode = "graph" | "branches"
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Label: ContextMenuLabel, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
@@ -72,6 +74,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>("graph")
+  const [rowHeight, setRowHeight] = useState(ROW_HEIGHT)
   const scrollElement = useRef<HTMLDivElement>(null)
   const graphSpace = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -89,14 +92,14 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       setCleanupReport(null)
     }
     const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
-    const index = Math.floor(scrollTop / ROW_HEIGHT)
+    const index = Math.floor(scrollTop / rowHeight)
     const commit = commitsRef.current[index]
-    refreshAnchor.current = commit ? { hash: commit.hash, offset: scrollTop - index * ROW_HEIGHT } : null
+    refreshAnchor.current = commit ? { hash: commit.hash, offset: scrollTop - index * rowHeight } : null
     // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
     fingerprint.current = null
     fingerprintGeneration.current += 1
     setGraphVersion((version) => version + 1)
-  }, [])
+  }, [rowHeight])
   // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
   const refreshWorktreeStatus = useCallback(() => {
     invoke<WorktreeStatus[]>("worktree_status", { repoPath: params.path })
@@ -120,16 +123,16 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const rowVirtualizer = useVirtualizer({
     count: commits.length,
     getScrollElement: () => scrollElement.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     overscan: 12,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
   const currentCheckoutIndex = useMemo(() => commits.findIndex((commit) => isCurrentCheckout(commit.refs)), [commits])
   const checkoutScrollDirection = currentCheckoutIndex === -1 || scroll.height === 0
     ? null
-    : (currentCheckoutIndex + 1) * ROW_HEIGHT < scroll.top + ROW_HEIGHT
+    : (currentCheckoutIndex + 1) * rowHeight < scroll.top + rowHeight
       ? "up"
-      : currentCheckoutIndex * ROW_HEIGHT >= scroll.top + scroll.height
+      : currentCheckoutIndex * rowHeight >= scroll.top + scroll.height
         ? "down"
         : null
   const commitsSelection = useMemo(() => {
@@ -154,6 +157,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
   }, [branchSync, checkedOutWorktrees, commits, commitsSelection, selectedRef])
   const selectedHashes = useMemo(() => new Set(commitsSelection?.commits.map((commit) => commit.hash)), [commitsSelection])
+  const selectionEndpointIndexes = useMemo(() => selectionRange
+    ? { anchor: commits.findIndex((commit) => commit.hash === selectionRange.anchorHash), focus: commits.findIndex((commit) => commit.hash === selectionRange.focusHash) }
+    : null, [commits, selectionRange])
   const unpushed = useMemo(() => unpushedHashes(commits), [commits])
   const unpushedLaneMasks = useMemo(() => unpushedLanes(commits, unpushed), [commits, unpushed])
   // The oldest unpushed commit is the top of the local segment, so it is the useful place to land.
@@ -233,7 +239,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     onError: (message) => setCleanPreviewError(String(message)),
   })
   const openWorktreeMutation = useMutation({
-    mutationFn: ({ path, target }: { path: string, target: WorktreeTarget }) => invoke("open_worktree", { path, target }),
+    mutationFn: ({ path, target }: { path: string, target: WorktreeTarget }) => openWorktree(path, target),
     onError: (message) => setError(String(message)),
   })
   const undoMutation = useMutation({
@@ -286,11 +292,6 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   useEffect(() => {
     let disposed = false
     setCommits([])
-    const channel = new Channel<CommitBatch>((batch) => {
-      if (!disposed) {
-        setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
-      }
-    })
     function refreshSquashMergeInferences() {
       invoke<SquashMergeInference[]>("inferred_squash_merge_edges", { repoPath: params.path })
         .then(setSquashMergeInferences)
@@ -307,13 +308,38 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     refreshWorktreeStatus()
     refreshSquashMergeInferences()
     const interval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
-    invoke("stream_commit_graph", { repoPath: params.path, onBatch: channel })
-      .catch((message: unknown) => setError(String(message)))
+    const stopStream = stream<CommitBatch>(
+      "stream_commit_graph",
+      { repoPath: params.path },
+      (batch) => {
+        if (!disposed) {
+          setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
+        }
+      },
+      (message) => {
+        if (!disposed) {
+          setError(message)
+        }
+      }
+    )
     return () => {
       disposed = true
+      stopStream()
       window.clearInterval(interval)
     }
   }, [graphVersion, params.path, refreshWorktreeStatus])
+
+  useEffect(() => {
+    const query = window.matchMedia("(pointer: coarse)")
+    const updateRowHeight = () => setRowHeight(query.matches ? COARSE_POINTER_ROW_HEIGHT : ROW_HEIGHT)
+    updateRowHeight()
+    query.addEventListener("change", updateRowHeight)
+    return () => query.removeEventListener("change", updateRowHeight)
+  }, [])
+
+  useEffect(() => {
+    rowVirtualizer.measure()
+  }, [rowHeight, rowVirtualizer])
 
   useEffect(() => {
     commitsRef.current = commits
@@ -357,7 +383,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (index === -1) {
       return
     }
-    element.scrollTop = index * ROW_HEIGHT + anchor.offset
+    element.scrollTop = index * rowHeight + anchor.offset
     refreshAnchor.current = null
   }, [commits])
 
@@ -423,7 +449,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth })
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height, rowHeight), squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
     }
   }, [commits, graphWidth, scroll, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
 
@@ -488,7 +514,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       }
       containerApi.addPanel({
         component: "diff",
-        id: `repository-diff-${crypto.randomUUID()}`,
+        id: panelId("diff"),
         params: { ...params, baseRef: selection.baseSha, headRef: selection.headSha },
         position: { direction: "within", referencePanel },
         title: `Diff: ${reference}`,
@@ -515,7 +541,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
     containerApi.addPanel({
       component: "diff",
-      id: `repository-diff-${crypto.randomUUID()}`,
+      id: panelId("diff"),
       params: { ...params, baseRef, headRef: commit.hash },
       position: { direction: "within", referencePanel },
       title: `Diff: ${commit.hash.slice(0, 8)}`,
@@ -531,7 +557,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
     containerApi.addPanel({
       component: "diff",
-      id: `repository-diff-${crypto.randomUUID()}`,
+      id: panelId("diff"),
       params: { ...params, path: status.path, baseRef: status.head, headRef: WORKTREE_REF },
       position: { direction: "within", referencePanel },
       title: `Uncommitted: ${name}`,
@@ -547,7 +573,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
     containerApi.addPanel({
       component: "diff",
-      id: `repository-diff-${crypto.randomUUID()}`,
+      id: panelId("diff"),
       params: { ...params, baseRef: `${entry.sha}^`, headRef: entry.sha },
       position: { direction: "within", referencePanel },
       title: `Stash: ${entry.name}`,
@@ -562,7 +588,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
     containerApi.addPanel({
       component: "diff",
-      id: `repository-diff-${crypto.randomUUID()}`,
+      id: panelId("diff"),
       params: { ...params, baseRef: base.hash, headRef: tip.hash },
       position: { direction: "within", referencePanel },
       title: `Diff: ${base.hash.slice(0, 8)}..${tip.hash.slice(0, 8)}`,
@@ -603,17 +629,21 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     return selectedHashes.has(commits[index].hash) && commitsSelection ? commitsSelection : commitSelection(commits, index, index)!
   }
 
-  function startRangeDrag(event: ReactPointerEvent<HTMLElement>, index: number) {
+  function startRangeDrag(event: ReactPointerEvent<HTMLElement>, index: number, anchorIndex?: number) {
     const scroll = scrollElement.current
     const space = graphSpace.current
     if (event.button !== 0 || !scroll || !space || (event.target as HTMLElement).closest(".commit-ref")) {
       return
     }
+    // Dragging a finger across the rows scrolls the graph, so touch only adjusts a range from a handle.
+    if (anchorIndex === undefined && event.pointerType !== "mouse") {
+      return
+    }
     setSelectedRef(null)
-    const anchorIndex = event.shiftKey && selectionRange
+    const selectionAnchorIndex = anchorIndex ?? (event.shiftKey && selectionRange
       ? commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
-      : index
-    const rangeAnchorIndex = anchorIndex === -1 ? index : anchorIndex
+      : index)
+    const rangeAnchorIndex = selectionAnchorIndex === -1 ? index : selectionAnchorIndex
     const originX = event.clientX
     const originY = event.clientY
     let pointerY = event.clientY
@@ -622,13 +652,13 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
     const focusIndexAt = () => {
       const offset = pointerY - space.getBoundingClientRect().top
-      return Math.max(0, Math.min(commits.length - 1, Math.floor(offset / ROW_HEIGHT)))
+      return Math.max(0, Math.min(commits.length - 1, Math.floor(offset / rowHeight)))
     }
 
     const autoScroll = () => {
       const rect = scroll.getBoundingClientRect()
       // The sticky header covers the top row of the scroll box.
-      const overTop = pointerY - (rect.top + ROW_HEIGHT + AUTOSCROLL_EDGE)
+      const overTop = pointerY - (rect.top + rowHeight + AUTOSCROLL_EDGE)
       const overBottom = pointerY - (rect.bottom - AUTOSCROLL_EDGE)
       const distance = overTop < 0 ? overTop : overBottom > 0 ? overBottom : 0
       if (distance !== 0) {
@@ -639,6 +669,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
 
     const onPointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) {
+        return
+      }
       pointerY = moveEvent.clientY
       if (!dragging) {
         if (Math.abs(moveEvent.clientX - originX) < DRAG_THRESHOLD && Math.abs(moveEvent.clientY - originY) < DRAG_THRESHOLD) {
@@ -651,25 +684,44 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       setRangeDrag({ anchorIndex: rangeAnchorIndex, focusIndex: focusIndexAt() })
     }
 
-    const onPointerUp = () => {
+    const cleanUp = () => {
       window.removeEventListener("pointermove", onPointerMove)
       window.removeEventListener("pointerup", onPointerUp)
+      window.removeEventListener("pointercancel", onPointerCancel)
       window.getSelection()?.removeAllRanges()
       if (frame !== null) {
         cancelAnimationFrame(frame)
       }
+    }
+
+    const onPointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== event.pointerId) {
+        return
+      }
+      pointerY = upEvent.clientY
+      cleanUp()
       const focusIndex = focusIndexAt()
       const path = ancestryPath(commits, rangeAnchorIndex, focusIndex)
       if (path.length > 0) {
         setSelectionRange({ anchorHash: commits[rangeAnchorIndex].hash, focusHash: commits[focusIndex].hash })
-      } else if (!event.shiftKey) {
+      } else if (anchorIndex === undefined && !event.shiftKey) {
         setSelectionRange(null)
       }
       setRangeDrag(null)
     }
 
+    // A touch that turns into a system gesture never reports a pointerup.
+    const onPointerCancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== event.pointerId) {
+        return
+      }
+      cleanUp()
+      setRangeDrag(null)
+    }
+
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
+    window.addEventListener("pointercancel", onPointerCancel)
   }
 
   function selectCommitFromKeyboard(event: ReactKeyboardEvent<HTMLElement>, index: number) {
@@ -911,7 +963,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </ButtonGroup>
         </div>
       </div>
-      <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--graph-header-height": `${GRAPH_HEADER_HEIGHT}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
+      <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--commit-row-height": `${rowHeight}px`, "--graph-header-height": `${rowHeight}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
           <div className="commit-graph-header-content" role="row" style={{ minWidth: tableWidth }}>
             <div className="commit-graph-header-spacer" role="columnheader">
@@ -965,13 +1017,20 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             const refColor = laneColor(commit.lane)
             const currentCheckout = isCurrentCheckout(commit.refs)
             const selected = selectedHashes.has(commit.hash)
+            const selectionHandle = !rangeDrag && selectionEndpointIndexes && (selectionEndpointIndexes.anchor === row.index || selectionEndpointIndexes.focus === row.index)
+            const handleAnchorIndex = selectionHandle && selectionEndpointIndexes.anchor === row.index ? selectionEndpointIndexes.focus : selectionEndpointIndexes?.anchor
+            const canSelectRange = selectionEndpointIndexes && selectionEndpointIndexes.anchor !== -1 && ancestryPath(commits, selectionEndpointIndexes.anchor, row.index).length > 0
             const refs = displayRefs(commit.refs, checkedOutWorktrees, branchSync)
             const [primaryRef, ...overflowRefs] = refs
             return (
               <ContextMenu key={commit.hash}>
                 <ContextMenuTrigger asChild>
                   <article aria-keyshortcuts="Enter Space Shift+Enter Shift+Space" aria-rowindex={row.index + 2} aria-selected={selected} className={`commit-graph-row${viewMode === "branches" ? " commit-graph-row-branches" : ""}${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onKeyDown={(event) => selectCommitFromKeyboard(event, row.index)} onPointerDown={(event) => startRangeDrag(event, row.index)} role="row" style={{ "--commit-ref-color": refColor, gridTemplateColumns: `${graphWidth}px ${viewMode === "graph" ? columnTemplate : "max-content"}`, transform: `translateY(${row.start}px)` } as CSSProperties} tabIndex={0}>
-                    <div aria-hidden className="commit-graph-graph-cell" />
+                    <div className="commit-graph-graph-cell">
+                      {selectionHandle && handleAnchorIndex !== undefined && handleAnchorIndex !== -1 && (
+                        <button aria-label={`Adjust selected range ${selectionEndpointIndexes?.anchor === row.index ? "start" : "end"}`} className="commit-graph-selection-handle" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, row.index, handleAnchorIndex) }} type="button" />
+                      )}
+                    </div>
                     <div className="commit-graph-summary" role="gridcell">
                   <div className="commit-graph-refs">
                     {viewMode === "branches" ? refs.map((ref, index) => refChip(ref, commit.hash, `${ref.label}-${index}`)) : primaryRef && refChip(primaryRef, commit.hash)}
@@ -1000,6 +1059,16 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                 </ContextMenuTrigger>
                 <ContextMenuContent>
                   {menuHeader(contextMenuComponents, rowHeader(row.index), commit.subject || "(no subject)")}
+                  <ContextMenuItem onSelect={() => { setSelectedRef(null); setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash }) }}>
+                    <GitCompareArrows />
+                    Select commit
+                  </ContextMenuItem>
+                  {canSelectRange && selectionEndpointIndexes && (
+                    <ContextMenuItem onSelect={() => { setSelectedRef(null); setSelectionRange({ anchorHash: commits[selectionEndpointIndexes.anchor].hash, focusHash: commit.hash }) }}>
+                      <GitCompareArrows />
+                      Select range to here
+                    </ContextMenuItem>
+                  )}
                   <OperationMenuItems components={contextMenuComponents} onSelect={setRequest} repository={repository} source={selection} target={rowTarget(row.index)} />
                   <ContextMenuItem disabled={commit.parents.length === 0} onSelect={() => openCommitDiff(commit)}>
                     <FileDiff />

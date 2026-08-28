@@ -61,11 +61,21 @@
 :root {
   color-scheme: light;
   font-size: 14px;
+  /* Overscrolling the viewport would pull-to-refresh and discard the loaded graph. */
+  overscroll-behavior: none;
   scrollbar-color: var(--muted-foreground) var(--background);
 }
 
 body {
   font-size: 0.875rem;
+}
+
+/* Without this the panels hand their overscroll to the viewport, which pulls to refresh on touch. */
+.commit-graph-scroll,
+.diff-file-list,
+.diff-picker-scroll,
+.diff-view-container {
+  overscroll-behavior: contain;
 }
 
 * {
@@ -177,7 +187,12 @@ body {
   width: 1px;
 }
 
-.commit-graph-resize-handle:hover::after,
+@media (hover: hover) {
+  .commit-graph-resize-handle:hover::after {
+    opacity: 1;
+  }
+}
+
 .commit-graph-resize-handle.is-resizing::after {
   opacity: 1;
 }
@@ -215,7 +230,7 @@ body {
   align-items: center;
   border-bottom: 1px solid rgb(255 255 255 / 4%);
   display: grid;
-  height: 32px;
+  height: var(--commit-row-height, 32px);
   left: 0;
   position: absolute;
   right: 0;
@@ -226,6 +241,23 @@ body {
 
 .commit-graph-graph-cell {
   height: 100%;
+  position: relative;
+}
+
+.commit-graph-selection-handle {
+  background: #60a5fa;
+  border: 2px solid var(--background);
+  border-radius: 999px;
+  cursor: ns-resize;
+  height: 28px;
+  padding: 0;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  touch-action: none;
+  transform: translateY(-50%);
+  width: 28px;
+  z-index: 2;
 }
 
 .commit-graph-row > * {
@@ -233,8 +265,10 @@ body {
   padding: 0 16px 0 8px;
 }
 
-.commit-graph-row:hover {
-  background: rgb(255 255 255 / 4%);
+@media (hover: hover) {
+  .commit-graph-row:hover {
+    background: rgb(255 255 255 / 4%);
+  }
 }
 
 .commit-graph-row:focus-visible {
@@ -248,8 +282,10 @@ body {
   box-shadow: inset 2px 0 0 var(--commit-ref-color);
 }
 
-.commit-graph-row.commit-graph-row-current:hover {
-  background: color-mix(in srgb, var(--commit-ref-color) 16%, transparent);
+@media (hover: hover) {
+  .commit-graph-row.commit-graph-row-current:hover {
+    background: color-mix(in srgb, var(--commit-ref-color) 16%, transparent);
+  }
 }
 
 .commit-graph-row.commit-graph-row-selected {
@@ -257,8 +293,10 @@ body {
   box-shadow: inset 0 0 0 1px rgb(96 165 250 / 40%);
 }
 
-.commit-graph-row.commit-graph-row-selected:hover {
-  background: rgb(96 165 250 / 28%);
+@media (hover: hover) {
+  .commit-graph-row.commit-graph-row-selected:hover {
+    background: rgb(96 165 250 / 28%);
+  }
 }
 
 .commit-graph-row-branches {
@@ -392,8 +430,10 @@ button.commit-ref {
   font: inherit;
 }
 
-button.commit-ref-changes:hover {
-  background: rgb(251 191 36 / 24%);
+@media (hover: hover) {
+  button.commit-ref-changes:hover {
+    background: rgb(251 191 36 / 24%);
+  }
 }
 
 /* A ref that only exists on the remote keeps the colour of its line and gives up its fill, so it ranks
@@ -415,21 +455,50 @@ button.commit-ref-changes:hover {
   font-weight: 600;
 }
 
-button.commit-ref:hover,
 .commit-ref[aria-expanded="true"] {
   background: color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
 }
 
-button.commit-ref-remote:hover,
-button.commit-ref-tag:hover,
 .commit-ref-remote[aria-expanded="true"],
 .commit-ref-tag[aria-expanded="true"] {
   background: color-mix(in srgb, var(--commit-ref-color) 18%, transparent);
 }
 
-button.commit-ref-current:hover,
 .commit-ref-current[aria-expanded="true"] {
   background: color-mix(in srgb, var(--commit-ref-color) 84%, #09090b);
+}
+
+@media (hover: hover) {
+  button.commit-ref:hover {
+    background: color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
+  }
+
+  button.commit-ref-remote:hover,
+  button.commit-ref-tag:hover {
+    background: color-mix(in srgb, var(--commit-ref-color) 18%, transparent);
+  }
+
+  button.commit-ref-current:hover {
+    background: color-mix(in srgb, var(--commit-ref-color) 84%, #09090b);
+  }
+}
+
+@media (pointer: coarse) {
+  .commit-graph-resize-handle {
+    right: -10px;
+    width: 24px;
+  }
+
+  .commit-ref {
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+
+  .commit-graph-selection-handle {
+    height: 36px;
+    right: 2px;
+    width: 36px;
+  }
 }
 
 .commit-ref-selected {

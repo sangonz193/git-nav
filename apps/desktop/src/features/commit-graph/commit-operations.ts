@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core"
+import { invoke } from "@/lib/ipc"
 import { ArrowDownToLine, ArrowUpFromLine, Copy, GitBranch, GitGraph, GitMerge, LogIn, Pencil, Scissors, Tag, Trash2, Undo2 } from "lucide-react"
 import type { ComponentType, ReactNode } from "react"
 

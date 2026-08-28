@@ -1,9 +1,10 @@
-import { open } from "@tauri-apps/plugin-dialog"
-import { invoke } from "@tauri-apps/api/core"
 import { ChevronDown, ChevronRight, FolderGit2, FolderOpen, GitBranch, Plus } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
+import { invoke, isDesktop } from "@/lib/ipc"
+import { openRepository } from "@/lib/navigation"
+import { FolderPicker } from "./folder-picker"
 import type { Project } from "../repository/project"
 
 export function LauncherWindow() {
@@ -11,6 +12,7 @@ export function LauncherWindow() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [isChoosing, setIsChoosing] = useState(false)
+  const [isPickerOpen, setIsPickerOpen] = useState(false)
 
   useEffect(() => {
     invoke<Project[]>("recent_projects")
@@ -19,18 +21,24 @@ export function LauncherWindow() {
   }, [])
 
   async function chooseRepository() {
+    if (!isDesktop) {
+      setIsPickerOpen(true)
+      return
+    }
+
     setIsChoosing(true)
     setError(null)
 
     try {
+      const { open } = await import("@tauri-apps/plugin-dialog")
       const selectedPath = await open({
         directory: true,
         multiple: false,
         title: "Choose a Git repository",
       })
 
-      if (selectedPath) {
-        await invoke("open_repository", { path: selectedPath })
+      if (typeof selectedPath === "string") {
+        await openRepository(selectedPath)
       }
     } catch (message) {
       setError(String(message))
@@ -76,7 +84,7 @@ export function LauncherWindow() {
                       </button>
                       <button
                         className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-4 text-left transition-colors hover:bg-muted"
-                        onClick={() => invoke("open_repository", { path: project.path }).catch((message: unknown) => setError(String(message)))}
+                        onClick={() => openRepository(project.path).catch((message: unknown) => setError(String(message)))}
                         type="button"
                       >
                         <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
@@ -91,7 +99,7 @@ export function LauncherWindow() {
                       <button
                         className="flex w-full items-center gap-3 border-t px-4 py-2.5 pl-14 text-left transition-colors hover:bg-muted"
                         key={worktree.path}
-                        onClick={() => invoke("open_repository", { path: worktree.path }).catch((message: unknown) => setError(String(message)))}
+                        onClick={() => openRepository(worktree.path).catch((message: unknown) => setError(String(message)))}
                         type="button"
                       >
                         <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
@@ -115,6 +123,14 @@ export function LauncherWindow() {
         </Button>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </section>
+      <FolderPicker
+        onCancel={() => setIsPickerOpen(false)}
+        onChoose={(path) => {
+          setIsPickerOpen(false)
+          openRepository(path).catch((message: unknown) => setError(String(message)))
+        }}
+        open={isPickerOpen}
+      />
     </main>
   )
 }

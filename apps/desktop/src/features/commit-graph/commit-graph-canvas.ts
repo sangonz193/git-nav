@@ -16,6 +16,7 @@ type CommitGraphDrawing = {
   unpushed?: Set<string>
   unpushedLanes?: number[]
   width?: number
+  rowHeight?: number
 }
 
 function unpushedContext(pixelWidth: number, pixelHeight: number, ratio: number, width: number, height: number) {
@@ -35,7 +36,7 @@ function unpushedContext(pixelWidth: number, pixelHeight: number, ratio: number,
   return context
 }
 
-export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squashMergeEdges, unpushed, unpushedLanes, width = GRAPH_WIDTH }: CommitGraphDrawing) {
+export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squashMergeEdges, unpushed, unpushedLanes, width = GRAPH_WIDTH, rowHeight = ROW_HEIGHT }: CommitGraphDrawing) {
   const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
   const pixelWidth = Math.ceil(width * ratio)
@@ -73,8 +74,8 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
     layer.setLineDash([3, 4])
   }
   for (const { branchIndex, targetIndex } of squashMergeEdges) {
-    const branchY = branchIndex * ROW_HEIGHT - scrollTop + ROW_HEIGHT / 2
-    const targetY = targetIndex * ROW_HEIGHT - scrollTop + ROW_HEIGHT / 2
+    const branchY = branchIndex * rowHeight - scrollTop + rowHeight / 2
+    const targetY = targetIndex * rowHeight - scrollTop + rowHeight / 2
     if (Math.max(branchY, targetY) < 0 || Math.min(branchY, targetY) > height) {
       continue
     }
@@ -102,8 +103,8 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
       continue
     }
 
-    const startY = item.start - scrollTop + ROW_HEIGHT / 2
-    const endY = startY + ROW_HEIGHT
+    const startY = item.start - scrollTop + rowHeight / 2
+    const endY = startY + rowHeight
     const startX = GRAPH_GUTTER + commit.lane * LANE_WIDTH
     const isLocal = unpushed?.has(commit.hash) ?? false
     const previousCommit = commits[item.index - 1]
@@ -118,9 +119,9 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
       const x = GRAPH_GUTTER + lane * LANE_WIDTH
       target.strokeStyle = laneColor(lane)
       target.beginPath()
-      target.moveTo(x, startY - ROW_HEIGHT)
+      target.moveTo(x, startY - rowHeight)
       if (x !== startX) {
-        target.bezierCurveTo(x, startY - ROW_HEIGHT / 2, startX, startY - ROW_HEIGHT / 2, startX, startY)
+        target.bezierCurveTo(x, startY - rowHeight / 2, startX, startY - rowHeight / 2, startX, startY)
       } else {
         target.lineTo(x, startY)
       }
@@ -152,7 +153,7 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
       if (startX === endX) {
         own.lineTo(endX, endY)
       } else {
-        own.bezierCurveTo(startX, startY + ROW_HEIGHT / 2, endX, endY - ROW_HEIGHT / 2, endX, endY)
+        own.bezierCurveTo(startX, startY + rowHeight / 2, endX, endY - rowHeight / 2, endX, endY)
       }
       own.stroke()
     }
