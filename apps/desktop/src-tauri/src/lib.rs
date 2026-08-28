@@ -3273,6 +3273,11 @@ fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn update_command() -> Option<String> {
+    env::var("GIT_NAV_UPDATE_COMMAND").ok()
+}
+
+#[tauri::command]
 fn open_worktree(app: AppHandle, path: String, target: String) -> Result<(), String> {
     if target == "git-nav" {
         return open_repository_window(&app, &path);
@@ -3330,6 +3335,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             recent_projects,
             open_repository,
+            update_command,
             open_worktree,
             project_snapshot,
             stream_commit_graph,
