@@ -315,12 +315,17 @@ body {
 .commit-graph-row-branches {
   min-width: max-content;
   right: auto;
-  width: max-content;
+  width: 100%;
 }
 
 .commit-graph-row-branches .commit-graph-summary,
 .commit-graph-row-branches .commit-graph-refs {
   overflow: visible;
+}
+
+.commit-graph-row-branches .commit-ref,
+.commit-graph-row-branches .commit-ref-worktree {
+  max-width: none;
 }
 
 .commit-graph-row.commit-graph-row-current.commit-graph-row-selected {
