@@ -26,12 +26,13 @@ use tower_http::compression::{
 
 use crate::{
     IpcCommand,
-    branch_operability, branch_range, comparison, delete_cleanup_candidates, cleanup_candidates,
-    cleanup_database_path, directory_listing, fetch_and_sync_repository, file_diff,
-    git_output_allow_empty, inferred_squash_merges, launch_worktree, merged_branch_candidates,
-    picker_commits, predicted_conflicts, project_at, pull_request_database_path,
-    rebase_branch_onto, recent_project_list, remember_repository, restore_refs, walk_commit_graph,
-    CleanupOptions, OpenWorktrees, RefUpdate,
+    OpenWorktrees,
+    directory_listing,
+    launch_worktree,
+    project_at,
+    recent_project_list,
+    remember_repository,
+    walk_commit_graph,
 };
 
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
@@ -58,7 +59,7 @@ struct ServerState {
 }
 
 /// `Err(String)` from a command becomes a 500 whose body is the message, matching `invoke`'s reject.
-struct CommandError(String);
+pub(crate) struct CommandError(String);
 
 impl IntoResponse for CommandError {
     fn into_response(self) -> Response {
@@ -72,16 +73,10 @@ impl From<String> for CommandError {
     }
 }
 
-type CommandResult = Result<Json<Value>, CommandError>;
+pub(crate) type CommandResult = Result<Json<Value>, CommandError>;
 
-fn ok<T: serde::Serialize>(value: T) -> CommandResult {
+pub(crate) fn ok<T: serde::Serialize>(value: T) -> CommandResult {
     Ok(Json(serde_json::to_value(value).map_err(|error| CommandError(error.to_string()))?))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RepoPath {
-    repo_path: String,
 }
 
 #[derive(Deserialize)]
@@ -92,175 +87,13 @@ struct PathArg {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct BranchArgs {
-    repo_path: String,
-    branch: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CleanupArgs {
-    repo_path: String,
-    options: CleanupOptions,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CompareArgs {
-    repo_path: String,
-    base_ref: String,
-    head_ref: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReferenceArgs {
-    repo_path: String,
-    reference: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DiffFileArgs {
-    repo_path: String,
-    base_sha: String,
-    head_sha: String,
-    old_path: Option<String>,
-    new_path: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RebaseArgs {
-    repo_path: String,
-    onto: String,
-    upstream: String,
-    branch: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UndoArgs {
-    repo_path: String,
-    updates: Vec<RefUpdate>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct WorktreeArgs {
     path: String,
     target: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckoutArgs {
-    repo_path: String,
-    reference: String,
-    options: crate::CheckoutOptions,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RangeArgs {
-    repo_path: String,
-    base: String,
-    tip: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateBranchArgs {
-    repo_path: String,
-    name: String,
-    start_point: String,
-    options: crate::BranchOptions,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateTagArgs {
-    repo_path: String,
-    name: String,
-    target: String,
-    message: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NameArgs {
-    repo_path: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MergeBaseArgs {
-    repo_path: String,
-    left: String,
-    right: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MergeArgs {
-    repo_path: String,
-    source: String,
-    into: String,
-    options: crate::MergeOptions,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MergePredictionArgs {
-    repo_path: String,
-    source: String,
-    into: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PushArgs {
-    repo_path: String,
-    reference: String,
-    options: crate::PushOptions,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RenameArgs {
-    repo_path: String,
-    branch: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResetArgs {
-    repo_path: String,
-    target: String,
-    mode: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StashActionArgs {
-    repo_path: String,
-    name: String,
-    sha: String,
-    action: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StashChangesArgs {
-    repo_path: String,
-    message: Option<String>,
-    include_untracked: bool,
-}
-
 /// Git work is blocking, so each command runs on the blocking pool rather than stalling the runtime.
-async fn blocking<T, F>(task: F) -> Result<T, CommandError>
+pub(crate) async fn blocking<T, F>(task: F) -> Result<T, CommandError>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
@@ -287,40 +120,40 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::open_worktree => Exposure::Api(post(open_worktree)),
         IpcCommand::project_snapshot => Exposure::Api(post(project_snapshot)),
         IpcCommand::stream_commit_graph => Exposure::Api(get(stream_commit_graph)),
-        IpcCommand::repository_fingerprint => Exposure::Api(post(repository_fingerprint)),
-        IpcCommand::branch_sync => Exposure::Api(post(branch_sync)),
-        IpcCommand::worktree_status => Exposure::Api(post(worktree_status)),
-        IpcCommand::inferred_squash_merge_edges => Exposure::Api(post(inferred_squash_merge_edges)),
-        IpcCommand::fetch_and_sync_pull_requests => Exposure::Api(post(fetch_and_sync_pull_requests)),
-        IpcCommand::squashed_branch_candidates => Exposure::Api(post(squashed_branch_candidates)),
-        IpcCommand::preview_cleanup_candidates => Exposure::Api(post(preview_cleanup_candidates)),
-        IpcCommand::delete_squashed_branches => Exposure::Api(post(delete_squashed_branches)),
-        IpcCommand::delete_branch => Exposure::Api(post(delete_branch)),
-        IpcCommand::compare_refs => Exposure::Api(post(compare_refs)),
-        IpcCommand::reference_picker_commits => Exposure::Api(post(reference_picker_commits)),
-        IpcCommand::select_branch_range => Exposure::Api(post(select_branch_range)),
-        IpcCommand::diff_file => Exposure::Api(post(diff_file)),
-        IpcCommand::predict_rebase_conflicts => Exposure::Api(post(predict_rebase_conflicts)),
-        IpcCommand::branch_operation_state => Exposure::Api(post(branch_operation_state)),
-        IpcCommand::repository_state => Exposure::Api(post(repository_state)),
-        IpcCommand::merge_base => Exposure::Api(post(merge_base)),
-        IpcCommand::rebase_onto => Exposure::Api(post(rebase_onto)),
-        IpcCommand::checkout_ref => Exposure::Api(post(checkout_ref)),
-        IpcCommand::push_ref => Exposure::Api(post(push_ref)),
-        IpcCommand::pull_branch => Exposure::Api(post(pull_branch)),
-        IpcCommand::merge_ref => Exposure::Api(post(merge_ref)),
-        IpcCommand::predict_merge_conflicts => Exposure::Api(post(predict_merge_conflicts)),
-        IpcCommand::create_branch => Exposure::Api(post(create_branch)),
-        IpcCommand::rename_branch => Exposure::Api(post(rename_branch)),
-        IpcCommand::create_tag => Exposure::Api(post(create_tag)),
-        IpcCommand::delete_tag => Exposure::Api(post(delete_tag)),
-        IpcCommand::cherry_pick_range => Exposure::Api(post(cherry_pick_range)),
-        IpcCommand::revert_range => Exposure::Api(post(revert_range)),
-        IpcCommand::reset_current => Exposure::Api(post(reset_current)),
-        IpcCommand::stash_list => Exposure::Api(post(stash_list)),
-        IpcCommand::stash_changes => Exposure::Api(post(stash_changes)),
-        IpcCommand::stash_action => Exposure::Api(post(stash_action)),
-        IpcCommand::undo_ref_updates => Exposure::Api(post(undo_ref_updates)),
+        IpcCommand::repository_fingerprint => Exposure::Api(post(crate::__http_repository_fingerprint)),
+        IpcCommand::branch_sync => Exposure::Api(post(crate::__http_branch_sync)),
+        IpcCommand::worktree_status => Exposure::Api(post(crate::__http_worktree_status)),
+        IpcCommand::inferred_squash_merge_edges => Exposure::Api(post(crate::__http_inferred_squash_merge_edges)),
+        IpcCommand::fetch_and_sync_pull_requests => Exposure::Api(post(crate::__http_fetch_and_sync_pull_requests)),
+        IpcCommand::squashed_branch_candidates => Exposure::Api(post(crate::__http_squashed_branch_candidates)),
+        IpcCommand::preview_cleanup_candidates => Exposure::Api(post(crate::__http_preview_cleanup_candidates)),
+        IpcCommand::delete_squashed_branches => Exposure::Api(post(crate::__http_delete_squashed_branches)),
+        IpcCommand::delete_branch => Exposure::Api(post(crate::__http_delete_branch)),
+        IpcCommand::compare_refs => Exposure::Api(post(crate::__http_compare_refs)),
+        IpcCommand::reference_picker_commits => Exposure::Api(post(crate::__http_reference_picker_commits)),
+        IpcCommand::select_branch_range => Exposure::Api(post(crate::__http_select_branch_range)),
+        IpcCommand::diff_file => Exposure::Api(post(crate::__http_diff_file)),
+        IpcCommand::predict_rebase_conflicts => Exposure::Api(post(crate::__http_predict_rebase_conflicts)),
+        IpcCommand::branch_operation_state => Exposure::Api(post(crate::__http_branch_operation_state)),
+        IpcCommand::repository_state => Exposure::Api(post(crate::__http_repository_state)),
+        IpcCommand::merge_base => Exposure::Api(post(crate::__http_merge_base)),
+        IpcCommand::rebase_onto => Exposure::Api(post(crate::__http_rebase_onto)),
+        IpcCommand::checkout_ref => Exposure::Api(post(crate::__http_checkout_ref)),
+        IpcCommand::push_ref => Exposure::Api(post(crate::__http_push_ref)),
+        IpcCommand::pull_branch => Exposure::Api(post(crate::__http_pull_branch)),
+        IpcCommand::merge_ref => Exposure::Api(post(crate::__http_merge_ref)),
+        IpcCommand::predict_merge_conflicts => Exposure::Api(post(crate::__http_predict_merge_conflicts)),
+        IpcCommand::create_branch => Exposure::Api(post(crate::__http_create_branch)),
+        IpcCommand::rename_branch => Exposure::Api(post(crate::__http_rename_branch)),
+        IpcCommand::create_tag => Exposure::Api(post(crate::__http_create_tag)),
+        IpcCommand::delete_tag => Exposure::Api(post(crate::__http_delete_tag)),
+        IpcCommand::cherry_pick_range => Exposure::Api(post(crate::__http_cherry_pick_range)),
+        IpcCommand::revert_range => Exposure::Api(post(crate::__http_revert_range)),
+        IpcCommand::reset_current => Exposure::Api(post(crate::__http_reset_current)),
+        IpcCommand::stash_list => Exposure::Api(post(crate::__http_stash_list)),
+        IpcCommand::stash_changes => Exposure::Api(post(crate::__http_stash_changes)),
+        IpcCommand::stash_action => Exposure::Api(post(crate::__http_stash_action)),
+        IpcCommand::undo_ref_updates => Exposure::Api(post(crate::__http_undo_ref_updates)),
     }
 }
 
@@ -514,177 +347,39 @@ async fn list_directory(Json(args): Json<PathArg>) -> CommandResult {
     ok(blocking(move || directory_listing(args.path.as_deref())).await?)
 }
 
-async fn checkout_ref(Json(a): Json<CheckoutArgs>) -> CommandResult {
-    ok(crate::checkout_ref(a.repo_path, a.reference, a.options).await?)
-}
 
-async fn cherry_pick_range(Json(a): Json<RangeArgs>) -> CommandResult {
-    ok(crate::cherry_pick_range(a.repo_path, a.base, a.tip).await?)
-}
 
-async fn create_branch(Json(a): Json<CreateBranchArgs>) -> CommandResult {
-    ok(crate::create_branch(a.repo_path, a.name, a.start_point, a.options).await?)
-}
 
-async fn create_tag(Json(a): Json<CreateTagArgs>) -> CommandResult {
-    ok(crate::create_tag(a.repo_path, a.name, a.target, a.message).await?)
-}
 
-async fn delete_tag(Json(a): Json<NameArgs>) -> CommandResult {
-    ok(crate::delete_tag(a.repo_path, a.name).await?)
-}
 
-async fn merge_base(Json(a): Json<MergeBaseArgs>) -> CommandResult {
-    ok(blocking(move || crate::merge_base(a.repo_path, a.left, a.right)).await?)
-}
 
-async fn merge_ref(Json(a): Json<MergeArgs>) -> CommandResult {
-    ok(crate::merge_ref(a.repo_path, a.source, a.into, a.options).await?)
-}
 
-async fn predict_merge_conflicts(Json(a): Json<MergePredictionArgs>) -> CommandResult {
-    ok(crate::predict_merge_conflicts(a.repo_path, a.source, a.into).await?)
-}
 
-async fn pull_branch(Json(a): Json<BranchArgs>) -> CommandResult {
-    ok(crate::pull_branch(a.repo_path, a.branch).await?)
-}
 
-async fn push_ref(Json(a): Json<PushArgs>) -> CommandResult {
-    ok(crate::push_ref(a.repo_path, a.reference, a.options).await?)
-}
 
-async fn rename_branch(Json(a): Json<RenameArgs>) -> CommandResult {
-    ok(crate::rename_branch(a.repo_path, a.branch, a.name).await?)
-}
 
-async fn reset_current(Json(a): Json<ResetArgs>) -> CommandResult {
-    ok(crate::reset_current(a.repo_path, a.target, a.mode).await?)
-}
 
-async fn revert_range(Json(a): Json<RangeArgs>) -> CommandResult {
-    ok(crate::revert_range(a.repo_path, a.base, a.tip).await?)
-}
 
-async fn stash_action(Json(a): Json<StashActionArgs>) -> CommandResult {
-    ok(crate::stash_action(a.repo_path, a.name, a.sha, a.action).await?)
-}
 
-async fn stash_changes(Json(a): Json<StashChangesArgs>) -> CommandResult {
-    ok(crate::stash_changes(a.repo_path, a.message, a.include_untracked).await?)
-}
 
-async fn branch_sync(Json(args): Json<RepoPath>) -> CommandResult {
-    ok(blocking(move || crate::branch_sync(args.repo_path)).await?)
-}
 
-async fn worktree_status(Json(args): Json<RepoPath>) -> CommandResult {
-    ok(blocking(move || crate::worktree_status(args.repo_path)).await?)
-}
 
-async fn repository_state(Json(args): Json<RepoPath>) -> CommandResult {
-    ok(blocking(move || crate::repository_state(args.repo_path)).await?)
-}
 
-async fn stash_list(Json(args): Json<RepoPath>) -> CommandResult {
-    ok(blocking(move || crate::stash_list(args.repo_path)).await?)
-}
 
-async fn repository_fingerprint(Json(args): Json<RepoPath>) -> CommandResult {
-    ok(blocking(move || Ok(crate::repository_fingerprint(args.repo_path))).await?)
-}
 
-async fn inferred_squash_merge_edges(Json(args): Json<RepoPath>) -> CommandResult {
-    let Ok(database_path) = pull_request_database_path() else {
-        return ok(Vec::<(String, String)>::new());
-    };
-    let edges = tokio::task::spawn_blocking(move || {
-        inferred_squash_merges(&args.repo_path, database_path)
-    })
-    .await
-    .unwrap_or_default();
-    ok(edges)
-}
 
-async fn fetch_and_sync_pull_requests(Json(args): Json<RepoPath>) -> CommandResult {
-    let database_path = pull_request_database_path()?;
-    blocking(move || fetch_and_sync_repository(&args.repo_path, database_path)).await?;
-    ok(Value::Null)
-}
 
-async fn squashed_branch_candidates(Json(args): Json<RepoPath>) -> CommandResult {
-    let database_path = pull_request_database_path()?;
-    ok(blocking(move || merged_branch_candidates(&args.repo_path, database_path)).await?)
-}
 
-async fn preview_cleanup_candidates(Json(args): Json<CleanupArgs>) -> CommandResult {
-    let database_path = cleanup_database_path(&args.options)?;
-    ok(blocking(move || cleanup_candidates(&args.repo_path, &args.options, database_path)).await?)
-}
 
-async fn delete_squashed_branches(Json(args): Json<CleanupArgs>) -> CommandResult {
-    let database_path = cleanup_database_path(&args.options)?;
-    ok(
-        blocking(move || delete_cleanup_candidates(&args.repo_path, &args.options, database_path))
-            .await?,
-    )
-}
 
-async fn delete_branch(Json(args): Json<BranchArgs>) -> CommandResult {
-    blocking(move || {
-        git_output_allow_empty(&args.repo_path, &["branch", "-D", "--", &args.branch]).map(|_| ())
-    })
-    .await?;
-    ok(Value::Null)
-}
 
-async fn compare_refs(Json(args): Json<CompareArgs>) -> CommandResult {
-    ok(blocking(move || comparison(&args.repo_path, &args.base_ref, &args.head_ref)).await?)
-}
 
-async fn reference_picker_commits(Json(args): Json<RepoPath>) -> CommandResult {
-    ok(blocking(move || picker_commits(&args.repo_path)).await?)
-}
 
-async fn select_branch_range(Json(args): Json<ReferenceArgs>) -> CommandResult {
-    ok(blocking(move || branch_range(&args.repo_path, &args.reference)).await?)
-}
 
-async fn diff_file(Json(args): Json<DiffFileArgs>) -> CommandResult {
-    ok(blocking(move || {
-        file_diff(
-            &args.repo_path,
-            &args.base_sha,
-            &args.head_sha,
-            args.old_path,
-            args.new_path,
-        )
-    })
-    .await?)
-}
 
-async fn predict_rebase_conflicts(Json(args): Json<RebaseArgs>) -> CommandResult {
-    ok(blocking(move || {
-        predicted_conflicts(&args.repo_path, &args.onto, &args.upstream, &args.branch)
-    })
-    .await?)
-}
 
-async fn branch_operation_state(Json(args): Json<BranchArgs>) -> CommandResult {
-    ok(blocking(move || branch_operability(&args.repo_path, &args.branch)).await?)
-}
 
-async fn rebase_onto(Json(args): Json<RebaseArgs>) -> CommandResult {
-    ok(blocking(move || {
-        rebase_branch_onto(&args.repo_path, &args.onto, &args.upstream, &args.branch)
-    })
-    .await?)
-}
 
-async fn undo_ref_updates(Json(args): Json<UndoArgs>) -> CommandResult {
-    blocking(move || restore_refs(&args.repo_path, &args.updates)).await?;
-    ok(Value::Null)
-}
 
 /// Streams commit batches as SSE, standing in for the Tauri `Channel` the desktop app uses.
 async fn stream_commit_graph(Query(args): Query<HashMap<String, String>>) -> Response {

@@ -1444,6 +1444,7 @@ fn fingerprint(values: &[&str]) -> String {
 }
 
 // show-ref exits non-zero on a repository with no refs, and symbolic-ref does the same on a detached HEAD.
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn repository_fingerprint(repo_path: String) -> String {
     let refs = git_output_allow_empty(&repo_path, &["--no-optional-locks", "show-ref", "--head"])
@@ -1463,6 +1464,7 @@ fn stream_commit_graph(
     })
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn inferred_squash_merge_edges(repo_path: String) -> Vec<(String, String)> {
     let Ok(database_path) = pull_request_database_path() else {
@@ -1473,6 +1475,7 @@ async fn inferred_squash_merge_edges(repo_path: String) -> Vec<(String, String)>
         .unwrap_or_default()
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn fetch_and_sync_pull_requests(repo_path: String) -> Result<(), String> {
     let database_path = pull_request_database_path()?;
@@ -1481,6 +1484,7 @@ async fn fetch_and_sync_pull_requests(repo_path: String) -> Result<(), String> {
         .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn squashed_branch_candidates(repo_path: String) -> Result<Vec<String>, String> {
     let database_path = pull_request_database_path()?;
@@ -1489,6 +1493,7 @@ async fn squashed_branch_candidates(repo_path: String) -> Result<Vec<String>, St
         .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn preview_cleanup_candidates(
     repo_path: String,
@@ -1502,6 +1507,7 @@ async fn preview_cleanup_candidates(
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn delete_squashed_branches(
     repo_path: String,
@@ -1515,6 +1521,7 @@ async fn delete_squashed_branches(
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 fn delete_branch(repo_path: String, branch: String) -> Result<OperationResult, String> {
     run_worktree_operation(
@@ -1553,6 +1560,7 @@ fn parse_branch_sync(output: &str) -> Vec<BranchSync> {
         .collect()
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn branch_sync(repo_path: String) -> Result<Vec<BranchSync>, String> {
     let output = git_output_allow_empty(
@@ -1583,6 +1591,7 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str) -> Result<Compari
     })
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
     comparison(&repo_path, &base_ref, &head_ref)
@@ -1606,6 +1615,7 @@ fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String
         .collect())
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 fn reference_picker_commits(repo_path: String) -> Result<Vec<Vec<serde_json::Value>>, String> {
     picker_commits(&repo_path)
@@ -1629,6 +1639,7 @@ fn branch_range(repo_path: &str, reference: &str) -> Result<BranchSelection, Str
     })
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSelection, String> {
     branch_range(&repo_path, &reference)
@@ -1689,6 +1700,7 @@ fn file_diff(
     })
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn diff_file(
     repo_path: String,
@@ -1853,6 +1865,7 @@ fn parse_status_counts(output: &str) -> (u32, u32) {
     (changed, untracked)
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn worktree_status(repo_path: String) -> Result<Vec<WorktreeStatus>, String> {
     let output = git_output_allow_empty(&repo_path, &["worktree", "list", "--porcelain", "-z"])?;
@@ -2059,6 +2072,7 @@ fn restore_refs(repo_path: &str, updates: &[RefUpdate]) -> Result<(), String> {
     Ok(())
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn predict_rebase_conflicts(
     repo_path: String,
@@ -2071,11 +2085,13 @@ async fn predict_rebase_conflicts(
         .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 fn branch_operation_state(repo_path: String, branch: String) -> Result<BranchOperability, String> {
     branch_operability(&repo_path, &branch)
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn rebase_onto(
     repo_path: String,
@@ -2088,6 +2104,7 @@ async fn rebase_onto(
         .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn undo_ref_updates(repo_path: String, updates: Vec<RefUpdate>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || restore_refs(&repo_path, &updates))
@@ -2190,6 +2207,7 @@ struct RepositoryState {
     remote: Option<String>,
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn merge_base(repo_path: String, left: String, right: String) -> Result<String, String> {
     let left = resolve_commit(&repo_path, &left)?;
@@ -2198,6 +2216,7 @@ fn merge_base(repo_path: String, left: String, right: String) -> Result<String, 
         .ok_or_else(|| "These refs share no common history.".to_string())
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn repository_state(repo_path: String) -> Result<RepositoryState, String> {
     let worktree = worktree_path(&repo_path)?;
@@ -2274,6 +2293,7 @@ fn checkout_reference(repo_path: &str, reference: &str, options: &CheckoutOption
     completed_operation(repo_path, summary, &before)
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn checkout_ref(repo_path: String, reference: String, options: CheckoutOptions) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || checkout_reference(&repo_path, &reference, &options))
@@ -2319,6 +2339,7 @@ fn push_reference(repo_path: &str, reference: &str, options: &PushOptions) -> Re
     Ok(OperationResult::Completed(CompletedOperation { summary, updates: Vec::new() }))
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn push_ref(repo_path: String, reference: String, options: PushOptions) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || push_reference(&repo_path, &reference, &options))
@@ -2362,6 +2383,7 @@ fn fast_forward_branch(repo_path: &str, branch: &str) -> Result<OperationResult,
     completed_operation(repo_path, summary, &before)
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn pull_branch(repo_path: String, branch: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || fast_forward_branch(&repo_path, &branch))
@@ -2408,6 +2430,7 @@ fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeO
     run_worktree_operation(repo_path, &worktree, summary, &arguments, Some(&["merge", "--abort"]))
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn merge_ref(repo_path: String, source: String, into: String, options: MergeOptions) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || merge_into_branch(&repo_path, &source, &into, &options))
@@ -2443,6 +2466,7 @@ fn predicted_merge_conflicts(repo_path: &str, source: &str, into: &str) -> Resul
     }
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn predict_merge_conflicts(repo_path: String, source: String, into: String) -> Result<ConflictPrediction, String> {
     tauri::async_runtime::spawn_blocking(move || predicted_merge_conflicts(&repo_path, &source, &into))
@@ -2476,6 +2500,7 @@ fn create_branch_at(repo_path: &str, name: &str, start_point: &str, options: &Br
     run_worktree_operation(repo_path, repo_path, format!("Created {name} at {start_point}."), &arguments, None)
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn create_branch(repo_path: String, name: String, start_point: String, options: BranchOptions) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || create_branch_at(&repo_path, &name, &start_point, &options))
@@ -2483,6 +2508,7 @@ async fn create_branch(repo_path: String, name: String, start_point: String, opt
         .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn rename_branch(repo_path: String, branch: String, name: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2499,6 +2525,7 @@ async fn rename_branch(repo_path: String, branch: String, name: String) -> Resul
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn create_tag(repo_path: String, name: String, target: String, message: Option<String>) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2519,6 +2546,7 @@ async fn create_tag(repo_path: String, name: String, target: String, message: Op
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn delete_tag(repo_path: String, name: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2528,6 +2556,7 @@ async fn delete_tag(repo_path: String, name: String) -> Result<OperationResult, 
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn cherry_pick_range(repo_path: String, base: String, tip: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2548,6 +2577,7 @@ async fn cherry_pick_range(repo_path: String, base: String, tip: String) -> Resu
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn revert_range(repo_path: String, base: String, tip: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2568,6 +2598,7 @@ async fn revert_range(repo_path: String, base: String, tip: String) -> Result<Op
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn reset_current(repo_path: String, target: String, mode: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2626,6 +2657,7 @@ fn parse_stash_entries(output: &str) -> Vec<StashEntry> {
         .collect()
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command(async)]
 fn stash_list(repo_path: String) -> Result<Vec<StashEntry>, String> {
     let output = git_output_allow_empty(
@@ -2635,6 +2667,7 @@ fn stash_list(repo_path: String) -> Result<Vec<StashEntry>, String> {
     Ok(parse_stash_entries(&output))
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn stash_changes(repo_path: String, message: Option<String>, include_untracked: bool) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2654,6 +2687,7 @@ async fn stash_changes(repo_path: String, message: Option<String>, include_untra
     .map_err(|error| error.to_string())?
 }
 
+#[git_nav_macros::http_command]
 #[tauri::command]
 async fn stash_action(repo_path: String, name: String, sha: String, action: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || {

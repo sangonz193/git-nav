@@ -1457,6 +1457,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "getrandom 0.3.4",
+ "git-nav-macros",
  "log",
  "mime_guess",
  "rusqlite",
@@ -1471,6 +1472,15 @@ dependencies = [
  "tokio-stream",
  "tower-http",
  "url",
+]
+
+[[package]]
+name = "git-nav-macros"
+version = "0.0.3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
