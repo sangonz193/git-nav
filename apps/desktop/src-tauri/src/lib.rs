@@ -68,6 +68,7 @@ commands![
     pull_branch,
     merge_ref,
     predict_merge_conflicts,
+    predict_revert_conflicts,
     create_branch,
     rename_branch,
     create_tag,
@@ -1868,15 +1869,23 @@ fn parse_merge_tree_output(stdout: &str) -> Result<(String, Vec<String>), String
     ))
 }
 
-fn predicted_conflicts(repo_path: &str, onto: &str, upstream: &str, branch: &str) -> Result<ConflictPrediction, String> {
+// merge-tree only learned to answer this without a worktree, through --write-tree, in 2.38.
+fn merge_tree_unavailable(repo_path: &str) -> Option<ConflictPrediction> {
     let Some(version) = git_version(repo_path) else {
-        return Ok(ConflictPrediction::Unknown { reason: "Could not read the installed Git version.".to_string() });
+        return Some(ConflictPrediction::Unknown { reason: "Could not read the installed Git version.".to_string() });
     };
     if version < MINIMUM_MERGE_TREE_VERSION {
         let (major, minor) = MINIMUM_MERGE_TREE_VERSION;
-        return Ok(ConflictPrediction::Unknown {
+        return Some(ConflictPrediction::Unknown {
             reason: format!("Predicting conflicts requires Git {major}.{minor} or newer."),
         });
+    }
+    None
+}
+
+fn predicted_conflicts(repo_path: &str, onto: &str, upstream: &str, branch: &str) -> Result<ConflictPrediction, String> {
+    if let Some(prediction) = merge_tree_unavailable(repo_path) {
+        return Ok(prediction);
     }
     let onto_sha = resolve_commit(repo_path, onto)?;
     let upstream_sha = resolve_commit(repo_path, upstream)?;
@@ -2413,7 +2422,7 @@ fn checkout_reference(repo_path: &str, reference: &str, options: &CheckoutOption
     let landed = options.create.clone().unwrap_or_else(|| reference.to_string());
     let mut summary = format!("Checked out {landed}.");
     if options.stash && !git_result(&worktree, &["stash", "pop"])?.status.success() {
-        summary = format!("{summary} The set aside changes did not reapply, so they are still in the stash.");
+        summary = format!("{summary} The set aside changes conflicted, so they are still in the stash and the files carry conflict markers.");
     }
     completed_operation(repo_path, summary, &before)
 }
@@ -2523,6 +2532,33 @@ struct MergeOptions {
     message: Option<String>,
 }
 
+// Git ignores -m under --squash and writes no MERGE_HEAD, so the commit that lands the squash and the
+// recovery that undoes a conflicted one both have to be spelled out here.
+fn squash_into_branch(repo_path: &str, worktree: &str, source: &str, into: &str, message: Option<&str>) -> Result<OperationResult, String> {
+    let message = message
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .ok_or_else(|| "A squash merge needs a commit message.".to_string())?;
+    let before = ref_shas(repo_path)?;
+    let merged = git_result(worktree, &["merge", "--squash", source])?;
+    if !merged.status.success() {
+        let failure = failed_operation(worktree, &merged);
+        let _ = git_result(worktree, &["reset", "--merge"]);
+        return Ok(failure);
+    }
+    if !worktree_is_dirty(worktree)? {
+        let _ = git_result(worktree, &["reset", "--merge"]);
+        return completed_operation(repo_path, format!("{into} already has every change in {source}."), &before);
+    }
+    let committed = git_result(worktree, &["commit", "--message", message])?;
+    if !committed.status.success() {
+        let failure = failed_operation(worktree, &committed);
+        let _ = git_result(worktree, &["reset", "--merge"]);
+        return Ok(failure);
+    }
+    completed_operation(repo_path, format!("Squashed {source} into a single commit on {into}."), &before)
+}
+
 fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeOptions) -> Result<OperationResult, String> {
     resolve_commit(repo_path, source)?;
     let worktree = worktree_for_branch(repo_path, into)?
@@ -2533,12 +2569,14 @@ fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeO
     if worktree_is_dirty(&worktree)? {
         return Err(format!("{worktree} has uncommitted changes."));
     }
+    if options.mode == "squash" {
+        return squash_into_branch(repo_path, &worktree, source, into, options.message.as_deref());
+    }
 
     let mut arguments = vec!["merge".to_string(), "--no-edit".to_string()];
     match options.mode.as_str() {
         "noFastForward" => arguments.push("--no-ff".to_string()),
         "fastForwardOnly" => arguments.push("--ff-only".to_string()),
-        "squash" => arguments.push("--squash".to_string()),
         _ => {}
     }
     if let Some(message) = options.message.as_ref().filter(|message| !message.trim().is_empty()) {
@@ -2547,11 +2585,7 @@ fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeO
     }
     arguments.push(source.to_string());
     let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
-    let summary = if options.mode == "squash" {
-        format!("Squashed {source} into the working tree of {into}, ready to commit.")
-    } else {
-        format!("Merged {source} into {into}.")
-    };
+    let summary = format!("Merged {source} into {into}.");
     run_worktree_operation(repo_path, &worktree, summary, &arguments, Some(&["merge", "--abort"]))
 }
 
@@ -2564,14 +2598,8 @@ async fn merge_ref(repo_path: String, source: String, into: String, options: Mer
 }
 
 fn predicted_merge_conflicts(repo_path: &str, source: &str, into: &str) -> Result<ConflictPrediction, String> {
-    let Some(version) = git_version(repo_path) else {
-        return Ok(ConflictPrediction::Unknown { reason: "Could not read the installed Git version.".to_string() });
-    };
-    if version < MINIMUM_MERGE_TREE_VERSION {
-        let (major, minor) = MINIMUM_MERGE_TREE_VERSION;
-        return Ok(ConflictPrediction::Unknown {
-            reason: format!("Predicting conflicts requires Git {major}.{minor} or newer."),
-        });
+    if let Some(prediction) = merge_tree_unavailable(repo_path) {
+        return Ok(prediction);
     }
     let source_sha = resolve_commit(repo_path, source)?;
     let into_sha = resolve_commit(repo_path, into)?;
@@ -2595,6 +2623,66 @@ fn predicted_merge_conflicts(repo_path: &str, source: &str, into: &str) -> Resul
 #[tauri::command]
 async fn predict_merge_conflicts(repo_path: String, source: String, into: String) -> Result<ConflictPrediction, String> {
     tauri::async_runtime::spawn_blocking(move || predicted_merge_conflicts(&repo_path, &source, &into))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+// git revert walks a range newest first and undoes each commit against the result of the ones before it,
+// so the prediction has to replay that same sequence rather than test the range as one change.
+fn predicted_revert_conflicts(repo_path: &str, base: &str, tip: &str) -> Result<ConflictPrediction, String> {
+    if let Some(prediction) = merge_tree_unavailable(repo_path) {
+        return Ok(prediction);
+    }
+    let head_sha = resolve_commit(repo_path, "HEAD")?;
+    let base_sha = resolve_commit(repo_path, base)?;
+    let tip_sha = resolve_commit(repo_path, tip)?;
+    let commits = git_output_allow_empty(repo_path, &["rev-list", &format!("{base_sha}..{tip_sha}")])?;
+    let mut accumulated = git_output(repo_path, &["rev-parse", "--verify", &format!("{head_sha}^{{tree}}")])
+        .ok_or_else(|| "Could not resolve the tree of HEAD.".to_string())?;
+
+    for commit in commits.lines() {
+        if git_output(repo_path, &["rev-parse", "--verify", "--quiet", &format!("{commit}^2")]).is_some() {
+            return Ok(ConflictPrediction::Unknown {
+                reason: format!("{} is a merge commit, and reverting one needs a mainline to keep.", &commit[..8.min(commit.len())]),
+            });
+        }
+        let Some(parent) = git_output(repo_path, &["rev-parse", "--verify", "--quiet", &format!("{commit}^1")]) else {
+            return Ok(ConflictPrediction::Unknown { reason: format!("{} has no parent to undo against.", &commit[..8.min(commit.len())]) });
+        };
+        // Undoing a commit is the change from it back to its parent, so the commit itself is what both sides start from.
+        let output = git_result(
+            repo_path,
+            &[
+                "merge-tree",
+                "-z",
+                "--write-tree",
+                "--name-only",
+                &format!("--merge-base={commit}"),
+                &accumulated,
+                &parent,
+            ],
+        )?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        match output.status.code() {
+            Some(0) => accumulated = parse_merge_tree_output(&stdout)?.0,
+            Some(1) => {
+                return Ok(ConflictPrediction::Conflicts(PredictedConflict {
+                    commit: commit.to_string(),
+                    subject: git_output(repo_path, &["log", "-1", "--format=%s", commit]).unwrap_or_default(),
+                    files: parse_merge_tree_output(&stdout)?.1,
+                }))
+            }
+            _ => return Ok(ConflictPrediction::Unknown { reason: git_error_message(&output) }),
+        }
+    }
+
+    Ok(ConflictPrediction::Clean)
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command]
+async fn predict_revert_conflicts(repo_path: String, base: String, tip: String) -> Result<ConflictPrediction, String> {
+    tauri::async_runtime::spawn_blocking(move || predicted_revert_conflicts(&repo_path, &base, &tip))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -3804,6 +3892,133 @@ mod tests {
         assert!(pending.is_none());
         assert!(!dirty);
         assert_eq!(head, "main");
+    }
+
+    #[test]
+    fn lands_a_squash_merge_as_one_commit_and_leaves_nothing_staged() {
+        let (path, run) = scratch_repository("merge-squash");
+        fs::write(Path::new(&path).join("file.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "topic"]);
+        fs::write(Path::new(&path).join("one.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "one"]);
+        fs::write(Path::new(&path).join("two.txt"), "two\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "two"]);
+        run(&["checkout", "--quiet", "main"]);
+
+        let options = MergeOptions { mode: "squash".to_string(), message: Some("everything topic did".to_string()) };
+        let result = merge_into_branch(&path, "topic", "main", &options).unwrap();
+        let dirty = worktree_is_dirty(&path).unwrap();
+        let subject = git_output(&path, &["log", "-1", "--format=%s"]).unwrap();
+        let parents = git_output(&path, &["log", "-1", "--format=%P"]).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(result, OperationResult::Completed(_)));
+        assert!(!dirty);
+        assert_eq!(subject, "everything topic did");
+        assert_eq!(parents.split_whitespace().count(), 1);
+    }
+
+    #[test]
+    fn refuses_a_squash_merge_without_a_commit_message() {
+        let (path, run) = scratch_repository("merge-squash-unnamed");
+        fs::write(Path::new(&path).join("file.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "topic"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "ahead"]);
+        run(&["checkout", "--quiet", "main"]);
+
+        let options = MergeOptions { mode: "squash".to_string(), message: Some("   ".to_string()) };
+        let result = merge_into_branch(&path, "topic", "main", &options);
+        let dirty = worktree_is_dirty(&path).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(result.is_err());
+        assert!(!dirty);
+    }
+
+    #[test]
+    fn undoes_a_conflicted_squash_merge_that_has_no_merge_to_abort() {
+        let (path, run) = scratch_repository("merge-squash-conflict");
+        let write = |contents: &str| fs::write(Path::new(&path).join("shared.txt"), contents).unwrap();
+        write("base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "topic"]);
+        write("topic\n");
+        run(&["commit", "--quiet", "--all", "--message", "topic"]);
+        run(&["checkout", "--quiet", "main"]);
+        write("main\n");
+        run(&["commit", "--quiet", "--all", "--message", "main"]);
+
+        let options = MergeOptions { mode: "squash".to_string(), message: Some("squashed".to_string()) };
+        let result = merge_into_branch(&path, "topic", "main", &options).unwrap();
+        let dirty = worktree_is_dirty(&path).unwrap();
+        let head = git_output(&path, &["log", "-1", "--format=%s"]).unwrap();
+        let leftovers = existing_git_path(&path, "SQUASH_MSG");
+        fs::remove_dir_all(&path).unwrap();
+
+        let OperationResult::Failed(failure) = result else {
+            panic!("a conflicting squash should not complete");
+        };
+        assert_eq!(failure.files, vec!["shared.txt".to_string()]);
+        assert!(!dirty);
+        assert_eq!(head, "main");
+        assert!(leftovers.is_none());
+    }
+
+    #[test]
+    fn completes_a_squash_merge_that_has_nothing_left_to_apply() {
+        let (path, run) = scratch_repository("merge-squash-applied");
+        fs::write(Path::new(&path).join("file.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "topic"]);
+        fs::write(Path::new(&path).join("one.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "one"]);
+        run(&["checkout", "--quiet", "main"]);
+
+        let options = MergeOptions { mode: "squash".to_string(), message: Some("squashed".to_string()) };
+        merge_into_branch(&path, "topic", "main", &options).unwrap();
+        let again = merge_into_branch(&path, "topic", "main", &options).unwrap();
+        let dirty = worktree_is_dirty(&path).unwrap();
+        let count = git_output(&path, &["rev-list", "--count", "HEAD"]).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(again, OperationResult::Completed(_)));
+        assert!(!dirty);
+        assert_eq!(count, "2");
+    }
+
+    #[test]
+    fn predicts_the_commit_a_revert_stops_on() {
+        let (path, run) = scratch_repository("revert-prediction");
+        let write = |contents: &str| fs::write(Path::new(&path).join("shared.txt"), contents).unwrap();
+        write("one\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        let base = resolve_commit(&path, "HEAD").unwrap();
+        write("two\n");
+        run(&["commit", "--quiet", "--all", "--message", "second"]);
+        let tip = resolve_commit(&path, "HEAD").unwrap();
+        write("three\n");
+        run(&["commit", "--quiet", "--all", "--message", "third"]);
+
+        let conflicting = predicted_revert_conflicts(&path, &base, &tip).unwrap();
+        let clean = predicted_revert_conflicts(&path, &tip, &resolve_commit(&path, "HEAD").unwrap()).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        let ConflictPrediction::Conflicts(conflict) = conflicting else {
+            panic!("reverting a commit later rewritten should be predicted to conflict");
+        };
+        assert_eq!(conflict.subject, "second");
+        assert_eq!(conflict.files, vec!["shared.txt".to_string()]);
+        assert!(matches!(clean, ConflictPrediction::Clean));
     }
 
     #[test]

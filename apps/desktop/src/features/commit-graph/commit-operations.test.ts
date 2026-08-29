@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { commitSelection, displayRefs, refSelection, type BranchSync, type Commit, type Selection } from "./commit-graph"
-import { applicableOperations, OPERATION_GROUPS, type Operand, type RepositoryState } from "./commit-operations"
+import { applicableOperations, initialValues, OPERATION_GROUPS, resolveFields, type Operand, type OperationState, type RepositoryState } from "./commit-operations"
 
 function commit(hash: string, parents: string[] = [], refs: string[] = []): Commit {
   return {
@@ -46,9 +46,15 @@ function ids(source: Selection | null, target: Operand) {
   return applicableOperations(repository, source, target).map(({ operation }) => operation.id)
 }
 
+const IDLE: OperationState = { branch: null, mergeBase: null, prediction: null }
+
 function planOf(state: RepositoryState, target: Operand, id: string) {
   const entry = applicableOperations(state, null, target).find(({ operation }) => operation.id === id)
-  return entry ? entry.operation.plan(entry.request, {}, { branch: null, mergeBase: null, prediction: null }) : null
+  return entry ? entry.operation.plan(entry.request, {}, IDLE) : null
+}
+
+function entryFor(source: Selection | null, target: Operand, id: string) {
+  return applicableOperations(repository, source, target).find(({ operation }) => operation.id === id)!
 }
 
 function labelOf(source: Selection | null, target: Operand, id: string) {
@@ -181,5 +187,83 @@ describe("deleting a remote branch", () => {
 
   test("never sees a remote HEAD, which is not shown as a ref in the first place", () => {
     expect(displayRefs(["upstream/HEAD"], { remotes: forked.remotes })).toEqual([])
+  })
+})
+
+describe("outcome prediction", () => {
+  test("asks for the commit message a squash merge needs before it can be run", () => {
+    const { operation, request } = entryFor(null, topic, "merge")
+    const squashing = resolveFields(operation, request, { mode: "squash" })
+
+    expect(resolveFields(operation, request, {}).fields.map((field) => field.key)).toEqual(["mode"])
+    expect(squashing.fields.map((field) => field.key)).toEqual(["mode", "message"])
+    expect(squashing.values).toEqual({ mode: "squash", message: "" })
+    expect(operation.blocks(request, IDLE, squashing.values).map((block) => block.reason)).toContain("write the commit message")
+    expect(operation.blocks(request, IDLE, { ...squashing.values, message: "one commit" })).toEqual([])
+  })
+
+  test("commits the squash rather than leaving it staged", () => {
+    const { operation, request } = entryFor(null, topic, "merge")
+    const plan = operation.plan(request, { mode: "squash", message: " one commit " }, IDLE)
+
+    expect(plan.argv).toEqual(["git", "merge", "--squash", "topic", "&&", "git", "commit", "--message", "one commit"])
+    expect(plan.args.options).toEqual({ mode: "squash", message: "one commit" })
+  })
+
+  test("keeps a message typed for a squash out of a merge that is no longer squashing", () => {
+    const { operation, request } = entryFor(null, topic, "merge")
+    const typed = { mode: "squash", message: "one commit" }
+
+    expect(resolveFields(operation, request, typed).values).toEqual(typed)
+    expect(resolveFields(operation, request, { ...typed, mode: "default" }).values).toEqual({ mode: "default" })
+    expect(operation.plan(request, resolveFields(operation, request, { ...typed, mode: "default" }).values, IDLE).args.options)
+      .toEqual({ mode: "default", message: null })
+  })
+
+  test("warns that a fast-forward only merge has no fast-forward to make", () => {
+    const { operation, request } = entryFor(null, topic, "merge")
+    const state = { ...IDLE, branch: { exists: true, isCurrentWorktree: true, isDirty: false, pendingOperation: null, sha: "a", worktreePath: "/repo" }, mergeBase: "b" }
+    const messages = operation.warnings(request, state, { mode: "fastForwardOnly" }).map((warning) => warning.message)
+
+    expect(messages).toEqual(["main has commits topic does not, so there is no fast-forward to make and Git refuses this merge."])
+    expect(operation.warnings(request, { ...state, mergeBase: "a" }, { mode: "fastForwardOnly" })).toEqual([])
+  })
+
+  test("says where a predicted conflict leaves the repository", () => {
+    const { operation, request } = entryFor(range, tag, "rebaseOnto")
+    const prediction = { commit: "b0b0b0b0", files: ["shared.txt"], outcome: "conflicts" as const, subject: "work" }
+    const warnings = operation.warnings(request, { ...IDLE, prediction }, {})
+
+    expect(warnings[0].files).toEqual(["shared.txt"])
+    expect(warnings[1].message).toBe("The rebase is undone when that happens, so topic stays where it is.")
+  })
+
+  test("predicts the operations that replay commits onto something else", () => {
+    const needsOf = (source: Selection | null, target: Operand, id: string) => {
+      const { operation, request } = entryFor(source, target, id)
+      return operation.needs?.(request, initialValues(operation, request))?.prediction?.kind
+    }
+
+    expect(needsOf(range, range, "cherryPick")).toBe("rebase")
+    expect(needsOf(range, range, "revert")).toBe("revert")
+    expect(needsOf(range, range, "dropCommits")).toBe("rebase")
+    expect(needsOf(null, topic, "merge")).toBe("merge")
+  })
+
+  test("makes every offered operation answer where it lands", () => {
+    const targets: [Selection | null, Operand][] = [
+      [null, topic],
+      [null, tag],
+      [null, remote],
+      [range, range],
+      [range, tag],
+      [null, { kind: "stash", entry: { base: "b1", branch: "main", date: "2026-01-01T00:00:00Z", message: "work", name: "stash@{0}", sha: "s1" } }],
+    ]
+
+    for (const [source, target] of targets) {
+      for (const { operation, request } of applicableOperations({ ...repository, isDirty: true }, source, target)) {
+        expect(() => operation.warnings(request, IDLE, initialValues(operation, request))).not.toThrow()
+      }
+    }
   })
 })

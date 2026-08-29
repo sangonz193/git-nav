@@ -6,7 +6,7 @@ import { TriangleAlert } from "lucide-react"
 import { Fragment, useEffect, useMemo, useState } from "react"
 
 import type { Selection } from "./commit-graph"
-import { applicableOperations, flag, initialValues, operationById, predictConflicts, type BranchOperationState, type CompletedOperation, type Operand, type OperationRequest, type OperationResult, type OperationState, type Plan, type RefMenuComponents, type RepositoryState } from "./commit-operations"
+import { applicableOperations, flag, operationById, predictConflicts, resolveFields, type BranchOperationState, type CompletedOperation, type Operand, type OperationRequest, type OperationResult, type OperationState, type Plan, type Values, type RefMenuComponents, type RepositoryState } from "./commit-operations"
 
 const PREDICTION_DEBOUNCE = 200
 
@@ -55,12 +55,13 @@ export function OperationDialog({ onClose, onCompleted, onFailed, repoPath, requ
   request: OperationRequest
 }) {
   const operation = operationById(request.id)
-  const [values, setValues] = useState(() => initialValues(operation, request))
+  const [entered, setEntered] = useState<Values>({})
   const [state, setState] = useState<OperationState>({ branch: null, mergeBase: null, prediction: null })
-  const fields = useMemo(() => operation.fields?.(request) ?? [], [operation, request])
+  const { fields, values } = useMemo(() => resolveFields(operation, request, entered), [operation, request, entered])
+  const firstTextField = fields.find((field) => field.kind === "text")?.key
   const needs = useMemo(() => operation.needs?.(request, values) ?? {}, [operation, request, values])
   const blocks = operation.blocks(request, state, values)
-  const warnings = operation.warnings?.(request, state, values) ?? []
+  const warnings = operation.warnings(request, state, values)
   const plan = blocks.length === 0 ? operation.plan(request, values, state) : null
   const { isPending, mutate } = useMutation({
     mutationFn: (plan: Plan) => invoke<OperationResult>(plan.command, { repoPath, ...plan.args }),
@@ -133,11 +134,11 @@ export function OperationDialog({ onClose, onCompleted, onFailed, repoPath, requ
               <label className="grid gap-1" key={field.key}>
                 <span className="text-muted-foreground">{field.label}</span>
                 <input
-                  autoFocus={field.key === "name"}
+                  autoFocus={field.key === firstTextField}
                   className="rounded-lg border bg-transparent px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
+                  onChange={(event) => setEntered((current) => ({ ...current, [field.key]: event.target.value }))}
                   placeholder={field.placeholder}
-                  value={values[field.key]}
+                  value={values[field.key] ?? ""}
                 />
               </label>
             ) : field.kind === "toggle" ? (
@@ -145,7 +146,7 @@ export function OperationDialog({ onClose, onCompleted, onFailed, repoPath, requ
                 <input
                   checked={flag(values, field.key)}
                   className="mt-0.5 size-4 accent-primary"
-                  onChange={(event) => setValues((current) => ({ ...current, [field.key]: String(event.target.checked) }))}
+                  onChange={(event) => setEntered((current) => ({ ...current, [field.key]: String(event.target.checked) }))}
                   type="checkbox"
                 />
                 <span>{field.label}</span>
@@ -159,7 +160,7 @@ export function OperationDialog({ onClose, onCompleted, onFailed, repoPath, requ
                       checked={values[field.key] === choice.value}
                       className="mt-0.5 size-4 accent-primary"
                       name={field.key}
-                      onChange={() => setValues((current) => ({ ...current, [field.key]: choice.value }))}
+                      onChange={() => setEntered((current) => ({ ...current, [field.key]: choice.value }))}
                       type="radio"
                     />
                     <span className="min-w-0">

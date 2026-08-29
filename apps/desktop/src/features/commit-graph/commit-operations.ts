@@ -55,6 +55,7 @@ export type OperationState = {
 type Needs = { branch?: string, mergeBase?: [string, string], prediction?: PredictionRequest }
 type PredictionRequest =
   | { branch: string, kind: "rebase", onto: string, upstream: string }
+  | { base: string, kind: "revert", tip: string }
   | { into: string, kind: "merge", source: string }
 export type Plan = {
   argv: string[]
@@ -71,14 +72,16 @@ export type Operation = {
   blocks: (request: OperationRequest, state: OperationState, values: Values) => Block[]
   description: (request: OperationRequest, values: Values) => string
   destructive?: boolean
-  fields?: (request: OperationRequest) => Field[]
+  // A field can depend on what another field is set to, so an outcome that needs more input can ask for it.
+  fields?: (request: OperationRequest, values: Values) => Field[]
   group: OperationGroup
   icon: ComponentType
   id: string
   label: (request: OperationRequest) => string
   needs?: (request: OperationRequest, values: Values) => Needs
   plan: (request: OperationRequest, values: Values, state: OperationState) => Plan
-  warnings?: (request: OperationRequest, state: OperationState, values: Values) => Warning[]
+  // Required, so every operation has to answer where it leaves the repository rather than let the user find out.
+  warnings: (request: OperationRequest, state: OperationState, values: Values) => Warning[]
 }
 export type RefMenuComponents = {
   Item: ComponentType<{ children: ReactNode, className?: string, disabled?: boolean, onSelect?: () => void, title?: string }>
@@ -154,15 +157,19 @@ function worktreeBlocks(state: OperationState, name: string) {
   return blocks
 }
 
-function predictionWarnings(state: OperationState) {
-  const warnings: Warning[] = []
+// A prediction names the commit that stops the operation, so the caller names what it was doing to that
+// commit and where the stop leaves the repository.
+function predictionWarnings(state: OperationState, verb: string, landing: string): Warning[] {
   if (state.prediction?.outcome === "conflicts") {
-    warnings.push({ files: state.prediction.files, message: `Replaying ${state.prediction.commit.slice(0, 8)} “${state.prediction.subject}” is predicted to conflict in:` })
+    return [
+      { files: state.prediction.files, message: `${verb} ${state.prediction.commit.slice(0, 8)} “${state.prediction.subject}” is predicted to conflict in:` },
+      { message: landing },
+    ]
   }
   if (state.prediction?.outcome === "unknown") {
-    warnings.push({ message: `Conflicts could not be predicted: ${state.prediction.reason}` })
+    return [{ message: `Conflicts could not be predicted: ${state.prediction.reason}` }]
   }
-  return warnings
+  return []
 }
 
 // A local branch is the only thing a rebase can move, and only a branch at the tip carries the whole selection with it.
@@ -219,9 +226,17 @@ const checkout: Operation = {
     ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
     ...(target.kind === "remote" && !values.name?.trim() ? [{ reason: "name the local branch" }] : []),
   ],
-  warnings: ({ target }) => target.kind === "branch" || target.kind === "remote"
-    ? []
-    : [{ message: `A detached HEAD is not on a branch, so commits made from ${operandName(target)} belong to no branch until you create one.` }],
+  warnings: ({ repository, target }, _state, values) => [
+    ...(target.kind === "branch" || target.kind === "remote"
+      ? []
+      : [{ message: `A detached HEAD is not on a branch, so commits made from ${operandName(target)} belong to no branch until you create one.` }]),
+    ...(repository.isDirty && values.changes === "carry"
+      ? [{ message: `Git refuses to carry the changes across when a file you edited differs between here and ${operandName(target)}, and nothing moves when it does.` }]
+      : []),
+    ...(repository.isDirty && values.changes === "stash"
+      ? [{ message: "Changes that do not reapply cleanly stay in the stash and leave the files with conflict markers to resolve." }]
+      : []),
+  ],
   action: () => "Check out",
   plan: ({ target }, values) => {
     const reference = operandRef(target)
@@ -271,9 +286,12 @@ const push: Operation = {
   },
   warnings: ({ target }, _state, values) => {
     const sync = isRef(target) ? target.ref.sync : null
-    return values.mode === "force" && sync?.upstream
+    if (!sync?.upstream || sync.isGone || sync.behind === 0) {
+      return []
+    }
+    return values.mode === "force"
       ? [{ message: `Force pushing rewrites ${sync.upstream} for everyone who has it, and drops its ${sync.behind} commit${sync.behind === 1 ? "" : "s"}.` }]
-      : []
+      : [{ message: `${sync.upstream} has ${sync.behind} commit${sync.behind === 1 ? "" : "s"} you do not have, so the remote rejects this push and nothing is sent.` }]
   },
   action: () => "Push",
   plan: ({ repository, target }, values) => {
@@ -298,6 +316,7 @@ const pushTag: Operation = {
   label: () => "Push tag",
   description: ({ repository, target }) => `This sends ${operandName(target)} to ${repository.remote}.`,
   blocks: () => [],
+  warnings: () => [],
   action: () => "Push tag",
   plan: ({ repository, target }) => {
     const reference = `refs/tags/${operandName(target)}`
@@ -326,6 +345,7 @@ const pull: Operation = {
     ]
   },
   needs: ({ target }) => ({ branch: operandName(target) }),
+  warnings: () => [],
   action: () => "Fast-forward",
   plan: ({ target }) => ({
     argv: ["git", "fetch", "&&", "git", "merge", "--ff-only", isRef(target) ? target.ref.sync?.upstream ?? "" : ""],
@@ -351,18 +371,25 @@ const merge: Operation = {
     const operands = mergeOperands(request)
     return `This replays ${operands?.name} on top of ${operands?.into} and records the result there.`
   },
-  fields: () => [{
-    key: "mode",
-    kind: "choice",
-    label: "Merge style",
-    choices: [
-      { value: "default", label: "Merge", description: "Fast-forwards when it can, otherwise records a merge commit." },
-      { value: "noFastForward", label: "Always create a merge commit", description: "Keeps the merge visible in the graph even when a fast-forward was possible." },
-      { value: "fastForwardOnly", label: "Fast-forward only", description: "Refuses the merge when it would need a merge commit." },
-      { value: "squash", label: "Squash", description: "Stages the combined change without committing, leaving the history flat." },
-    ],
-  }],
-  blocks: (request, state) => {
+  fields: (request, values) => [
+    {
+      key: "mode",
+      kind: "choice",
+      label: "Merge style",
+      choices: [
+        { value: "default", label: "Merge", description: "Fast-forwards when it can, otherwise records a merge commit." },
+        { value: "noFastForward", label: "Always create a merge commit", description: "Keeps the merge visible in the graph even when a fast-forward was possible." },
+        { value: "fastForwardOnly", label: "Fast-forward only", description: "Refuses the merge when it would need a merge commit." },
+        { value: "squash", label: "Squash", description: "Records the combined change as one commit, leaving the history flat." },
+      ],
+    },
+    // Git leaves a squash staged and uncommitted, so the message it needs is asked for up front rather than
+    // left as a half-finished merge in the working tree.
+    ...(values.mode === "squash"
+      ? [{ key: "message", kind: "text" as const, label: "Commit message", placeholder: `What ${mergeOperands(request)?.name ?? "the branch"} does` }]
+      : []),
+  ],
+  blocks: (request, state, values) => {
     const operands = mergeOperands(request)
     if (!operands) {
       return [{ reason: "nothing to merge" }]
@@ -370,22 +397,47 @@ const merge: Operation = {
     return [
       ...(operands.name === operands.into ? [{ reason: "a branch cannot merge into itself" }] : []),
       ...(state.branch && !state.branch.worktreePath ? [{ reason: `${operands.into} is not checked out in any worktree` }] : []),
+      ...(values.mode === "squash" && !values.message?.trim() ? [{ reason: "write the commit message" }] : []),
       ...worktreeBlocks(state, operands.into),
     ]
   },
-  needs: (request) => {
+  needs: (request, values) => {
     const operands = mergeOperands(request)
-    return operands ? { branch: operands.into, prediction: { kind: "merge", source: operands.reference, into: operands.into } } : {}
+    if (!operands) {
+      return {}
+    }
+    return {
+      branch: operands.into,
+      prediction: { kind: "merge", source: operands.reference, into: operands.into },
+      ...(values.mode === "fastForwardOnly" ? { mergeBase: [operands.into, operands.reference] as [string, string] } : {}),
+    }
   },
-  warnings: (_request, state) => predictionWarnings(state),
+  warnings: (request, state, values) => {
+    const operands = mergeOperands(request)
+    const landing = values.mode === "squash"
+      ? `The squash is undone when that happens, so nothing lands on ${operands?.into}.`
+      : `The merge is undone when that happens, so ${operands?.into} stays where it is.`
+    return [
+      ...predictionWarnings(state, "Merging", landing),
+      ...(values.mode === "fastForwardOnly" && state.mergeBase && state.branch?.sha && state.mergeBase !== state.branch.sha
+        ? [{ message: `${operands?.into} has commits ${operands?.name} does not, so there is no fast-forward to make and Git refuses this merge.` }]
+        : []),
+      ...(values.mode === "squash"
+        ? [{ message: `The squash commit does not record ${operands?.name} as a parent, so Git still counts it as unmerged afterwards.` }]
+        : []),
+    ]
+  },
   action: () => "Merge",
   plan: (request, values) => {
     const operands = mergeOperands(request)!
+    const message = values.message?.trim() ?? ""
     const style = { default: [], noFastForward: ["--no-ff"], fastForwardOnly: ["--ff-only"], squash: ["--squash"] }[values.mode] ?? []
     return {
-      argv: ["git", "merge", "--no-edit", ...style, operands.reference],
+      argv: values.mode === "squash"
+        ? ["git", "merge", "--squash", operands.reference, "&&", "git", "commit", "--message", message]
+        : ["git", "merge", "--no-edit", ...style, operands.reference],
       command: "merge_ref",
-      args: { source: operands.reference, into: operands.into, options: { mode: values.mode, message: null } },
+      args: { source: operands.reference, into: operands.into, options: { mode: values.mode, message: message || null } },
     }
   },
 }
@@ -444,8 +496,8 @@ const rebaseOnto: Operation = {
       ...(upstream ? { prediction: { kind: "rebase" as const, branch: source.branch, onto, upstream } } : {}),
     }
   },
-  warnings: (request, state) => [
-    ...predictionWarnings(state),
+  warnings: (request, state, values) => [
+    ...predictionWarnings(state, "Replaying", `The rebase is undone when that happens, so ${rebaseSource(request, values)?.branch} stays where it is.`),
     ...(rebaseSource(request)?.commits?.some((commit) => commit.parents.length > 1)
       ? [{ message: "The selection contains a merge commit, which will be flattened into a linear sequence." }]
       : []),
@@ -479,10 +531,20 @@ const dropCommits: Operation = {
       ...worktreeBlocks(state, droppedBranch(selection, values)),
     ]
   },
-  needs: ({ target }, values) => ({ branch: droppedBranch(target as CommitSelection, values) }),
-  warnings: ({ target }) => (target as CommitSelection).commits.some((commit) => commit.parents.length > 1)
-    ? [{ message: "The selection contains a merge commit, which will be flattened into a linear sequence." }]
-    : [],
+  needs: ({ target }, values) => {
+    const selection = target as CommitSelection
+    const branch = droppedBranch(selection, values)
+    return {
+      branch,
+      ...(selection.base ? { prediction: { kind: "rebase" as const, branch, onto: selection.base.hash, upstream: selection.tip.hash } } : {}),
+    }
+  },
+  warnings: ({ target }, state, values) => [
+    ...predictionWarnings(state, "Replaying", `The rewrite is undone when that happens, so ${droppedBranch(target as CommitSelection, values)} stays where it is.`),
+    ...((target as CommitSelection).commits.some((commit) => commit.parents.length > 1)
+      ? [{ message: "The selection contains a merge commit, which will be flattened into a linear sequence." }]
+      : []),
+  ],
   action: () => "Remove commits",
   plan: ({ target }, values) => {
     const selection = target as CommitSelection
@@ -511,6 +573,13 @@ const cherryPick: Operation = {
     ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
     ...((target as CommitSelection).commits.some((commit) => commit.hash === repository.headSha) ? [{ reason: "the selection is already checked out" }] : []),
   ],
+  needs: ({ repository, target }) => {
+    const selection = target as CommitSelection
+    return repository.headSha && selection.base
+      ? { prediction: { kind: "rebase", branch: selection.tip.hash, onto: repository.headSha, upstream: selection.base.hash } }
+      : {}
+  },
+  warnings: ({ repository }, state) => predictionWarnings(state, "Copying", `The copy is undone when that happens, so nothing lands on ${repository.currentBranch}.`),
   action: () => "Copy commits",
   plan: ({ target }) => {
     const selection = target as CommitSelection
@@ -534,6 +603,11 @@ const revert: Operation = {
     ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
     ...((target as CommitSelection).commits.some((commit) => commit.parents.length > 1) ? [{ reason: "reverting a merge commit needs a mainline to keep" }] : []),
   ],
+  needs: ({ target }) => {
+    const selection = target as CommitSelection
+    return selection.base ? { prediction: { kind: "revert", base: selection.base.hash, tip: selection.tip.hash } } : {}
+  },
+  warnings: ({ repository }, state) => predictionWarnings(state, "Undoing", `The revert is undone when that happens, so nothing lands on ${repository.currentBranch}.`),
   action: () => "Revert",
   plan: ({ target }) => {
     const selection = target as CommitSelection
@@ -568,9 +642,14 @@ const resetCurrent: Operation = {
   blocks: ({ repository }) => repository.pendingOperation
     ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }]
     : [],
-  warnings: ({ repository }, _state, values) => values.mode === "hard" && repository.isDirty
-    ? [{ message: "The uncommitted changes in this worktree will be discarded, and undo cannot bring them back." }]
-    : [],
+  warnings: ({ repository, target }, _state, values) => {
+    if (values.mode === "hard") {
+      return repository.isDirty
+        ? [{ message: "The uncommitted changes in this worktree will be discarded, and undo cannot bring them back." }]
+        : []
+    }
+    return [{ message: `Everything between ${operandName(target)} and ${repository.currentBranch} is left in the working tree, so this worktree ends up with uncommitted changes.` }]
+  },
   action: () => "Reset",
   plan: ({ target }, values) => ({
     argv: ["git", "reset", `--${values.mode}`, operandRef(target)],
@@ -590,6 +669,7 @@ const createBranch: Operation = {
     { key: "name", kind: "text", label: "Branch name", placeholder: "feature/name" },
     { initial: true, key: "checkout", kind: "toggle", label: "Check out the new branch" },
   ],
+  warnings: () => [],
   blocks: ({ repository }, _state, values) => [
     ...(values.name.trim() ? [] : [{ reason: "name the branch" }]),
     ...(flag(values, "checkout") && repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
@@ -618,6 +698,7 @@ const renameBranch: Operation = {
   description: ({ target }) => `Anything tracking ${operandName(target)} keeps pointing at the old name on the remote.`,
   fields: ({ target }) => [{ initial: operandName(target), key: "name", kind: "text", label: "New name" }],
   blocks: (_request, _state, values) => values.name.trim() ? [] : [{ reason: "name the branch" }],
+  warnings: () => [],
   action: () => "Rename",
   plan: ({ target }, values) => ({
     argv: ["git", "branch", "--move", operandName(target), values.name.trim()],
@@ -638,6 +719,7 @@ const createTag: Operation = {
     { key: "message", kind: "text", label: "Message", placeholder: "Leave empty for a lightweight tag" },
   ],
   blocks: (_request, _state, values) => values.name.trim() ? [] : [{ reason: "name the tag" }],
+  warnings: () => [],
   action: () => "Create tag",
   plan: ({ target }, values) => {
     const name = values.name.trim()
@@ -688,6 +770,7 @@ const deleteTag: Operation = {
   label: () => "Delete tag",
   description: ({ target }) => `This deletes the local tag ${operandName(target)}.`,
   blocks: () => [],
+  warnings: () => [],
   action: () => "Delete tag",
   plan: ({ target }) => ({
     argv: ["git", "tag", "--delete", operandName(target)],
@@ -735,6 +818,7 @@ const stashChanges: Operation = {
   blocks: ({ repository }) => repository.pendingOperation
     ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }]
     : [],
+  warnings: () => [],
   action: () => "Stash",
   plan: (_request, values) => ({
     argv: ["git", "stash", "push", ...(flag(values, "untracked") ? ["--include-untracked"] : []), ...(values.message.trim() ? ["--message", values.message.trim()] : [])],
@@ -756,6 +840,19 @@ function stashOperation(id: string, action: string, label: string, describe: (na
       ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
       ...(action !== "drop" && repository.isDirty ? [{ reason: "this worktree has uncommitted changes" }] : []),
     ],
+    // Restoring a stash is a merge of it into the checkout, which is what makes it predictable.
+    needs: ({ repository, target }) => action === "drop" || !repository.headSha
+      ? {}
+      : { prediction: { kind: "merge", source: operandSha(target), into: repository.headSha } },
+    warnings: ({ target }, state) => action === "drop"
+      ? [{ message: `Dropping ${operandName(target)} cannot be undone from here.` }]
+      : predictionWarnings(
+        state,
+        "Restoring",
+        action === "pop"
+          ? "The files are left with conflict markers to resolve and the entry stays in the stash when that happens."
+          : "The files are left with conflict markers to resolve when that happens.",
+      ),
     action: () => label,
     plan: ({ target }) => ({
       argv: ["git", "stash", action, operandName(target)],
@@ -788,16 +885,29 @@ const OPERATIONS: Operation[] = [
   deleteTag,
 ]
 
-export function initialValues(operation: Operation, request: OperationRequest): Values {
-  const values: Values = {}
-  for (const field of operation.fields?.(request) ?? []) {
-    values[field.key] = field.kind === "choice"
-      ? field.choices[0].value
-      : field.kind === "toggle"
-        ? String(field.initial ?? false)
-        : field.initial ?? ""
-  }
-  return values
+function fieldDefault(field: Field) {
+  return field.kind === "choice"
+    ? field.choices[0].value
+    : field.kind === "toggle"
+      ? String(field.initial ?? false)
+      : field.initial ?? ""
+}
+
+// The values are exactly what the shown fields hold, so what the user typed into a field that has since gone
+// away is remembered for if it comes back but never reaches the plan.
+function fieldValues(fields: Field[], entered: Values): Values {
+  return Object.fromEntries(fields.map((field) => [field.key, entered[field.key] ?? fieldDefault(field)]))
+}
+
+// A field can appear once another field has a value, so the list and the values it holds settle in two passes.
+export function resolveFields(operation: Operation, request: OperationRequest, entered: Values) {
+  const settling = fieldValues(operation.fields?.(request, entered) ?? [], entered)
+  const fields = operation.fields?.(request, settling) ?? []
+  return { fields, values: fieldValues(fields, entered) }
+}
+
+export function initialValues(operation: Operation, request: OperationRequest) {
+  return resolveFields(operation, request, {}).values
 }
 
 export function applicableOperations(repository: RepositoryState, source: Selection | null, target: Operand) {
@@ -815,9 +925,20 @@ export function clearConflictPredictions() {
 }
 
 function predictionKey(request: PredictionRequest) {
-  return request.kind === "rebase"
-    ? `rebase ${request.onto} ${request.upstream} ${request.branch}`
-    : `merge ${request.source} ${request.into}`
+  if (request.kind === "rebase") {
+    return `rebase ${request.onto} ${request.upstream} ${request.branch}`
+  }
+  return request.kind === "revert" ? `revert ${request.base} ${request.tip}` : `merge ${request.source} ${request.into}`
+}
+
+function predictionInvocation(repoPath: string, request: PredictionRequest) {
+  if (request.kind === "rebase") {
+    return invoke<ConflictPrediction>("predict_rebase_conflicts", { repoPath, branch: request.branch, onto: request.onto, upstream: request.upstream })
+  }
+  if (request.kind === "revert") {
+    return invoke<ConflictPrediction>("predict_revert_conflicts", { repoPath, base: request.base, tip: request.tip })
+  }
+  return invoke<ConflictPrediction>("predict_merge_conflicts", { repoPath, source: request.source, into: request.into })
 }
 
 function predict(repoPath: string, request: PredictionRequest) {
@@ -826,10 +947,7 @@ function predict(repoPath: string, request: PredictionRequest) {
   if (cached) {
     return Promise.resolve(cached)
   }
-  const invocation = request.kind === "rebase"
-    ? invoke<ConflictPrediction>("predict_rebase_conflicts", { repoPath, branch: request.branch, onto: request.onto, upstream: request.upstream })
-    : invoke<ConflictPrediction>("predict_merge_conflicts", { repoPath, source: request.source, into: request.into })
-  return invocation.then((prediction) => {
+  return predictionInvocation(repoPath, request).then((prediction) => {
     predictionCache.set(key, prediction)
     return prediction
   })

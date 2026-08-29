@@ -143,6 +143,7 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::pull_branch => Exposure::Api(post(crate::__http_pull_branch)),
         IpcCommand::merge_ref => Exposure::Api(post(crate::__http_merge_ref)),
         IpcCommand::predict_merge_conflicts => Exposure::Api(post(crate::__http_predict_merge_conflicts)),
+        IpcCommand::predict_revert_conflicts => Exposure::Api(post(crate::__http_predict_revert_conflicts)),
         IpcCommand::create_branch => Exposure::Api(post(crate::__http_create_branch)),
         IpcCommand::rename_branch => Exposure::Api(post(crate::__http_rename_branch)),
         IpcCommand::create_tag => Exposure::Api(post(crate::__http_create_tag)),
