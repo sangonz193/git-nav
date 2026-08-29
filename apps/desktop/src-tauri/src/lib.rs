@@ -790,7 +790,7 @@ fn sync_pull_requests(connection: &mut Connection, host: &str, repository: &str)
 }
 
 fn fetch_and_sync_repository(repo_path: &str, database_path: PathBuf) -> Result<(), String> {
-    git_output_allow_empty(repo_path, &["fetch", "origin"])?;
+    git_output_allow_empty(repo_path, &["fetch", "--prune", "origin"])?;
     let remote = git_output(repo_path, &["remote", "get-url", "origin"])
         .ok_or_else(|| "Could not identify the origin remote.".to_string())?;
     let (host, repository) = github_repository(&remote)
