@@ -305,11 +305,23 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     let disposed = false
+    let inferenceInterval: number | null = null
+    let inferenceTimeout: number | null = null
     setCommits([])
     function refreshSquashMergeInferences() {
       invoke<SquashMergeInference[]>("inferred_squash_merge_edges", { repoPath: params.path })
         .then(setSquashMergeInferences)
         .catch(() => undefined)
+    }
+    function scheduleSquashMergeInferences() {
+      if (inferenceTimeout !== null || inferenceInterval !== null) {
+        return
+      }
+      inferenceTimeout = window.setTimeout(() => {
+        inferenceTimeout = null
+        refreshSquashMergeInferences()
+        inferenceInterval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
+      })
     }
 
     invoke<BranchSync[]>("branch_sync", { repoPath: params.path })
@@ -319,15 +331,13 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         }
       })
       .catch(() => undefined)
-    refreshWorktreeStatus()
-    refreshSquashMergeInferences()
-    const interval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
     const stopStream = stream<CommitBatch>(
       "stream_commit_graph",
       { repoPath: params.path },
       (batch) => {
         if (!disposed) {
           setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
+          scheduleSquashMergeInferences()
         }
       },
       (message) => {
@@ -339,7 +349,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     return () => {
       disposed = true
       stopStream()
-      window.clearInterval(interval)
+      if (inferenceTimeout !== null) {
+        window.clearTimeout(inferenceTimeout)
+      }
+      if (inferenceInterval !== null) {
+        window.clearInterval(inferenceInterval)
+      }
     }
   }, [graphVersion, params.path, refreshWorktreeStatus])
 
