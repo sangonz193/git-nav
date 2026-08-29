@@ -14,7 +14,7 @@ import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Co
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, PENDING_OPERATION_LABELS, type CompletedOperation, type OperationRequest, type PendingOperation, type RefMenuComponents, type RefUpdate, type RepositoryState, type StashEntry } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
@@ -26,7 +26,7 @@ const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
-const COARSE_POINTER_ROW_HEIGHT = 44
+const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TIMEOUT = 30_000
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
 type BranchSelection = { baseSha: string, headSha: string, baseLabel: string, headLabel: string }
@@ -130,7 +130,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const currentCheckoutIndex = useMemo(() => commits.findIndex((commit) => isCurrentCheckout(commit.refs)), [commits])
   const checkoutScrollDirection = currentCheckoutIndex === -1 || scroll.height === 0
     ? null
-    : (currentCheckoutIndex + 1) * rowHeight < scroll.top + rowHeight
+    : (currentCheckoutIndex + 1) * rowHeight < scroll.top + GRAPH_HEADER_HEIGHT
       ? "up"
       : currentCheckoutIndex * rowHeight >= scroll.top + scroll.height
         ? "down"
@@ -463,7 +463,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height, rowHeight), squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
     }
   }, [commits, graphWidth, scroll, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
 
@@ -677,7 +677,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     const autoScroll = () => {
       const rect = scroll.getBoundingClientRect()
       // The sticky header covers the top row of the scroll box.
-      const overTop = pointerY - (rect.top + rowHeight + AUTOSCROLL_EDGE)
+      const overTop = pointerY - (rect.top + GRAPH_HEADER_HEIGHT + AUTOSCROLL_EDGE)
       const overBottom = pointerY - (rect.bottom - AUTOSCROLL_EDGE)
       const distance = overTop < 0 ? overTop : overBottom > 0 ? overBottom : 0
       if (distance !== 0) {
@@ -982,7 +982,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </ButtonGroup>
         </div>
       </div>
-      <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--commit-row-height": `${rowHeight}px`, "--graph-header-height": `${rowHeight}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
+      <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--commit-row-height": `${rowHeight}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
           <div className="commit-graph-header-content" role="row" style={{ minWidth: tableWidth }}>
             <div className="commit-graph-header-spacer" role="columnheader">
