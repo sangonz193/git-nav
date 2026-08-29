@@ -172,11 +172,12 @@ struct BranchCleanup {
     failed: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum CleanupReason {
     SquashMergedPullRequest,
     MergedIntoDefaultBranch,
+    SquashedIntoDefaultBranch,
 }
 
 #[derive(Serialize)]
@@ -191,6 +192,7 @@ struct CleanupCandidate {
 struct CleanupOptions {
     delete_merged_pull_request_branches: bool,
     delete_merged_branches: bool,
+    delete_squash_merged_branches: bool,
 }
 
 #[derive(Serialize)]
@@ -1016,6 +1018,33 @@ fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String
         .collect())
 }
 
+// A squash merge leaves no ancestry and needs no pull request, so the branch it replaced is only
+// recognisable by the content that landed. That is an inference rather than a record, which is why it is
+// offered separately from the rules git and GitHub can prove.
+fn squash_merged_branch_candidates(repo_path: &str) -> Result<Vec<String>, String> {
+    let primary = squash_search_reference(repo_path)?;
+    let primary_branch = primary
+        .strip_prefix("refs/heads/")
+        .or_else(|| primary.strip_prefix("origin/"))
+        .unwrap_or(&primary);
+    let protected = ["main", "master", primary_branch].into_iter().collect::<HashSet<_>>();
+    let squashed = local_squash_merges(repo_path).into_iter().map(|(tip, _)| tip).collect::<HashSet<_>>();
+    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
+    let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
+    let checked_out = parse_worktree_records(&worktrees)
+        .into_iter()
+        .filter(|worktree| !worktree.is_detached)
+        .map(|worktree| worktree.branch)
+        .collect::<HashSet<_>>();
+
+    Ok(refs
+        .split('\n')
+        .filter_map(|line| line.split_once('\0'))
+        .filter(|(branch, hash)| !protected.contains(branch) && !checked_out.contains(*branch) && squashed.contains(*hash))
+        .map(|(branch, _)| branch.to_string())
+        .collect())
+}
+
 fn cleanup_candidates(
     repo_path: &str,
     options: &CleanupOptions,
@@ -1036,6 +1065,14 @@ fn cleanup_candidates(
                 .entry(branch)
                 .or_insert_with(Vec::new)
                 .push(CleanupReason::MergedIntoDefaultBranch);
+        }
+    }
+    if options.delete_squash_merged_branches {
+        for branch in squash_merged_branch_candidates(repo_path)? {
+            candidates
+                .entry(branch)
+                .or_insert_with(Vec::new)
+                .push(CleanupReason::SquashedIntoDefaultBranch);
         }
     }
     let mut candidates = candidates
@@ -3218,6 +3255,59 @@ mod tests {
         assert_eq!(edges.get(&after_drift), Some(&after_drift_target), "patch id fallback failed");
         assert_eq!(open_target, None);
         assert!(!edges.contains_key(&still_open));
+    }
+
+    #[test]
+    fn offers_a_squash_merged_branch_for_cleanup_without_a_pull_request() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-squash-cleanup-{}", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("shared.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+
+        for branch in ["squashed", "parked"] {
+            run(&["checkout", "--quiet", "-b", branch, "main"]);
+            write(&format!("{branch}.txt"), "one\n");
+            run(&["add", "."]);
+            run(&["commit", "--quiet", "--message", branch]);
+            run(&["checkout", "--quiet", "main"]);
+            run(&["merge", "--quiet", "--squash", branch]);
+            run(&["commit", "--quiet", "--message", &format!("Merge branch '{branch}'")]);
+        }
+
+        run(&["checkout", "--quiet", "-b", "open", "main"]);
+        write("open.txt", "wip\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "work in progress"]);
+        run(&["checkout", "--quiet", "main"]);
+        let worktree = env::temp_dir().join(format!("git-nav-squash-cleanup-parked-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&worktree);
+        run(&["worktree", "add", "--quiet", &worktree.to_string_lossy(), "parked"]);
+
+        let options = CleanupOptions { delete_merged_pull_request_branches: false, delete_merged_branches: true, delete_squash_merged_branches: true };
+        let candidates = cleanup_candidates(&path, &options, None).unwrap();
+        let _ = fs::remove_dir_all(&worktree);
+        fs::remove_dir_all(&path).unwrap();
+
+        let reasons: HashMap<_, _> = candidates.into_iter().map(|candidate| (candidate.branch, candidate.reasons)).collect();
+        // A squash leaves no ancestry, so the merged rule cannot be the one claiming it.
+        assert_eq!(reasons.get("squashed"), Some(&vec![CleanupReason::SquashedIntoDefaultBranch]));
+        assert!(!reasons.contains_key("open"));
+        assert!(!reasons.contains_key("parked"), "a branch held by a worktree cannot be deleted");
+        assert!(!reasons.contains_key("main"));
     }
 
     #[test]

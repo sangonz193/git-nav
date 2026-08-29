@@ -32,10 +32,10 @@ const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TIMEOUT = 30_000
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
 type BranchSelection = { baseSha: string, headSha: string, baseLabel: string, headLabel: string }
-type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBranches: boolean }
+type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBranches: boolean, deleteSquashMergedBranches: boolean }
 type CleanResult = { report: string } | { result: BranchCleanup }
 type CleanupCandidate = { branch: string, reasons: CleanupReason[] }
-type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch"
+type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch" | "squashedIntoDefaultBranch"
 type RangeDrag = { anchorIndex: number, focusIndex: number }
 type SelectedRef = { ref: DisplayRef, sha: string }
 type SelectionRange = { anchorHash: string, focusHash: string }
@@ -70,7 +70,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [error, setError] = useState<string | null>(null)
   const [cleanupReport, setCleanupReport] = useState<string | null>(null)
   const [isCleanConfirmationOpen, setIsCleanConfirmationOpen] = useState(false)
-  const [cleanOptions, setCleanOptions] = useState<CleanOptions>({ deleteMergedPullRequestBranches: true, deleteMergedBranches: false })
+  const [cleanOptions, setCleanOptions] = useState<CleanOptions>({ deleteMergedPullRequestBranches: true, deleteMergedBranches: false, deleteSquashMergedBranches: false })
   const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(null)
   const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(null)
   const [request, setRequest] = useState<OperationRequest | null>(null)
@@ -267,7 +267,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   })
   const cleanMutation = useMutation({
     mutationFn: async (): Promise<CleanResult> => {
-      if (!cleanOptions.deleteMergedPullRequestBranches && !cleanOptions.deleteMergedBranches) {
+      if (!Object.values(cleanOptions).some(Boolean)) {
         return { report: "Select at least one cleanup option." }
       }
       return { result: await invoke<BranchCleanup>("delete_squashed_branches", { repoPath: params.path, options: cleanOptions }) }
@@ -1423,6 +1423,10 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
               <input checked={cleanOptions.deleteMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => setCleanOptions((options) => ({ ...options, deleteMergedBranches: event.target.checked }))} type="checkbox" />
               <span>Delete branches with no commits ahead of the default branch that are not checked out in any worktree.</span>
             </label>
+            <label className="flex items-start gap-2">
+              <input checked={cleanOptions.deleteSquashMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => setCleanOptions((options) => ({ ...options, deleteSquashMergedBranches: event.target.checked }))} type="checkbox" />
+              <span>Delete branches whose changes already sit on the default branch as one squashed commit, matched by content rather than by a record of the merge.</span>
+            </label>
           </div>
           <div className="max-h-52 overflow-y-auto rounded-lg border p-3 text-sm">
             {isCleanPreviewPending && <p className="text-muted-foreground">Finding branches to clean…</p>}
@@ -1433,6 +1437,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                 {[
                   ["Squash-merged pull requests", "squashMergedPullRequest"],
                   ["Merged into the default branch", "mergedIntoDefaultBranch"],
+                  ["Squashed into the default branch", "squashedIntoDefaultBranch"],
                 ].map(([label, reason]) => {
                   const candidates = cleanPreview.filter((candidate) => candidate.reasons.includes(reason as CleanupReason))
                   return candidates.length === 0 ? null : (
