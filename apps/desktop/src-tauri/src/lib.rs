@@ -1378,8 +1378,18 @@ fn parse_commit(
 /// Feeds `on_batch` as `git log` produces rows; returning `Err` from it stops the walk early.
 fn walk_commit_graph(
     repo_path: &str,
-    mut on_batch: impl FnMut(Vec<Vec<serde_json::Value>>) -> Result<(), String>,
+    on_batch: impl FnMut(Vec<Vec<serde_json::Value>>) -> Result<(), String>,
 ) -> Result<(), String> {
+    walk_commit_graph_page(repo_path, 0, usize::MAX, on_batch).map(|_| ())
+}
+
+/// Feeds one contiguous graph window to `on_batch`, returning whether older commits remain.
+fn walk_commit_graph_page(
+    repo_path: &str,
+    offset: usize,
+    limit: usize,
+    mut on_batch: impl FnMut(Vec<Vec<serde_json::Value>>) -> Result<(), String>,
+) -> Result<bool, String> {
     let mut reserved_tip = reserved_lane_tip(repo_path);
     let mut child = Command::new("git")
         .args([
@@ -1400,6 +1410,8 @@ fn walk_commit_graph(
         .ok_or_else(|| "Could not read git output.".to_string())?;
     let mut lanes = Vec::new();
     let mut batch = Vec::with_capacity(COMMIT_BATCH_SIZE);
+    let mut skipped = 0;
+    let mut sent = 0;
 
     // A send failure means the receiver is gone, so stop git rather than walking the whole history.
     let mut deliver = |batch| match on_batch(batch) {
@@ -1412,11 +1424,21 @@ fn walk_commit_graph(
 
     for line in BufReader::new(stdout).lines() {
         let line = line.map_err(|error| error.to_string())?;
+        if sent == limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(true);
+        }
         if let Some(commit) = parse_commit(&line, &mut lanes, &mut reserved_tip) {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
             batch.push(commit);
+            sent += 1;
         }
 
-        if batch.len() == COMMIT_BATCH_SIZE {
+        if batch.len() == COMMIT_BATCH_SIZE || sent == limit {
             deliver(batch)?;
             batch = Vec::with_capacity(COMMIT_BATCH_SIZE);
         }
@@ -1428,7 +1450,7 @@ fn walk_commit_graph(
 
     let status = child.wait().map_err(|error| error.to_string())?;
     if status.success() {
-        Ok(())
+        Ok(false)
     } else {
         Err("git log failed.".to_string())
     }
@@ -3345,6 +3367,30 @@ mod tests {
         run(&["config", "user.name", "Tests"]);
         run(&["config", "commit.gpgsign", "false"]);
         (path, run)
+    }
+
+    #[test]
+    fn streams_a_bounded_commit_graph_window() {
+        let (path, run) = scratch_repository("graph-window");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "first"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "second"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "third"]);
+
+        let mut batches = Vec::new();
+        let has_more = walk_commit_graph_page(&path, 1, 1, |batch| {
+            batches.push(batch);
+            Ok(())
+        })
+        .unwrap();
+        let subjects = batches
+            .into_iter()
+            .flatten()
+            .map(|commit| commit[5].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(subjects, ["second"]);
+        assert!(has_more);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { columnResizingFeature, columnSizingFeature, createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
-import { invoke, stream } from "@/lib/ipc"
+import { invoke, isDesktop, stream } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
 import { openWorktree, type WorktreeTarget } from "@/lib/navigation"
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@workspace/shadcn/components/alert-dialog"
@@ -22,6 +22,7 @@ import type { Project } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
 const PULL_REQUEST_SYNC_INTERVAL = 60_000
+const BROWSER_GRAPH_WINDOW_SIZE = 2_000
 const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
@@ -38,6 +39,7 @@ type RangeDrag = { anchorIndex: number, focusIndex: number }
 type SelectedRef = { ref: DisplayRef, sha: string }
 type SelectionRange = { anchorHash: string, focusHash: string }
 type WorktreeStatus = { path: string, branch: string, head: string, isDetached: boolean, changedFiles: number, untrackedFiles: number, pendingOperation: PendingOperation | null }
+type GraphWindowComplete = { hasMore: boolean }
 type ViewMode = "graph" | "branches"
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Label: ContextMenuLabel, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
@@ -63,6 +65,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [request, setRequest] = useState<OperationRequest | null>(null)
   const [completed, setCompleted] = useState<CompletedOperation | null>(null)
   const [graphVersion, setGraphVersion] = useState(0)
+  const [graphOffset, setGraphOffset] = useState(0)
+  const [hasOlderCommits, setHasOlderCommits] = useState(false)
+  const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(false)
   const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
   const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(new Map())
   const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
@@ -98,6 +103,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
     fingerprint.current = null
     fingerprintGeneration.current += 1
+    setGraphOffset(0)
     setGraphVersion((version) => version + 1)
   }, [rowHeight])
   // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
@@ -308,6 +314,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     let inferenceInterval: number | null = null
     let inferenceTimeout: number | null = null
     setCommits([])
+    setHasOlderCommits(false)
+    setIsGraphWindowLoading(true)
     function refreshSquashMergeInferences() {
       invoke<SquashMergeInference[]>("inferred_squash_merge_edges", { repoPath: params.path })
         .then(setSquashMergeInferences)
@@ -324,25 +332,40 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       })
     }
 
-    invoke<BranchSync[]>("branch_sync", { repoPath: params.path })
-      .then((entries) => {
-        if (!disposed) {
-          setBranchSync(new Map(entries.map((entry) => [entry.branch, entry])))
-        }
-      })
-      .catch(() => undefined)
+    if (graphOffset === 0) {
+      invoke<BranchSync[]>("branch_sync", { repoPath: params.path })
+        .then((entries) => {
+          if (!disposed) {
+            setBranchSync(new Map(entries.map((entry) => [entry.branch, entry])))
+          }
+        })
+        .catch(() => undefined)
+    }
     const stopStream = stream<CommitBatch>(
       "stream_commit_graph",
-      { repoPath: params.path },
+      isDesktop
+        ? { repoPath: params.path }
+        : { repoPath: params.path, offset: graphOffset, limit: BROWSER_GRAPH_WINDOW_SIZE },
       (batch) => {
         if (!disposed) {
           setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
-          scheduleSquashMergeInferences()
+          if (graphOffset === 0) {
+            scheduleSquashMergeInferences()
+          }
         }
       },
       (message) => {
         if (!disposed) {
           setError(message)
+          setIsGraphWindowLoading(false)
+        }
+      },
+      (data) => {
+        if (!disposed) {
+          if (!isDesktop && typeof data === "object" && data !== null && "hasMore" in data) {
+            setHasOlderCommits((data as GraphWindowComplete).hasMore)
+          }
+          setIsGraphWindowLoading(false)
         }
       }
     )
@@ -356,7 +379,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         window.clearInterval(inferenceInterval)
       }
     }
-  }, [graphVersion, params.path, refreshWorktreeStatus])
+  }, [graphOffset, graphVersion, params.path, refreshWorktreeStatus])
 
   useEffect(() => {
     const query = window.matchMedia("(pointer: coarse)")
@@ -532,6 +555,13 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (oldestUnpushedIndex !== -1) {
       scrollToRow(oldestUnpushedIndex)
     }
+  }
+
+  function showGraphWindow(offset: number) {
+    setSelectedRef(null)
+    setSelectionRange(null)
+    setGraphOffset(offset)
+    rowVirtualizer.scrollToOffset(0)
   }
 
   function scrollToCurrentCheckout() {
@@ -966,6 +996,16 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           {unpushed.size > 0 && (
             <Button onClick={scrollToOldestUnpushed} size="sm" title="Scroll to the oldest commit that no remote has" type="button" variant="ghost">
               {`${unpushed.size} unpushed`}
+            </Button>
+          )}
+          {!isDesktop && graphOffset > 0 && (
+            <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE))} size="sm" title="Show newer commits" type="button" variant="ghost">
+              Newer
+            </Button>
+          )}
+          {!isDesktop && hasOlderCommits && (
+            <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(graphOffset + BROWSER_GRAPH_WINDOW_SIZE)} size="sm" title="Show older commits" type="button" variant="ghost">
+              Older
             </Button>
           )}
           <DropdownMenu>

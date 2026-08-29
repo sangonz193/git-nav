@@ -40,15 +40,20 @@ export function stream<T>(
   command: string,
   args: Args,
   onBatch: (batch: T) => void,
-  onError: (message: string) => void
+  onError: (message: string) => void,
+  onDone?: (data: unknown) => void
 ): () => void {
   if (isDesktop) {
     const channel = new Channel<T>()
     channel.onmessage = onBatch
     let disposed = false
-    invokeTauri(command, { ...args, onBatch: channel }).catch((message: unknown) => {
-      if (!disposed) onError(String(message))
-    })
+    invokeTauri(command, { ...args, onBatch: channel })
+      .then(() => {
+        if (!disposed) onDone?.({})
+      })
+      .catch((message: unknown) => {
+        if (!disposed) onError(String(message))
+      })
     return () => {
       disposed = true
     }
@@ -63,7 +68,10 @@ export function stream<T>(
     source.close()
     onError(JSON.parse(event.data) as string)
   })
-  source.addEventListener("done", () => source.close())
+  source.addEventListener("done", (event) => {
+    source.close()
+    onDone?.(JSON.parse(event.data) as unknown)
+  })
   // EventSource retries on its own, which would restart the whole walk after a clean finish.
   source.onerror = () => {
     if (source.readyState === EventSource.CLOSED) return

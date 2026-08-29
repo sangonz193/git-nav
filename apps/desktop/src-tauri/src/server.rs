@@ -32,7 +32,7 @@ use crate::{
     project_at,
     recent_project_list,
     remember_repository,
-    walk_commit_graph,
+    walk_commit_graph_page,
 };
 
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
@@ -386,17 +386,27 @@ async fn stream_commit_graph(Query(args): Query<HashMap<String, String>>) -> Res
     let Some(repo_path) = args.get("repoPath").cloned() else {
         return (StatusCode::BAD_REQUEST, "repoPath is required.").into_response();
     };
+    let offset = match args.get("offset").map(|value| value.parse::<usize>()) {
+        Some(Ok(value)) => value,
+        Some(Err(_)) => return (StatusCode::BAD_REQUEST, "offset must be a non-negative integer.").into_response(),
+        None => 0,
+    };
+    let limit = match args.get("limit").map(|value| value.parse::<usize>()) {
+        Some(Ok(0) | Err(_)) => return (StatusCode::BAD_REQUEST, "limit must be a positive integer.").into_response(),
+        Some(Ok(value)) => value,
+        None => 2_000,
+    };
 
     let (sender, receiver) = mpsc::channel::<String>(4);
     tokio::task::spawn_blocking(move || {
-        let result = walk_commit_graph(&repo_path, |batch| {
+        let result = walk_commit_graph_page(&repo_path, offset, limit, |batch| {
             let payload = serde_json::to_string(&batch).map_err(|error| error.to_string())?;
             sender
                 .blocking_send(format!("event: batch\ndata: {payload}\n\n"))
                 .map_err(|_| "The client disconnected.".to_string())
         });
         let closing = match result {
-            Ok(()) => "event: done\ndata: {}\n\n".to_string(),
+            Ok(has_more) => format!("event: done\ndata: {{\"hasMore\":{has_more}}}\n\n"),
             Err(error) => {
                 let error = serde_json::to_string(&error).unwrap_or_else(|_| "\"\"".to_string());
                 format!("event: failed\ndata: {error}\n\n")
