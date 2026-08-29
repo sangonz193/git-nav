@@ -14,7 +14,7 @@ import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Co
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, centeredRowOffset, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, PENDING_OPERATION_LABELS, type CompletedOperation, type OperationRequest, type PendingOperation, type RefMenuComponents, type RefUpdate, type RepositoryState, type StashEntry } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
@@ -521,9 +521,16 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     })
   }
 
+  function scrollToRow(index: number) {
+    const element = scrollElement.current
+    if (element) {
+      rowVirtualizer.scrollToOffset(centeredRowOffset(index, rowHeight, element.clientHeight))
+    }
+  }
+
   function scrollToOldestUnpushed() {
     if (oldestUnpushedIndex !== -1) {
-      rowVirtualizer.scrollToIndex(oldestUnpushedIndex, { align: "center" })
+      scrollToRow(oldestUnpushedIndex)
     }
   }
 
@@ -531,7 +538,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (currentCheckoutIndex === -1) {
       return
     }
-    rowVirtualizer.scrollToIndex(currentCheckoutIndex, { align: "center" })
+    scrollToRow(currentCheckoutIndex)
   }
 
   async function openRefDiff(reference: string) {

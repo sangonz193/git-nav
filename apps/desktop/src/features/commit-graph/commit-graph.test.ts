@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import {
   ancestryPath,
   branchesContaining,
+  centeredRowOffset,
   commitSelection,
   displayRefs,
   fitGraphWidth,
@@ -320,6 +321,16 @@ describe("graphCanvasHeight", () => {
 
   test("stays at zero for a viewport shorter than the header", () => {
     expect(graphCanvasHeight(0)).toBe(0)
+  })
+})
+
+describe("centeredRowOffset", () => {
+  test("centers a row in the viewport", () => {
+    expect(centeredRowOffset(100, 32, 320)).toBe(3_056)
+  })
+
+  test("does not scroll above the first row", () => {
+    expect(centeredRowOffset(0, 32, 320)).toBe(0)
   })
 })
 

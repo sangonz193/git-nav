@@ -76,6 +76,10 @@ export function graphCanvasHeight(viewportHeight: number, headerHeight = GRAPH_H
   return visible === 0 ? 0 : visible + 2 * GRAPH_CANVAS_OVERSCAN
 }
 
+export function centeredRowOffset(index: number, rowHeight: number, viewportHeight: number) {
+  return Math.max(0, index * rowHeight + (rowHeight - viewportHeight) / 2)
+}
+
 export function clampGraphWidth(width: number) {
   return Math.round(Math.max(GRAPH_MIN_WIDTH, Math.min(GRAPH_MAX_WIDTH, width)))
 }
