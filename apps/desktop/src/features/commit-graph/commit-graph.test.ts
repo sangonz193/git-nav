@@ -3,7 +3,10 @@ import { describe, expect, test } from "bun:test"
 import {
   ancestryPath,
   branchesContaining,
+  chipName,
+  chipWidth,
   commitSelection,
+  detachedWorktrees,
   displayRefs,
   fitGraphWidth,
   GRAPH_HEADER_HEIGHT,
@@ -14,16 +17,21 @@ import {
   isCurrentCheckout,
   laneColor,
   parentEdgeColor,
-  refKind,
   refSelection,
   refSyncLabel,
   relativeDate,
+  remoteBranchName,
+  rowChips,
   splitRefLabel,
   startsLane,
   syncDescription,
   unpushedHashes,
   unpushedLanes,
+  visibleChipCount,
+  worktreeChanges,
   type BranchSync,
+  type RowWorktree,
+  type StashEntry,
 } from "./commit-graph"
 
 function commit(hash: string, parents: string[] = [], refs: string[] = []) {
@@ -146,7 +154,7 @@ describe("commitSelection", () => {
 
 describe("displayRefs", () => {
   const worktrees = [
-    { branch: "main", name: "main", path: "/repos/main", isOpen: false },
+    { branch: "main", changedFiles: 0, head: "a", isCurrent: false, isOpen: false, name: "main", path: "/repos/main", pendingOperation: null, untrackedFiles: 0 },
   ]
 
   test("orders the current checkout, other worktrees, locals, remotes and tags", () => {
@@ -159,7 +167,7 @@ describe("displayRefs", () => {
         "HEAD -> feature",
         "origin/feature",
       ],
-      worktrees
+      { worktrees }
     )
     expect(refs.map((ref) => ref.label)).toEqual([
       "feature · origin",
@@ -177,7 +185,8 @@ describe("displayRefs", () => {
         branch: "main",
         label: "main · origin",
         checkedOut: false,
-        tag: false,
+        kind: "branch",
+        remote: "origin",
         sync: null,
         worktrees: [],
       },
@@ -205,7 +214,8 @@ describe("displayRefs", () => {
         branch: "feature",
         label: "feature",
         checkedOut: true,
-        tag: false,
+        kind: "branch",
+        remote: null,
         sync: null,
         worktrees: [],
       },
@@ -218,7 +228,8 @@ describe("displayRefs", () => {
         branch: null,
         label: "origin/main",
         checkedOut: true,
-        tag: false,
+        kind: "remote",
+        remote: "origin",
         sync: null,
         worktrees: [],
       },
@@ -231,7 +242,8 @@ describe("displayRefs", () => {
         branch: "main",
         label: "main",
         checkedOut: false,
-        tag: false,
+        kind: "branch",
+        remote: null,
         sync: null,
         worktrees: [],
       },
@@ -239,11 +251,182 @@ describe("displayRefs", () => {
         branch: null,
         label: "v1.0.0",
         checkedOut: false,
-        tag: true,
+        kind: "tag",
+        remote: null,
         sync: null,
         worktrees: [],
       },
     ])
+  })
+})
+
+describe("displayRefs with other remotes", () => {
+  const remotes = ["origin", "upstream"]
+
+  test("classifies a ref by the remotes the repository actually has", () => {
+    const refs = displayRefs(["upstream/main", "fork/main"], { remotes })
+    expect(refs.map((ref) => [ref.label, ref.kind])).toEqual([
+      ["fork/main", "branch"],
+      ["upstream/main", "remote"],
+    ])
+  })
+
+  test("pairs a local branch with whichever remote carries it", () => {
+    const [ref] = displayRefs(["main", "upstream/main"], { remotes })
+    expect(ref.label).toBe("main · upstream")
+    expect(ref.branch).toBe("main")
+  })
+
+  test("excludes the HEAD of every remote", () => {
+    expect(displayRefs(["upstream/HEAD", "upstream/staging"], { remotes }).map((ref) => ref.label)).toEqual([
+      "upstream/staging",
+    ])
+  })
+
+  test("treats a remote-looking ref as a branch without a remote to match it", () => {
+    expect(displayRefs(["upstream/main"], { remotes: [] })[0].kind).toBe("branch")
+  })
+})
+
+describe("pairing a branch with its upstream", () => {
+  const remotes = ["origin", "upstream"]
+  const tracking = (upstream: string | null) =>
+    new Map([["main", { branch: "main", upstream, ahead: 2, behind: 0, isGone: false }]])
+
+  test("names the remote the branch actually tracks", () => {
+    const refs = displayRefs(["HEAD -> main", "origin/main", "upstream/main"], { branchSync: tracking("upstream/main"), remotes })
+    expect(refs[0].label).toBe("main · upstream")
+    expect(refs[0].remote).toBe("upstream")
+    // The remote that was not paired keeps a chip of its own rather than being consumed.
+    expect(refs.map((ref) => ref.label)).toEqual(["main · upstream", "origin/main"])
+  })
+
+  test("pairs with a differently named upstream", () => {
+    const refs = displayRefs(["main", "origin/trunk"], { branchSync: tracking("origin/trunk"), remotes })
+    expect(refs.map((ref) => ref.label)).toEqual(["main · origin"])
+  })
+
+  test("falls back to whichever remote carries the name without tracking data", () => {
+    const refs = displayRefs(["main", "upstream/main"], { branchSync: tracking(null), remotes })
+    expect(refs[0].label).toBe("main · upstream")
+  })
+})
+
+describe("remoteBranchName", () => {
+  test("strips the remote a ref belongs to, not the repository's primary one", () => {
+    const [ref] = displayRefs(["upstream/main"], { remotes: ["origin", "upstream"] })
+    expect(remoteBranchName(ref)).toBe("main")
+  })
+
+  test("keeps a slash in the branch name", () => {
+    const [ref] = displayRefs(["origin/feat/graph"], { remotes: ["origin"] })
+    expect(remoteBranchName(ref)).toBe("feat/graph")
+  })
+
+  test("reports nothing for a ref that is not on a remote", () => {
+    expect(remoteBranchName(displayRefs(["main"])[0])).toBeNull()
+    expect(remoteBranchName(displayRefs(["tag: v1"])[0])).toBeNull()
+  })
+})
+
+describe("rowChips", () => {
+  const stash = (name: string): StashEntry => ({ base: "a", branch: "main", date: "", message: `work on ${name}`, name, sha: name })
+
+  test("orders locals and stashes ahead of remotes and tags", () => {
+    const refs = displayRefs(["main", "origin/staging", "tag: v1.0.0"])
+    const chips = rowChips(refs, [stash("stash@{0}")])
+    expect(chips.map((chip) => chip.kind)).toEqual(["branch", "stash", "remote", "tag"])
+  })
+
+  test("keeps the current checkout first", () => {
+    const refs = displayRefs(["other", "HEAD -> main"])
+    expect(rowChips(refs, [stash("stash@{0}")]).map(chipName)).toEqual(["main", "other", "stash@{0}"])
+  })
+})
+
+describe("detachedWorktrees", () => {
+  const worktree = (overrides: Partial<RowWorktree>): RowWorktree => ({
+    branch: null, changedFiles: 0, head: "a", isCurrent: false, isOpen: false,
+    name: "wt", path: "/wt", pendingOperation: null, untrackedFiles: 0, ...overrides,
+  })
+
+  test("leaves out a worktree already drawn inside a branch chip", () => {
+    const held = worktree({ branch: "main", name: "main", path: "/repos/main" })
+    const refs = displayRefs(["main"], { worktrees: [held] })
+    expect(refs[0].worktrees).toEqual([held])
+    expect(detachedWorktrees(refs, [held])).toEqual([])
+  })
+
+  // A rebase and a bisect both leave the worktree on a detached HEAD, so this is the state an interrupted
+  // operation is seen in, not a rare one.
+  test("keeps a worktree that holds no branch", () => {
+    const parked = worktree({ pendingOperation: "rebase", path: "/wt-rebase" })
+    const refs = displayRefs(["main"], { worktrees: [parked] })
+    expect(refs[0].worktrees).toEqual([])
+    expect(detachedWorktrees(refs, [parked])).toEqual([parked])
+  })
+
+  test("counts a worktree's uncommitted work in the chip that holds it", () => {
+    const dirty = worktree({ branch: "main", changedFiles: 4, untrackedFiles: 3, name: "main" })
+    const [chip] = rowChips(displayRefs(["main"], { worktrees: [dirty] }))
+    const [clean] = rowChips(displayRefs(["main"]))
+    expect(worktreeChanges(dirty)).toBe(7)
+    expect(chipWidth(chip)).toBeGreaterThan(chipWidth(clean))
+  })
+
+  test("orders a detached worktree ahead of the branches it is parked beside", () => {
+    const parked = worktree({ name: "wt-rebase", path: "/wt-rebase" })
+    const chips = rowChips(displayRefs(["main", "tag: v1"]), [], [parked])
+    expect(chips.map((chip) => chip.kind)).toEqual(["worktree", "branch", "tag"])
+  })
+
+  test("never collapses a worktree into the overflow count", () => {
+    const parked = worktree({ name: "wt-rebase", path: "/wt-rebase" })
+    const chips = rowChips(displayRefs(["main", "origin/other", "tag: v1.0.0"]), [], [parked])
+    const shown = chips.slice(0, visibleChipCount(chips, 200))
+    expect(shown.map((chip) => chip.kind)).toEqual(["worktree", "branch"])
+  })
+})
+
+describe("visibleChipCount", () => {
+  const chips = (labels: string[]) => rowChips(displayRefs(labels))
+
+  test("shows everything that fits", () => {
+    expect(visibleChipCount(chips(["main", "tag: v1"]), 1_000)).toBe(2)
+  })
+
+  test("collapses remotes and tags before anything else", () => {
+    const all = chips(["main", "release", "origin/staging", "tag: v1.0.0"])
+    const shown = all.slice(0, visibleChipCount(all, 200))
+    expect(shown.map((chip) => chip.kind)).toEqual(["branch", "branch"])
+  })
+
+  test("keeps every local branch even when they overflow on their own", () => {
+    const all = chips(["a-long-branch-name", "another-long-branch-name", "a-third-long-branch-name"])
+    expect(visibleChipCount(all, 40)).toBe(3)
+  })
+
+  test("keeps a stash rather than folding it away", () => {
+    const refs = displayRefs(["main", "origin/staging", "tag: v1.0.0"])
+    const all = rowChips(refs, [{ base: "a", branch: "main", date: "", message: "set aside", name: "stash@{0}", sha: "s" }])
+    const shown = all.slice(0, visibleChipCount(all, 200))
+    expect(shown.map((chip) => chip.kind)).toEqual(["branch", "stash"])
+  })
+
+  test("counts a long label at the width CSS caps it to", () => {
+    const long = rowChips(displayRefs(["a".repeat(200)]))
+    const short = rowChips(displayRefs(["a".repeat(60)]))
+    expect(chipWidth(long[0])).toBe(chipWidth(short[0]))
+  })
+
+  test("keeps chips that fit once long labels stop being over-counted", () => {
+    const refs = displayRefs(["HEAD -> main", "origin/main", "origin/other"], { remotes: ["origin"] })
+    const chips = rowChips(refs, [{ base: "a", branch: "main", date: "", message: "fix(graph): a stash message about as long as a commit subject", name: "stash@{0}", sha: "s" }])
+    expect(visibleChipCount(chips, 460)).toBe(chips.length)
+  })
+
+  test("always shows one chip, however narrow the column is", () => {
+    expect(visibleChipCount(chips(["origin/a-very-long-remote-branch-name"]), 10)).toBe(1)
   })
 })
 
@@ -323,6 +506,18 @@ describe("graphCanvasHeight", () => {
   })
 })
 
+describe("unpushedHashes with other remotes", () => {
+  test("counts a commit as pushed when any remote reaches it", () => {
+    const commits = [commit("a", ["b"], ["main"]), commit("b", ["c"], ["upstream/main"]), commit("c")]
+    expect([...unpushedHashes(commits, ["origin", "upstream"])]).toEqual(["a"])
+  })
+
+  test("ignores a remote the repository does not have", () => {
+    const commits = [commit("a", ["b"], ["upstream/main"]), commit("b")]
+    expect([...unpushedHashes(commits, ["origin"])]).toEqual(["a", "b"])
+  })
+})
+
 describe("unpushedHashes", () => {
   test("marks commits above the remote ref", () => {
     const commits = [
@@ -380,16 +575,16 @@ describe("branch sync", () => {
     ...overrides,
   })
   const ref = (value: BranchSync | null) =>
-    displayRefs(["feature"], [], value ? new Map([[value.branch, value]]) : undefined)[0]
+    displayRefs(["feature"], { branchSync: value ? new Map([[value.branch, value]]) : undefined })[0]
 
   test("attaches sync state to local branches only", () => {
-    const refs = displayRefs(["main", "origin/staging", "tag: v1"], [], new Map([["main", sync({ branch: "main" })]]))
+    const refs = displayRefs(["main", "origin/staging", "tag: v1"], { branchSync: new Map([["main", sync({ branch: "main" })]]) })
     expect(refs.map((entry) => entry.sync?.branch ?? null)).toEqual(["main", null, null])
   })
 
   test("separates standalone remote refs from local branches and tags", () => {
     const refs = displayRefs(["main", "origin/staging", "tag: v1"])
-    expect(refs.map(refKind)).toEqual(["branch", "remote", "tag"])
+    expect(refs.map((ref) => ref.kind)).toEqual(["branch", "remote", "tag"])
   })
 
   test("shows nothing extra when a branch matches its upstream", () => {
@@ -444,15 +639,15 @@ describe("branchesContaining", () => {
   })
 })
 
-describe("refKind", () => {
+describe("ref kinds", () => {
   test("separates local branches, remote branches and tags", () => {
     const [local] = displayRefs(["main"])
     const [remote] = displayRefs(["origin/release"])
     const [tag] = displayRefs(["tag: v1.0.0"])
 
-    expect(refKind(local)).toBe("branch")
-    expect(refKind(remote)).toBe("remote")
-    expect(refKind(tag)).toBe("tag")
+    expect(local.kind).toBe("branch")
+    expect(remote.kind).toBe("remote")
+    expect(tag.kind).toBe("tag")
   })
 
   test("carries the ref kind into the selection", () => {

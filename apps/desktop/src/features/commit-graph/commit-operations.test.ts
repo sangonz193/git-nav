@@ -34,15 +34,21 @@ const repository: RepositoryState = {
   isDirty: false,
   pendingOperation: null,
   remote: "origin",
+  remotes: ["origin"],
 }
 
 function ref(labels: string[], sha: string, sync?: BranchSync) {
-  const [entry] = displayRefs(labels, [], sync ? new Map([[sync.branch, sync]]) : undefined)
+  const [entry] = displayRefs(labels, { branchSync: sync ? new Map([[sync.branch, sync]]) : undefined })
   return refSelection(entry, sha)
 }
 
 function ids(source: Selection | null, target: Operand) {
   return applicableOperations(repository, source, target).map(({ operation }) => operation.id)
+}
+
+function planOf(state: RepositoryState, target: Operand, id: string) {
+  const entry = applicableOperations(state, null, target).find(({ operation }) => operation.id === id)
+  return entry ? entry.operation.plan(entry.request, {}, { branch: null, mergeBase: null, prediction: null }) : null
 }
 
 function labelOf(source: Selection | null, target: Operand, id: string) {
@@ -104,7 +110,7 @@ describe("applicableOperations", () => {
   })
 
   test("only offers a stash its own operations", () => {
-    const entry = { branch: "main", date: "2026-01-01T00:00:00Z", message: "work", name: "stash@{0}", sha: "s1" }
+    const entry = { base: "b1", branch: "main", date: "2026-01-01T00:00:00Z", message: "work", name: "stash@{0}", sha: "s1" }
 
     expect(ids(null, { kind: "stash", entry })).toEqual(["stashApply", "stashPop", "stashDrop"])
   })
@@ -153,5 +159,27 @@ describe("menu order", () => {
     const offered = applicableOperations(repository, range, topic)
 
     expect(offered.every(({ operation }) => OPERATION_GROUPS.includes(operation.group))).toBe(true)
+  })
+})
+
+describe("deleting a remote branch", () => {
+  const forked: RepositoryState = { ...repository, remotes: ["origin", "upstream"] }
+  const remoteRef = (label: string) => refSelection(displayRefs([label], { remotes: forked.remotes })[0], "b")
+
+  test("pushes the delete to the remote the ref lives on", () => {
+    // The repository's primary remote is origin, so naming it here would delete the wrong branch elsewhere.
+    expect(planOf(forked, remoteRef("upstream/main"), "deleteRemoteRef")?.argv).toEqual([
+      "git", "push", "upstream", "--delete", "main",
+    ])
+  })
+
+  test("keeps a slash in the branch it deletes", () => {
+    expect(planOf(forked, remoteRef("origin/feat/graph"), "deleteRemoteRef")?.argv).toEqual([
+      "git", "push", "origin", "--delete", "feat/graph",
+    ])
+  })
+
+  test("never sees a remote HEAD, which is not shown as a ref in the first place", () => {
+    expect(displayRefs(["upstream/HEAD"], { remotes: forked.remotes })).toEqual([])
   })
 })

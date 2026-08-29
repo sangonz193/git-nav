@@ -276,6 +276,14 @@ body {
 .commit-graph-row > * {
   min-width: 0;
   padding: 0 16px 0 8px;
+  white-space: nowrap;
+}
+
+/* The graph cell keeps its overflow: the selection handles sit a pixel outside the row on purpose, and the
+   press target around them reaches further still. */
+.commit-graph-row > *:not(.commit-graph-graph-cell) {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @media (hover: hover) {
@@ -371,22 +379,26 @@ body {
   overflow: hidden;
 }
 
+/* The lane colour is carried by the leading edge and the kind icon, so the label itself stays at full
+   reading contrast however many chips a row holds. */
 .commit-ref {
   align-items: center;
-  background: color-mix(in srgb, var(--commit-ref-color) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
-  border-radius: 4px;
-  color: var(--commit-ref-color);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--foreground) 12%, transparent);
+  border-left: 3px solid var(--commit-ref-color);
+  border-radius: 3px 5px 5px 3px;
+  color: var(--foreground);
   display: inline-flex;
   flex: none;
   gap: 3px;
   max-width: 180px;
   overflow: hidden;
-  padding: 1px 4px;
+  padding: 1px 4px 1px 6px;
   white-space: nowrap;
 }
 
 .commit-ref svg {
+  color: var(--commit-ref-color);
   flex: none;
   height: 12px;
   width: 12px;
@@ -397,11 +409,12 @@ body {
   min-width: 0;
 }
 
+/* The label is split mid-word, so the space before a separator has to survive into the next span. */
 .commit-ref-label-start {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre;
 }
 
 .commit-ref-label-end {
@@ -409,10 +422,9 @@ body {
 }
 
 .commit-ref-sync {
-  color: color-mix(in srgb, var(--commit-ref-color) 70%, var(--muted-foreground));
+  color: var(--muted-foreground);
   flex: none;
   font-variant-numeric: tabular-nums;
-  opacity: 0.9;
 }
 
 /* An upstream that was deleted is the one genuinely stale thing a chip can report. */
@@ -420,77 +432,61 @@ body {
   color: #fbbf24;
 }
 
-.commit-ref-current .commit-ref-sync {
-  color: inherit;
-  opacity: 0.75;
-}
-
-.commit-ref-changes,
-.commit-ref-operation {
-  background: rgb(251 191 36 / 12%);
-  border-color: rgb(251 191 36 / 32%);
-  color: #fbbf24;
-}
-
-.commit-ref-changes {
-  font-variant-numeric: tabular-nums;
-}
-
 button.commit-ref {
   cursor: pointer;
   font: inherit;
 }
 
-@media (hover: hover) {
-  button.commit-ref-changes:hover {
-    background: rgb(251 191 36 / 24%);
-  }
-}
-
-/* A ref that only exists on the remote keeps the colour of its line and gives up its fill, so it ranks
-   below the local branches without losing the branch it belongs to. */
+/* A ref that only exists on the remote gives up its fill and its label contrast, so it ranks below the
+   local branches without losing the line it belongs to. */
 .commit-ref-remote {
   background: transparent;
-  border-color: color-mix(in srgb, var(--commit-ref-color) 28%, transparent);
-  color: color-mix(in srgb, var(--commit-ref-color) 55%, var(--muted-foreground));
+  border-left-color: color-mix(in srgb, var(--commit-ref-color) 55%, transparent);
+  color: var(--muted-foreground);
+}
+
+.commit-ref-remote svg {
+  color: color-mix(in srgb, var(--commit-ref-color) 60%, var(--muted-foreground));
 }
 
 .commit-ref-tag {
   background: transparent;
 }
 
+/* The checkout thickens its edge and warms its fill rather than taking the whole chip, which at three or
+   four refs turned the row into a colour bar. */
 .commit-ref-current {
-  background: var(--commit-ref-color);
-  border-color: var(--commit-ref-color);
-  color: #09090b;
-  font-weight: 600;
+  background: color-mix(in srgb, var(--commit-ref-color) 12%, transparent);
+  border-color: color-mix(in srgb, var(--commit-ref-color) 30%, transparent);
+  border-left-color: var(--commit-ref-color);
+  border-left-width: 5px;
+  font-weight: 650;
+  padding-left: 4px;
+}
+
+.commit-ref-more {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--foreground) 18%, transparent);
+  border-left-color: color-mix(in srgb, var(--foreground) 28%, transparent);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
 }
 
 .commit-ref[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
-}
-
-.commit-ref-remote[aria-expanded="true"],
-.commit-ref-tag[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--commit-ref-color) 18%, transparent);
+  background: color-mix(in srgb, var(--foreground) 14%, transparent);
 }
 
 .commit-ref-current[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--commit-ref-color) 84%, #09090b);
+  background: color-mix(in srgb, var(--commit-ref-color) 22%, transparent);
 }
 
 @media (hover: hover) {
   button.commit-ref:hover {
-    background: color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
-  }
-
-  button.commit-ref-remote:hover,
-  button.commit-ref-tag:hover {
-    background: color-mix(in srgb, var(--commit-ref-color) 18%, transparent);
+    background: color-mix(in srgb, var(--foreground) 12%, transparent);
   }
 
   button.commit-ref-current:hover {
-    background: color-mix(in srgb, var(--commit-ref-color) 84%, #09090b);
+    background: color-mix(in srgb, var(--commit-ref-color) 20%, transparent);
   }
 }
 
@@ -529,23 +525,76 @@ button.commit-ref {
   padding: 0 3px;
 }
 
-.commit-ref-current .commit-ref-head {
-  background: transparent;
-  border: 1px solid color-mix(in srgb, #09090b 45%, transparent);
-  padding: 0 2px;
+/* Which worktree holds a branch only ever restates the branch name, so the marker answers what can be acted
+   on instead: whether there is a window to jump to, how much uncommitted work is sitting there, and whether
+   an operation was left half finished. */
+.commit-ref-worktree {
+  align-items: center;
+  color: color-mix(in srgb, var(--commit-ref-color) 60%, var(--muted-foreground));
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
 }
 
-.commit-ref-worktree {
-  border: 1px solid color-mix(in srgb, var(--commit-ref-color) 45%, transparent);
-  border-radius: 2px;
-  flex: none;
-  font-size: 0.625rem;
-  font-weight: 600;
-  line-height: 1.4;
-  max-width: 60px;
-  overflow: hidden;
-  padding: 0 2px;
-  text-overflow: ellipsis;
+.commit-ref-worktree svg {
+  color: inherit;
+  height: 11px;
+  width: 11px;
+}
+
+.commit-ref-worktree-icon {
+  align-items: center;
+  display: inline-flex;
+  position: relative;
+}
+
+.commit-ref-worktree-open {
+  color: var(--commit-ref-color);
+}
+
+.commit-ref-worktree-open .commit-ref-worktree-icon svg {
+  fill: color-mix(in srgb, var(--commit-ref-color) 35%, transparent);
+}
+
+/* An interrupted operation is the one worktree state that has to be answered rather than merely noticed, so
+   it is badged instead of taking a colour that uncommitted work already uses. */
+.commit-ref-worktree-pending {
+  margin-right: 2px;
+}
+
+.commit-ref-worktree-pending .commit-ref-worktree-icon::after {
+  background: #fbbf24;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--background);
+  content: "";
+  height: 6px;
+  position: absolute;
+  right: -3px;
+  top: -2px;
+  width: 6px;
+}
+
+.commit-ref-current .commit-ref-worktree-pending .commit-ref-worktree-icon::after {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--commit-ref-color) 12%, var(--background));
+}
+
+.commit-ref-worktree-changes {
+  align-items: center;
+  color: #fbbf24;
+  display: inline-flex;
+  gap: 1px;
+}
+
+.commit-ref-worktree-count {
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+/* A worktree that holds no branch has no chip to sit inside, so it becomes one, and the dashed edge says it
+   is parked on a commit rather than following a ref. */
+.commit-ref-detached {
+  border-left-style: dashed;
 }
 
 .commit-graph-status {

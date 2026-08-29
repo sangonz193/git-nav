@@ -1375,6 +1375,51 @@ fn parse_commit(
     ])
 }
 
+/// The revisions a graph is walked from. `--all` also reaches refs/stash, refs/notes and refs/prefetch, whose
+/// commits are not history and arrive as unlabelled rows, so the set is named rather than inferred.
+fn graph_revisions(repo_path: &str) -> Vec<String> {
+    let mut revisions = vec![
+        "--branches".to_string(),
+        "--tags".to_string(),
+        "--remotes".to_string(),
+    ];
+    // A repository with no commits has no HEAD to resolve, and naming it as a revision fails the whole walk.
+    if resolve_commit(repo_path, "HEAD").is_ok() {
+        revisions.push("HEAD".to_string());
+    }
+    // `HEAD` names this worktree only, while `--all` reached every one of them, so a worktree sitting on a
+    // detached HEAD would otherwise take its commits out of the graph with it.
+    // A stash is drawn on the commit it was made from, which nothing else reaches once the branch it was
+    // taken from has moved on.
+    for sha in worktree_heads(repo_path).into_iter().chain(stash_bases(repo_path)) {
+        if !revisions.contains(&sha) {
+            revisions.push(sha);
+        }
+    }
+    revisions
+}
+
+fn worktree_heads(repo_path: &str) -> Vec<String> {
+    let Ok(output) = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"]) else {
+        return Vec::new();
+    };
+    output
+        .split('\0')
+        .filter_map(|field| field.trim().strip_prefix("HEAD ").map(str::to_string))
+        .collect()
+}
+
+fn stash_bases(repo_path: &str) -> Vec<String> {
+    let Ok(output) = git_output_allow_empty(repo_path, &["stash", "list", "-z", "--format=%P"]) else {
+        return Vec::new();
+    };
+    output
+        .split('\0')
+        .filter_map(|record| record.split_whitespace().next())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Feeds `on_batch` as `git log` produces rows; returning `Err` from it stops the walk early.
 fn walk_commit_graph(
     repo_path: &str,
@@ -1391,16 +1436,11 @@ fn walk_commit_graph_page(
     mut on_batch: impl FnMut(Vec<Vec<serde_json::Value>>) -> Result<(), String>,
 ) -> Result<bool, String> {
     let mut reserved_tip = reserved_lane_tip(repo_path);
+    let revisions = graph_revisions(repo_path);
     let mut child = Command::new("git")
-        .args([
-            "--no-optional-locks",
-            "-C",
-            repo_path,
-            "log",
-            "--all",
-            "--topo-order",
-            "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s",
-        ])
+        .args(["--no-optional-locks", "-C", repo_path, "log"])
+        .args(&revisions)
+        .args(["--topo-order", "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s"])
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|error| error.to_string())?;
@@ -1620,16 +1660,13 @@ fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result
 }
 
 fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
-    let output = git_output_allow_empty(
-        repo_path,
-        &[
-            "log",
-            "--all",
-            "--topo-order",
-            "--max-count=250",
-            "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s",
-        ],
-    )?;
+    let revisions = graph_revisions(repo_path);
+    let arguments: Vec<&str> = ["log"]
+        .into_iter()
+        .chain(revisions.iter().map(String::as_str))
+        .chain(["--topo-order", "--max-count=250", "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s"])
+        .collect();
+    let output = git_output_allow_empty(repo_path, &arguments)?;
     let mut lanes = Vec::new();
     Ok(output
         .lines()
@@ -2227,6 +2264,7 @@ struct RepositoryState {
     pending_operation: Option<PendingOperation>,
     default_branch: Option<String>,
     remote: Option<String>,
+    remotes: Vec<String>,
 }
 
 #[git_nav_macros::http_command]
@@ -2257,6 +2295,7 @@ fn repository_state(repo_path: String) -> Result<RepositoryState, String> {
         default_branch: primary_reference(&repo_path).ok(),
         current_branch,
         remote,
+        remotes: remotes.lines().map(str::to_string).collect(),
     })
 }
 
@@ -2648,6 +2687,7 @@ async fn reset_current(repo_path: String, target: String, mode: String) -> Resul
 struct StashEntry {
     name: String,
     sha: String,
+    base: Option<String>,
     message: String,
     branch: Option<String>,
     date: String,
@@ -2663,6 +2703,11 @@ fn parse_stash_entries(output: &str) -> Vec<StashEntry> {
             let sha = fields.next()?.to_string();
             let subject = fields.next().unwrap_or_default();
             let date = fields.next().unwrap_or_default().to_string();
+            // A stash commit records the working tree against the commit it was made from, which is its first parent.
+            let base = fields
+                .next()
+                .and_then(|parents| parents.split_whitespace().next())
+                .map(str::to_string);
             // Git writes "WIP on main: 1a2b3c subject" for an automatic message and "On main: text" for a named one.
             let (branch, message) = match subject.split_once(": ") {
                 Some((source, message)) => (
@@ -2674,7 +2719,7 @@ fn parse_stash_entries(output: &str) -> Vec<StashEntry> {
                 ),
                 None => (None, subject.to_string()),
             };
-            Some(StashEntry { name, sha, message, branch, date })
+            Some(StashEntry { name, sha, base, message, branch, date })
         })
         .collect()
 }
@@ -2684,7 +2729,7 @@ fn parse_stash_entries(output: &str) -> Vec<StashEntry> {
 fn stash_list(repo_path: String) -> Result<Vec<StashEntry>, String> {
     let output = git_output_allow_empty(
         &repo_path,
-        &["stash", "list", "-z", "--format=%gd%x1f%H%x1f%gs%x1f%aI"],
+        &["stash", "list", "-z", "--format=%gd%x1f%H%x1f%gs%x1f%aI%x1f%P"],
     )?;
     Ok(parse_stash_entries(&output))
 }
@@ -3391,6 +3436,91 @@ mod tests {
 
         assert_eq!(subjects, ["second"]);
         assert!(has_more);
+    }
+
+    #[test]
+    fn walks_history_without_stash_or_notes_commits() {
+        let (path, run) = scratch_repository("graph-revisions");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "first"]);
+        fs::write(format!("{path}/work.txt"), "one").unwrap();
+        run(&["add", "work.txt"]);
+        run(&["stash", "push", "--quiet", "--message", "set aside"]);
+        run(&["notes", "add", "--message", "a note"]);
+
+        let mut batches = Vec::new();
+        walk_commit_graph(&path, |batch| {
+            batches.push(batch);
+            Ok(())
+        })
+        .unwrap();
+        let subjects = batches
+            .into_iter()
+            .flatten()
+            .map(|commit| commit[5].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(subjects, ["first"]);
+    }
+
+    #[test]
+    fn keeps_the_commits_of_a_detached_worktree() {
+        let (path, run) = scratch_repository("detached-worktree");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        let detached = format!("{path}-detached");
+        run(&["worktree", "add", "--quiet", "--detach", &detached, "HEAD"]);
+        let commit = Command::new("git")
+            .args(["-C", &detached, "-c", "user.email=tests@example.com", "-c", "user.name=Tests"])
+            .args(["commit", "--quiet", "--allow-empty", "--message", "work in a detached worktree"])
+            .status()
+            .unwrap();
+        assert!(commit.success());
+
+        let mut batches = Vec::new();
+        walk_commit_graph(&path, |batch| {
+            batches.push(batch);
+            Ok(())
+        })
+        .unwrap();
+        let subjects = batches
+            .into_iter()
+            .flatten()
+            .map(|commit| commit[5].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        let _ = fs::remove_dir_all(&detached);
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(subjects, ["work in a detached worktree", "base"]);
+    }
+
+    #[test]
+    fn keeps_the_commit_a_stash_was_made_from_even_when_no_branch_reaches_it() {
+        let (path, run) = scratch_repository("stash-base");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "stashed from here"]);
+        fs::write(format!("{path}/work.txt"), "one").unwrap();
+        run(&["add", "work.txt"]);
+        run(&["stash", "push", "--quiet", "--message", "set aside"]);
+        // The branch moves off the commit the stash was taken from, so only the stash still reaches it.
+        run(&["reset", "--quiet", "--hard", "HEAD~1"]);
+
+        let entries = stash_list(path.clone()).unwrap();
+        let mut batches = Vec::new();
+        walk_commit_graph(&path, |batch| {
+            batches.push(batch);
+            Ok(())
+        })
+        .unwrap();
+        let subjects = batches
+            .into_iter()
+            .flatten()
+            .map(|commit| commit[5].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].base.is_some());
+        assert_eq!(subjects, ["stashed from here", "base"]);
     }
 
     #[test]

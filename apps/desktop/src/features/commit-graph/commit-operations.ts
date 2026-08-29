@@ -2,11 +2,8 @@ import { invoke } from "@/lib/ipc"
 import { ArrowDownToLine, ArrowUpFromLine, Copy, GitBranch, GitGraph, GitMerge, LogIn, Pencil, Scissors, Tag, Trash2, Undo2 } from "lucide-react"
 import type { ComponentType, ReactNode } from "react"
 
-import { refName, type Commit, type CommitSelection, type RefSelection, type Selection } from "./commit-graph"
+import { PENDING_OPERATION_LABELS, refName, remoteBranchName, type Commit, type CommitSelection, type PendingOperation, type RefSelection, type Selection, type StashEntry } from "./commit-graph"
 
-export const PENDING_OPERATION_LABELS = { bisect: "bisecting", cherryPick: "cherry-picking", merge: "merging", rebase: "rebasing" }
-
-export type PendingOperation = keyof typeof PENDING_OPERATION_LABELS
 export type Block = { reason: string }
 export type Warning = { files?: string[], message: string }
 export type RefUpdate = { after: string, before: string, reference: string }
@@ -20,8 +17,8 @@ export type RepositoryState = {
   isDirty: boolean
   pendingOperation: PendingOperation | null
   remote: string | null
+  remotes: string[]
 }
-export type StashEntry = { branch: string | null, date: string, message: string, name: string, sha: string }
 export type BranchOperationState = {
   exists: boolean
   isCurrentWorktree: boolean
@@ -704,15 +701,18 @@ const deleteRemoteRef: Operation = {
   group: "danger",
   icon: Trash2,
   destructive: true,
-  applicable: ({ repository, target }) => target.kind === "remote" && Boolean(repository.remote) && operandName(target) !== `${repository.remote}/HEAD`,
+  // The remote comes from the ref itself: with more than one remote configured, assuming the repository's
+  // primary one would delete a same-named branch on the wrong remote.
+  applicable: ({ target }) => target.kind === "remote" && remoteBranchName(target.ref) !== null && remoteBranchName(target.ref) !== "HEAD",
   label: () => "Delete from the remote",
   description: ({ target }) => `This deletes ${operandName(target)} for everyone who uses the remote.`,
   blocks: () => [],
   warnings: () => [{ message: "Deleting a branch on the remote cannot be undone from here." }],
   action: () => "Delete on remote",
-  plan: ({ repository, target }) => {
-    const remote = repository.remote ?? "origin"
-    const branch = operandName(target).slice(`${remote}/`.length)
+  plan: ({ target }) => {
+    const ref = (target as RefSelection).ref
+    const remote = ref.remote ?? ""
+    const branch = remoteBranchName(ref) ?? ""
     return {
       argv: ["git", "push", remote, "--delete", branch],
       command: "push_ref",

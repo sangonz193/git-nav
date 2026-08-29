@@ -9,16 +9,17 @@ import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Tag, Terminal, Undo2, X } from "lucide-react"
-import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, Cloud, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Tag, Terminal, Undo2, X } from "lucide-react"
+import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, refKind, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, unpushedHashes, unpushedLanes, type BranchSync, type CheckedOutWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type Selection, type SquashMergeInference } from "./commit-graph"
+import { ancestryPath, chipLabel, chipName, clampGraphWidth, detachedWorktrees, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, rowChips, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
-import { clearConflictPredictions, PENDING_OPERATION_LABELS, type CompletedOperation, type OperationRequest, type PendingOperation, type RefMenuComponents, type RefUpdate, type RepositoryState, type StashEntry } from "./commit-operations"
+import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
-import type { Project } from "../repository/project"
+import type { Project, Worktree as ProjectWorktree } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
 const PULL_REQUEST_SYNC_INTERVAL = 60_000
@@ -44,6 +45,16 @@ type ViewMode = "graph" | "branches"
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Label: ContextMenuLabel, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
 const SELECTION_LABELS = { branch: "Branch", remote: "Remote branch", tag: "Tag" }
+const CHIP_ICONS = { branch: GitBranch, remote: Cloud, stash: Archive, tag: Tag, worktree: AppWindow }
+function Hinted({ children, hint }: { children: ReactNode, hint: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
 const commitColumnHelper = createColumnHelper<typeof commitTableFeatures, Commit>()
 const commitColumns = commitColumnHelper.columns([
@@ -68,7 +79,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [graphOffset, setGraphOffset] = useState(0)
   const [hasOlderCommits, setHasOlderCommits] = useState(false)
   const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(false)
-  const [checkedOutWorktrees, setCheckedOutWorktrees] = useState<CheckedOutWorktree[]>([])
+  const [projectWorktrees, setProjectWorktrees] = useState<ProjectWorktree[]>([])
   const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(new Map())
   const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(null)
@@ -125,6 +136,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     columns: commitColumns,
   })
   const columnTemplate = table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ")
+  // Refs share the commit column with the subject, which keeps whatever they do not take.
+  const refBudget = table.getAllLeafColumns()[0].getSize() * REF_BUDGET_SHARE
   const tableWidth = viewMode === "graph" ? graphWidth + table.getTotalSize() : graphWidth
   const rowVirtualizer = useVirtualizer({
     count: commits.length,
@@ -133,6 +146,11 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     overscan: 12,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
+  // Until the repository reports its remotes, refs are classified against the conventional one rather than
+  // against none, which would read every remote branch as a local one. Repository state is re-read on a timer,
+  // so the list is held by its contents: a fresh array each poll would redraw the whole graph.
+  const remoteNames = repository?.remotes?.join("\n")
+  const remotes = useMemo(() => remoteNames?.split("\n"), [remoteNames])
   const currentCheckoutIndex = useMemo(() => commits.findIndex((commit) => isCurrentCheckout(commit.refs)), [commits])
   const checkoutScrollDirection = currentCheckoutIndex === -1 || scroll.height === 0
     ? null
@@ -141,17 +159,43 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       : currentCheckoutIndex * rowHeight >= scroll.top + scroll.height
         ? "down"
         : null
+  // A worktree's name and openness come from the project snapshot while its uncommitted work and pending
+  // operation come from its status, and the two only describe the same checkout once they are joined.
+  const worktrees = useMemo(() => {
+    const statuses = new Map(worktreeStatuses.map((status) => [status.path, status]))
+    return projectWorktrees.map((worktree): RowWorktree => {
+      const status = statuses.get(worktree.path)
+      return {
+        branch: worktree.isDetached ? null : worktree.branch,
+        changedFiles: status?.changedFiles ?? 0,
+        head: status?.head ?? worktree.head,
+        isCurrent: worktree.path === params.path,
+        isOpen: worktree.isOpen,
+        name: worktree.name,
+        path: worktree.path,
+        pendingOperation: status?.pendingOperation ?? null,
+        untrackedFiles: status?.untrackedFiles ?? 0,
+      }
+    })
+  }, [params.path, projectWorktrees, worktreeStatuses])
+  const worktreesByHead = useMemo(() => {
+    const byHead = new Map<string, RowWorktree[]>()
+    for (const worktree of worktrees) {
+      byHead.set(worktree.head, [...(byHead.get(worktree.head) ?? []), worktree])
+    }
+    return byHead
+  }, [worktrees])
   const commitsSelection = useMemo(() => {
     if (rangeDrag) {
-      return commitSelection(commits, rangeDrag.anchorIndex, rangeDrag.focusIndex)
+      return commitSelection(commits, rangeDrag.anchorIndex, rangeDrag.focusIndex, remotes)
     }
     if (!selectionRange) {
       return null
     }
     const anchorIndex = commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
     const focusIndex = commits.findIndex((commit) => commit.hash === selectionRange.focusHash)
-    return anchorIndex === -1 || focusIndex === -1 ? null : commitSelection(commits, anchorIndex, focusIndex)
-  }, [commits, rangeDrag, selectionRange])
+    return anchorIndex === -1 || focusIndex === -1 ? null : commitSelection(commits, anchorIndex, focusIndex, remotes)
+  }, [commits, rangeDrag, remotes, selectionRange])
   // A ref selection outlives the graph it was made on, so it is re-read from the commit it sits on after every
   // refresh and falls back to what it was made from while the graph it belongs to is still streaming in.
   const selection = useMemo<Selection | null>(() => {
@@ -159,9 +203,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       return commitsSelection
     }
     const commit = commits.find((candidate) => candidate.hash === selectedRef.sha)
-    const ref = commit && displayRefs(commit.refs, checkedOutWorktrees, branchSync).find((candidate) => refName(candidate) === refName(selectedRef.ref))
+    const ref = commit && displayRefs(commit.refs, { branchSync, remotes, worktrees: worktreesByHead.get(selectedRef.sha) }).find((candidate) => refName(candidate) === refName(selectedRef.ref))
     return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
-  }, [branchSync, checkedOutWorktrees, commits, commitsSelection, selectedRef])
+  }, [branchSync, commits, commitsSelection, remotes, selectedRef, worktreesByHead])
   const selectedHashes = useMemo(() => new Set(commitsSelection?.commits.map((commit) => commit.hash)), [commitsSelection])
   const selectionEndpointIndexes = useMemo(() => selectionRange
     ? { anchor: commits.findIndex((commit) => commit.hash === selectionRange.anchorHash), focus: commits.findIndex((commit) => commit.hash === selectionRange.focusHash) }
@@ -180,7 +224,17 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
     return { top: Math.min(ends.anchor, ends.focus), bottom: Math.max(ends.anchor, ends.focus) }
   }, [commitsSelection, rangeDrag, selectionEndpointIndexes])
-  const unpushed = useMemo(() => unpushedHashes(commits), [commits])
+  // A stash is drawn on the commit it was made from, which is the only place in the graph it belongs to.
+  const stashesByBase = useMemo(() => {
+    const byBase = new Map<string, StashEntry[]>()
+    for (const entry of stashes) {
+      if (entry.base) {
+        byBase.set(entry.base, [...(byBase.get(entry.base) ?? []), entry])
+      }
+    }
+    return byBase
+  }, [stashes])
+  const unpushed = useMemo(() => unpushedHashes(commits, remotes), [commits, remotes])
   const unpushedLaneMasks = useMemo(() => unpushedLanes(commits, unpushed), [commits, unpushed])
   // The oldest unpushed commit is the top of the local segment, so it is the useful place to land.
   const oldestUnpushedIndex = useMemo(() => {
@@ -191,16 +245,6 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
     return -1
   }, [commits, unpushed])
-  const worktreeStatusesByHead = useMemo(() => {
-    const byHead = new Map<string, WorktreeStatus[]>()
-    for (const status of worktreeStatuses) {
-      if (status.changedFiles + status.untrackedFiles === 0 && !status.pendingOperation) {
-        continue
-      }
-      byHead.set(status.head, [...(byHead.get(status.head) ?? []), status])
-    }
-    return byHead
-  }, [worktreeStatuses])
   const squashMergeEdges = useMemo(() => {
     if (squashMergeInferences.length === 0) {
       return []
@@ -467,9 +511,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       invoke<Project>("project_snapshot", { path: params.path })
         .then((project) => {
           if (!disposed) {
-            setCheckedOutWorktrees(project.worktrees
-              .filter((worktree) => worktree.path !== params.path && !worktree.isPrunable && !worktree.isDetached)
-              .map(({ branch, name, path, isOpen }) => ({ branch, name, path, isOpen })))
+            setProjectWorktrees(project.worktrees.filter((worktree) => !worktree.isPrunable))
           }
         })
         .catch((message: unknown) => setError(String(message)))
@@ -608,7 +650,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }
 
   // The diff is scoped to the dirty worktree, which is not always the one this panel was opened on.
-  function openWorktreeDiff(status: WorktreeStatus, name: string) {
+  function openWorktreeDiff(worktree: RowWorktree) {
     const referencePanel = containerApi.getPanel(api.id)
     if (!referencePanel) {
       setError("Could not open a working tree diff.")
@@ -617,9 +659,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     containerApi.addPanel({
       component: "diff",
       id: panelId("diff"),
-      params: { ...params, path: status.path, baseRef: status.head, headRef: WORKTREE_REF },
+      params: { ...params, path: worktree.path, baseRef: worktree.head, headRef: WORKTREE_REF },
       position: { direction: "within", referencePanel },
-      title: `Uncommitted: ${name}`,
+      title: `Uncommitted: ${worktree.name}`,
     })
   }
 
@@ -820,7 +862,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     const reference = refName(ref)
     return (
       <>
-        {menuHeader(components, reference, syncDescription(ref) ?? SELECTION_LABELS[refKind(ref)])}
+        {menuHeader(components, reference, syncDescription(ref) ?? SELECTION_LABELS[ref.kind])}
         <OperationMenuItems components={components} onSelect={setRequest} repository={repository} source={selection} target={refSelection(ref, sha)} />
         <Item onSelect={() => openRefDiff(reference)}>
           <GitCompareArrows />
@@ -881,95 +923,200 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     )
   }
 
+  function stashMenuItems(entry: StashEntry, components: RefMenuComponents) {
+    const { Item } = components
+    return (
+      <>
+        {menuHeader(components, entry.name, entry.message)}
+        <OperationMenuItems components={components} onSelect={setRequest} repository={repository} source={null} target={{ kind: "stash", entry }} />
+        <Item onSelect={() => openStashDiff(entry)}>
+          <FileDiff />
+          Show stashed changes
+        </Item>
+      </>
+    )
+  }
+
   function stashMenuEntry(entry: StashEntry, components: RefMenuComponents) {
-    const { Item, Sub, SubContent, SubTrigger } = components
+    const { Sub, SubContent, SubTrigger } = components
     return (
       <Sub key={entry.sha}>
         <SubTrigger>
           <span className="min-w-0 truncate">{`${entry.name}${entry.branch ? ` · ${entry.branch}` : ""}`}</span>
         </SubTrigger>
+        <SubContent>{stashMenuItems(entry, components)}</SubContent>
+      </Sub>
+    )
+  }
+
+  function chipMenuItems(chip: RowChip, sha: string, components: RefMenuComponents) {
+    if (chip.kind === "stash") {
+      return stashMenuItems(chip.entry, components)
+    }
+    return chip.kind === "worktree" ? worktreeMenuItems(chip.worktree, components) : refMenuItems(chip.ref, sha, components)
+  }
+
+  function chipMenuEntry(chip: RowChip, sha: string, key: string, components: RefMenuComponents) {
+    if (chip.kind === "stash") {
+      return stashMenuEntry(chip.entry, components)
+    }
+    return chip.kind === "worktree" ? worktreeMenuEntry(chip.worktree, components) : refMenuEntry(chip.ref, sha, key, components)
+  }
+
+  function worktreeMarker(worktree: RowWorktree) {
+    const changes = worktreeChanges(worktree)
+    const classes = [
+      "commit-ref-worktree",
+      worktree.isOpen && "commit-ref-worktree-open",
+      worktree.pendingOperation && "commit-ref-worktree-pending",
+    ].filter(Boolean).join(" ")
+    return (
+      <span className={classes} key={worktree.path}>
+        <span className="commit-ref-worktree-icon">
+          <AppWindow />
+        </span>
+        {changes > 0 && (
+          <span className="commit-ref-worktree-changes">
+            <FilePen />
+            <span className="commit-ref-worktree-count">{changes}</span>
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  function worktreeOpenItems(worktree: RowWorktree, { Item, Sub, SubContent, SubTrigger }: RefMenuComponents) {
+    return (
+      <Sub>
+        <SubTrigger>
+          <ExternalLink />
+          Open
+        </SubTrigger>
         <SubContent>
-          {menuHeader(components, entry.name, entry.message)}
-          <OperationMenuItems components={components} onSelect={setRequest} repository={repository} source={null} target={{ kind: "stash", entry }} />
-          <Item onSelect={() => openStashDiff(entry)}>
-            <FileDiff />
-            Show stashed changes
+          <Item onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "git-nav" })}>
+            <AppWindow />
+            Git Nav
+          </Item>
+          <Item onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "vscode" })}>
+            <CodeXml />
+            VS Code
+          </Item>
+          <Item onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "terminal" })}>
+            <Terminal />
+            Terminal
+          </Item>
+          <Item onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "finder" })}>
+            <FolderOpen />
+            Finder
           </Item>
         </SubContent>
       </Sub>
     )
   }
 
-  function worktreeChips(hash: string) {
-    return (worktreeStatusesByHead.get(hash) ?? []).flatMap((status) => {
-      const name = status.path.split("/").pop() ?? status.path
-      const changes = status.changedFiles + status.untrackedFiles
-      const details = [status.changedFiles && `${status.changedFiles} changed`, status.untrackedFiles && `${status.untrackedFiles} untracked`].filter(Boolean).join(", ")
-      return [
-        changes > 0 && (
-          <button
-            aria-label={`Show ${changes} uncommitted change${changes === 1 ? "" : "s"} in ${name}`}
-            className="commit-ref commit-ref-changes"
-            key={`${status.path}-changes`}
-            onClick={() => openWorktreeDiff(status, name)}
-            onPointerDown={(event) => event.stopPropagation()}
-            title={`${name}: ${details}`}
-            type="button"
-          >
-            <FilePen />
-            {changes}
-          </button>
-        ),
-        status.pendingOperation && (
-          <span
-            className="commit-ref commit-ref-operation"
-            key={`${status.path}-operation`}
-            title={`${name} is ${PENDING_OPERATION_LABELS[status.pendingOperation]}`}
-          >
-            {PENDING_OPERATION_LABELS[status.pendingOperation]}
-          </span>
-        ),
-      ].filter(Boolean)
-    })
+  function worktreeMenuItems(worktree: RowWorktree, components: RefMenuComponents) {
+    const { Item } = components
+    const changes = worktreeChanges(worktree)
+    return (
+      <>
+        {menuHeader(components, worktree.name, worktreeDescription(worktree))}
+        {changes > 0 && (
+          <Item onSelect={() => openWorktreeDiff(worktree)}>
+            <FileDiff />
+            {`Show ${changes} uncommitted change${changes === 1 ? "" : "s"}`}
+          </Item>
+        )}
+        {worktreeOpenItems(worktree, components)}
+      </>
+    )
   }
 
-  function refChip(ref: DisplayRef, sha: string, key?: string) {
-    const { start, end } = splitRefLabel(ref.label)
-    const sync = refSyncLabel(ref)
-    const kind = refKind(ref)
-    const [worktree] = ref.worktrees
-    const selected = selectedRef !== null && refName(selectedRef.ref) === refName(ref) && selectedRef.sha === sha
+  function worktreeMenuEntry(worktree: RowWorktree, components: RefMenuComponents) {
+    const { Sub, SubContent, SubTrigger } = components
+    return (
+      <Sub key={worktree.path}>
+        <SubTrigger>{worktree.name}</SubTrigger>
+        <SubContent>{worktreeMenuItems(worktree, components)}</SubContent>
+      </Sub>
+    )
+  }
+
+  function chipAriaLabel(chip: RowChip) {
+    if (chip.kind === "stash") {
+      return `Show the changes in ${chip.entry.name}`
+    }
+    if (chip.kind === "worktree") {
+      const changes = worktreeChanges(chip.worktree)
+      return changes > 0 ? `Show ${changes} uncommitted change${changes === 1 ? "" : "s"} in ${chip.worktree.name}` : `The ${chip.worktree.name} worktree`
+    }
+    return chip.ref.checkedOut ? "Currently checked out" : chip.ref.worktrees.length > 0 ? `Checked out in the ${chip.ref.worktrees[0].name} worktree` : undefined
+  }
+
+  function chipTitle(chip: RowChip) {
+    if (chip.kind === "stash") {
+      return [chip.entry.name, chip.entry.message, chip.entry.branch && `On ${chip.entry.branch}`].filter(Boolean).join("\n")
+    }
+    if (chip.kind === "worktree") {
+      return worktreeDescription(chip.worktree)
+    }
+    return [chip.ref.label, syncDescription(chip.ref), ...chip.ref.worktrees.map(worktreeDescription)].filter(Boolean).join("\n")
+  }
+
+  function rowChip(chip: RowChip, sha: string, key?: string) {
+    const Icon = CHIP_ICONS[chip.kind]
+    const ref = chip.kind === "stash" || chip.kind === "worktree" ? null : chip.ref
+    // A ref name is distinguished by its tail, so the middle of it goes first. A stash message and a worktree
+    // name read the other way round and keep their opening characters instead.
+    const { start, end } = ref ? splitRefLabel(ref.label) : { start: chipLabel(chip), end: "" }
+    const sync = ref && refSyncLabel(ref)
+    // A worktree holding no branch is a chip of its own; one holding a branch is a marker inside that chip.
+    const chipWorktrees = chip.kind === "worktree" ? [chip.worktree] : ref?.worktrees ?? []
+    const selected = ref !== null && selectedRef !== null && refName(selectedRef.ref) === refName(ref) && selectedRef.sha === sha
+    // Neither a stash nor a worktree has a place in a selection, so their chips go straight to their changes.
+    const activate = () => {
+      if (chip.kind === "stash") {
+        return openStashDiff(chip.entry)
+      }
+      if (chip.kind === "worktree") {
+        return worktreeChanges(chip.worktree) > 0 ? openWorktreeDiff(chip.worktree) : undefined
+      }
+      return selectRef(chip.ref, sha)
+    }
     return (
       <ContextMenu key={key}>
-        {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
-        <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
-          <button
-            aria-label={ref.checkedOut ? "Currently checked out" : ref.worktrees.length ? "Checked out in another worktree" : undefined}
-            aria-pressed={selected}
-            className={`commit-ref commit-ref-${kind}${ref.checkedOut ? " commit-ref-current" : ""}${selected ? " commit-ref-selected" : ""}`}
+        <Tooltip>
+          {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
+          <ContextMenuTrigger asChild onContextMenu={(event) => event.stopPropagation()}>
+            <TooltipTrigger asChild>
+              <button
+            aria-label={chipAriaLabel(chip)}
+            aria-pressed={ref === null ? undefined : selected}
+            className={`commit-ref commit-ref-${chip.kind}${ref?.checkedOut ? " commit-ref-current" : ""}${chip.kind === "worktree" && !chip.worktree.branch ? " commit-ref-detached" : ""}${selected ? " commit-ref-selected" : ""}`}
             // Keyboard activation arrives as a click with no pointer behind it.
-            onClick={(event) => event.detail === 0 && selectRef(ref, sha)}
+            onClick={(event) => event.detail === 0 && activate()}
             onPointerDown={(event) => {
               event.stopPropagation()
-              // Selecting on click would also answer the stray click a context menu leaves behind when it closes over this chip.
+              // Acting on click would also answer the stray click a context menu leaves behind when it closes over this chip.
               if (event.button === 0) {
-                selectRef(ref, sha)
+                activate()
               }
             }}
-            title={[ref.label, syncDescription(ref), ...ref.worktrees.map((worktree) => `${worktree.isOpen ? "Open in" : "Checked out at"} ${worktree.name}`)].filter(Boolean).join("\n")}
-            type="button"
-          >
-            {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}
-            {!ref.checkedOut && worktree && <span className="commit-ref-worktree">{worktree.name}</span>}
-            {kind === "tag" && <Tag />}
+                type="button"
+              >
+            {ref?.checkedOut && <span className="commit-ref-head">HEAD</span>}
+            {chipWorktrees.map(worktreeMarker)}
+            <Icon />
             <span className="commit-ref-label">
               <span className="commit-ref-label-start">{start}</span>
               {end && <span className="commit-ref-label-end">{end}</span>}
             </span>
-            {sync && <span className={`commit-ref-sync${ref.sync?.isGone ? " commit-ref-sync-gone" : ""}`}>{sync}</span>}
-          </button>
-        </ContextMenuTrigger>
-        <ContextMenuContent>{refMenuItems(ref, sha, contextMenuComponents)}</ContextMenuContent>
+                {sync && <span className={`commit-ref-sync${ref?.sync?.isGone ? " commit-ref-sync-gone" : ""}`}>{sync}</span>}
+              </button>
+            </TooltipTrigger>
+          </ContextMenuTrigger>
+          <TooltipContent>{chipTitle(chip)}</TooltipContent>
+        </Tooltip>
+        <ContextMenuContent>{chipMenuItems(chip, sha, contextMenuComponents)}</ContextMenuContent>
       </ContextMenu>
     )
   }
@@ -987,46 +1134,66 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         </ButtonGroup>
         <div className="flex items-center gap-1">
           {unpushed.size > 0 && (
-            <Button onClick={scrollToOldestUnpushed} size="sm" title="Scroll to the oldest commit that no remote has" type="button" variant="ghost">
-              {`${unpushed.size} unpushed`}
-            </Button>
+            <Hinted hint="Scroll to the oldest commit that no remote has">
+              <Button onClick={scrollToOldestUnpushed} size="sm" type="button" variant="ghost">
+                {`${unpushed.size} unpushed`}
+              </Button>
+            </Hinted>
           )}
           {!isDesktop && graphOffset > 0 && (
-            <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE))} size="sm" title="Show newer commits" type="button" variant="ghost">
-              Newer
-            </Button>
+            <Hinted hint="Show newer commits">
+              <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE))} size="sm" type="button" variant="ghost">
+                Newer
+              </Button>
+            </Hinted>
           )}
           {!isDesktop && hasOlderCommits && (
-            <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(graphOffset + BROWSER_GRAPH_WINDOW_SIZE)} size="sm" title="Show older commits" type="button" variant="ghost">
-              Older
-            </Button>
+            <Hinted hint="Show older commits">
+              <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(graphOffset + BROWSER_GRAPH_WINDOW_SIZE)} size="sm" type="button" variant="ghost">
+                Older
+              </Button>
+            </Hinted>
           )}
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" title="Stashed changes" type="button" variant="ghost">
-                <Archive />
-                {stashes.length > 0 ? stashes.length : "Stash"}
-              </Button>
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <DropdownMenuTrigger asChild>
+                <TooltipTrigger asChild>
+                  <Button size="sm" type="button" variant="ghost">
+                    <Archive />
+                    {stashes.length > 0 ? stashes.length : "Stash"}
+                  </Button>
+                </TooltipTrigger>
+              </DropdownMenuTrigger>
+              <TooltipContent>Stashed changes</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent>
               <OperationMenuItems components={dropdownMenuComponents} onSelect={setRequest} repository={repository} source={null} target={{ kind: "worktree" }} />
               {stashes.map((entry) => stashMenuEntry(entry, dropdownMenuComponents))}
               {stashes.length === 0 && !repository?.isDirty && <DropdownMenuItem disabled>Nothing is stashed</DropdownMenuItem>}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="icon" title="Clean merged branches" type="button" variant="ghost">
-            {cleanMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Broom />}
-          </Button>
-          <ButtonGroup>
-            <Button aria-label="Refresh graph" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => refreshGraph()} size="icon" title="Refresh graph" type="button" variant="ghost">
-              {fetchMutation.isPending ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+          <Hinted hint="Clean merged branches">
+            <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="icon" type="button" variant="ghost">
+              {cleanMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Broom />}
             </Button>
+          </Hinted>
+          <ButtonGroup>
+            <Hinted hint="Refresh graph">
+              <Button aria-label="Refresh graph" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => refreshGraph()} size="icon" type="button" variant="ghost">
+                {fetchMutation.isPending ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+              </Button>
+            </Hinted>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button aria-label="Fetch options" className="w-6" disabled={fetchMutation.isPending || cleanMutation.isPending} size="icon" title="Fetch options" type="button" variant="ghost">
-                  <ChevronDown />
-                </Button>
-              </DropdownMenuTrigger>
+              <Tooltip>
+                <DropdownMenuTrigger asChild>
+                  <TooltipTrigger asChild>
+                    <Button aria-label="Fetch options" className="w-6" disabled={fetchMutation.isPending || cleanMutation.isPending} size="icon" type="button" variant="ghost">
+                      <ChevronDown />
+                    </Button>
+                  </TooltipTrigger>
+                </DropdownMenuTrigger>
+                <TooltipContent>Fetch options</TooltipContent>
+              </Tooltip>
               <DropdownMenuContent>
                 <DropdownMenuItem disabled={fetchMutation.isPending} onSelect={() => fetchMutation.mutate()}>
                   <RefreshCw />
@@ -1093,8 +1260,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             const selected = selectedHashes.has(commit.hash)
             const edges = selectionEdges
             const canSelectRange = selectionEndpointIndexes && selectionEndpointIndexes.anchor !== -1 && ancestryPath(commits, selectionEndpointIndexes.anchor, row.index).length > 0
-            const refs = displayRefs(commit.refs, checkedOutWorktrees, branchSync)
-            const [primaryRef, ...overflowRefs] = refs
+            const rowWorktrees = worktreesByHead.get(commit.hash) ?? []
+            const refs = displayRefs(commit.refs, { branchSync, remotes, worktrees: rowWorktrees })
+            const chips = rowChips(refs, stashesByBase.get(commit.hash), detachedWorktrees(refs, rowWorktrees))
+            // Branches view has a row as wide as its content, so nothing there has to give up its place.
+            const shown = viewMode === "branches" ? chips.length : visibleChipCount(chips, refBudget)
+            const overflowChips = chips.slice(shown)
             return (
               <ContextMenu key={commit.hash}>
                 <ContextMenuTrigger asChild>
@@ -1109,25 +1280,29 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                     </div>
                     <div className="commit-graph-summary" role="gridcell">
                   <div className="commit-graph-refs">
-                    {viewMode === "branches" ? refs.map((ref, index) => refChip(ref, commit.hash, `${ref.label}-${index}`)) : primaryRef && refChip(primaryRef, commit.hash)}
-                    {viewMode === "graph" && overflowRefs.length > 0 && (
+                    {chips.slice(0, shown).map((chip, index) => rowChip(chip, commit.hash, `${chipName(chip)}-${index}`))}
+                    {overflowChips.length > 0 && (
                       <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button className="commit-ref" onPointerDown={(event) => event.stopPropagation()} title={overflowRefs.map((ref) => ref.label).join("\n")} type="button">
-                            {`+${overflowRefs.length}`}
-                          </button>
-                        </DropdownMenuTrigger>
+                        <Tooltip>
+                          <DropdownMenuTrigger asChild>
+                            <TooltipTrigger asChild>
+                              <button aria-label={`Show ${overflowChips.length} more ref${overflowChips.length === 1 ? "" : "s"}`} className="commit-ref commit-ref-more" onPointerDown={(event) => event.stopPropagation()} type="button">
+                                {`+${overflowChips.length}`}
+                              </button>
+                            </TooltipTrigger>
+                          </DropdownMenuTrigger>
+                          <TooltipContent>{overflowChips.map(chipLabel).join("\n")}</TooltipContent>
+                        </Tooltip>
                         <DropdownMenuContent>
-                          {overflowRefs.map((ref, index) => refMenuEntry(ref, commit.hash, `${ref.label}-${index}`, dropdownMenuComponents))}
+                          {overflowChips.map((chip, index) => chipMenuEntry(chip, commit.hash, `${chipName(chip)}-${index}`, dropdownMenuComponents))}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
-                    {worktreeChips(commit.hash)}
                   </div>
                   {viewMode === "graph" && <span className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}>{commit.subject || "(no subject)"}</span>}
                 </div>
                 {viewMode === "graph" && <>
-                  <span className="truncate text-muted-foreground" role="gridcell">{commit.author}</span>
+                  <span className="text-muted-foreground" role="gridcell">{commit.author}</span>
                   <time className="text-muted-foreground" dateTime={commit.date} role="gridcell">{relativeDate(commit.date)}</time>
                   <code className="text-muted-foreground" role="gridcell">{commit.hash.slice(0, 8)}</code>
                 </>}
@@ -1156,15 +1331,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                       Diff selected range
                     </ContextMenuItem>
                   )}
-                  {refs.length === 1 && refMenuEntry(refs[0], commit.hash, refs[0].label, contextMenuComponents)}
-                  {refs.length > 1 && (
+                  {chips.length === 1 && chipMenuEntry(chips[0], commit.hash, chipName(chips[0]), contextMenuComponents)}
+                  {chips.length > 1 && (
                     <ContextMenuSub>
                       <ContextMenuSubTrigger>
                         <GitBranch />
                         Refs
                       </ContextMenuSubTrigger>
                       <ContextMenuSubContent>
-                        {refs.map((ref, index) => refMenuEntry(ref, commit.hash, `${ref.label}-${index}`, contextMenuComponents))}
+                        {chips.map((chip, index) => chipMenuEntry(chip, commit.hash, `${chipName(chip)}-${index}`, contextMenuComponents))}
                       </ContextMenuSubContent>
                     </ContextMenuSub>
                   )}
@@ -1184,31 +1359,39 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         </div>
       </div>
       {checkoutScrollDirection && (
-        <Button className={`commit-graph-checkout-hint commit-graph-checkout-hint-${checkoutScrollDirection}`} onClick={scrollToCurrentCheckout} size="xs" title={`Scroll ${checkoutScrollDirection} to current checkout`} type="button" variant="outline">
-          {checkoutScrollDirection === "up" ? <ArrowUp /> : <ArrowDown />}
-          Current checkout
-        </Button>
+        <Hinted hint={`Scroll ${checkoutScrollDirection} to current checkout`}>
+          <Button className={`commit-graph-checkout-hint commit-graph-checkout-hint-${checkoutScrollDirection}`} onClick={scrollToCurrentCheckout} size="xs" type="button" variant="outline">
+            {checkoutScrollDirection === "up" ? <ArrowUp /> : <ArrowDown />}
+            Current checkout
+          </Button>
+        </Hinted>
       )}
       {selection && (
         <div className="commit-graph-selection-bar">
           <span className="commit-graph-selection-summary">{selectionSummary(selection)}</span>
           {selection.kind === "commits"
             ? (
-              <Button disabled={!selection.base} onClick={() => openRangeDiff(selection)} size="xs" title="Diff the selected range" type="button" variant="outline">
-                <FileDiff />
-                Diff
-              </Button>
+              <Hinted hint="Diff the selected range">
+                <Button disabled={!selection.base} onClick={() => openRangeDiff(selection)} size="xs" type="button" variant="outline">
+                  <FileDiff />
+                  Diff
+                </Button>
+              </Hinted>
             )
             : (
-              <Button onClick={() => openRefDiff(refName(selection.ref))} size="xs" title={`Diff ${refName(selection.ref)} against the default branch`} type="button" variant="outline">
-                <FileDiff />
-                Diff
-              </Button>
+              <Hinted hint={`Diff ${refName(selection.ref)} against the default branch`}>
+                <Button onClick={() => openRefDiff(refName(selection.ref))} size="xs" type="button" variant="outline">
+                  <FileDiff />
+                  Diff
+                </Button>
+              </Hinted>
             )}
-          <Button onClick={clearSelection} size="xs" title="Clear the selection" type="button" variant="ghost">
-            <X />
-            Clear
-          </Button>
+          <Hinted hint="Clear the selection">
+            <Button onClick={clearSelection} size="xs" type="button" variant="ghost">
+              <X />
+              Clear
+            </Button>
+          </Hinted>
         </div>
       )}
       {commits.length === 0 && !error && <p className="commit-graph-status">Loading commits…</p>}

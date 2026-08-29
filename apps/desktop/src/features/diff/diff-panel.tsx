@@ -9,7 +9,7 @@ import { Button } from "@workspace/shadcn/components/button"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@workspace/shadcn/components/resizable"
 import { useTheme } from "@/components/theme-provider"
 import { drawCommitGraph } from "../commit-graph/commit-graph-canvas"
-import { commitFromTuple, displayRefs, GRAPH_COLORS, ROW_HEIGHT, type Commit, type CommitBatch } from "../commit-graph/commit-graph"
+import { commitFromTuple, displayRefs, GRAPH_COLORS, refName, ROW_HEIGHT, type Commit, type CommitBatch } from "../commit-graph/commit-graph"
 import { WORKTREE_REF, type DiffPanelParams } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
@@ -174,6 +174,7 @@ function ReferencePicker({ label, onCommit, onBranch, path }: { label: string; o
   const [commits, setCommits] = useState<Commit[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [remotes, setRemotes] = useState<string[]>()
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
@@ -196,6 +197,9 @@ function ReferencePicker({ label, onCommit, onBranch, path }: { label: string; o
       return
     }
     let cancelled = false
+    invoke<{ remotes: string[] }>("repository_state", { repoPath: path })
+      .then(({ remotes }) => !cancelled && setRemotes(remotes))
+      .catch(() => undefined)
     invoke<CommitBatch>("reference_picker_commits", { repoPath: path })
       .then((batch) => {
         if (!cancelled) {
@@ -256,10 +260,10 @@ function ReferencePicker({ label, onCommit, onBranch, path }: { label: string; o
                   setOpen(false)
                 }} style={{ transform: `translateY(${row.start}px)` }}>
                   <div className="diff-picker-row-refs">
-                    {displayRefs(commit.refs).map((ref, index) => (
+                    {displayRefs(commit.refs, { remotes }).map((ref, index) => (
                       <button className="diff-picker-ref" key={`${ref.label}-${index}`} onClick={(event) => {
                         event.stopPropagation()
-                        onBranch(ref.label.replace(" · origin", ""))
+                        onBranch(refName(ref))
                         setOpen(false)
                       }} style={{ "--commit-ref-color": refColor } as CSSProperties} type="button">
                         {ref.checkedOut && <span className="commit-ref-head">HEAD</span>}

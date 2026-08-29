@@ -15,11 +15,21 @@ export type Commit = {
 export type CommitBatch = [string, string[], string, string, string[], string, number, number[], number, number[], boolean[]][]
 export type SquashMergeInference = [branchHash: string, targetHash: string]
 
-export type CheckedOutWorktree = {
-  branch: string
+export const PENDING_OPERATION_LABELS = { bisect: "bisecting", cherryPick: "cherry-picking", merge: "merging", rebase: "rebasing" }
+export type PendingOperation = keyof typeof PENDING_OPERATION_LABELS
+
+// A worktree's identity and its state are one thing: which commit it sits on, whether it is mid-operation and
+// how much uncommitted work it holds all belong to the same checkout.
+export type RowWorktree = {
+  branch: string | null
+  changedFiles: number
+  head: string
+  isCurrent: boolean
+  isOpen: boolean
   name: string
   path: string
-  isOpen: boolean
+  pendingOperation: PendingOperation | null
+  untrackedFiles: number
 }
 
 export type BranchSync = {
@@ -30,16 +40,33 @@ export type BranchSync = {
   isGone: boolean
 }
 
+export type StashEntry = { base: string | null, branch: string | null, date: string, message: string, name: string, sha: string }
+
 export type DisplayRef = {
   branch: string | null
   label: string
   checkedOut: boolean
-  tag: boolean
+  kind: RefKind
+  // For a remote ref, the remote it lives on. For a local branch, the remote it is paired with, if any.
+  remote: string | null
   sync: BranchSync | null
-  worktrees: CheckedOutWorktree[]
+  worktrees: RowWorktree[]
 }
 
 export type RefKind = "branch" | "remote" | "tag"
+
+// A stash is not a ref, but it occupies the same row and competes for the same width, so the two are ordered
+// and collapsed as one list.
+export type RowChip =
+  | { entry: StashEntry, kind: "stash" }
+  | { kind: RefKind, ref: DisplayRef }
+  | { kind: "worktree", worktree: RowWorktree }
+
+export type DisplayRefOptions = {
+  branchSync?: Map<string, BranchSync>
+  remotes?: string[]
+  worktrees?: RowWorktree[]
+}
 
 export type CommitSelection = {
   kind: "commits"
@@ -66,6 +93,22 @@ export const GRAPH_MIN_WIDTH = 46
 export const GRAPH_MAX_WIDTH = 480
 export const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#22d3ee", "#fb923c"]
 const REF_TAIL_LENGTH = 8
+const DEFAULT_REMOTES = ["origin"]
+// Local branches and stashes are what the graph is navigated by; remotes usually restate a local branch and
+// tags are archival, so those are the ones that give up their place when a row runs out of width.
+const CHIP_PRIORITY = { worktree: 2, branch: 3, stash: 4, remote: 5, tag: 6 }
+// Border, padding, the kind icon and the gaps around it, none of which depend on the label.
+const CHIP_FIXED_WIDTH = 32
+const CHIP_CHARACTER_WIDTH = 6.6
+const CHIP_HEAD_WIDTH = 34
+const CHIP_ICON_WIDTH = 15
+const CHIP_MORE_WIDTH = 28
+export const CHIP_GAP = 3
+// Matches the max-width a chip is given in CSS. Without it a long label is counted at its full length, and
+// chips that would have fit within the cap collapse into the count instead.
+const CHIP_MAX_WIDTH = 180
+// Refs share the commit column with the subject, which keeps the rest of it.
+export const REF_BUDGET_SHARE = 0.5
 
 // The canvas is placed by hand on every scroll frame, so it reaches past the viewport to cover what a fast
 // scroll uncovers before the next frame lands.
@@ -108,17 +151,18 @@ export function isCurrentCheckout(refs: string[]) {
   return refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))
 }
 
-function isRemoteRef(ref: string) {
-  return (ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref).startsWith("origin/")
+function isRemoteRef(ref: string, remotes: string[]) {
+  const name = ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref
+  return remotes.some((remote) => name.startsWith(`${remote}/`))
 }
 
 // A commit is pushed when a remote ref reaches it, and topological order puts every child before its
 // parents, so one pass forward carries that reachability down without walking the graph twice.
-export function unpushedHashes(commits: Commit[]) {
+export function unpushedHashes(commits: Commit[], remotes: string[] = DEFAULT_REMOTES) {
   const pushed = new Set<string>()
   const unpushed = new Set<string>()
   for (const commit of commits) {
-    if (pushed.has(commit.hash) || commit.refs.some(isRemoteRef)) {
+    if (pushed.has(commit.hash) || commit.refs.some((ref) => isRemoteRef(ref, remotes))) {
       for (const parent of commit.parents) {
         pushed.add(parent)
       }
@@ -203,7 +247,7 @@ export function ancestryPath(commits: Commit[], indexA: number, indexB: number) 
   return path
 }
 
-export function commitSelection(commits: Commit[], indexA: number, indexB: number): CommitSelection | null {
+export function commitSelection(commits: Commit[], indexA: number, indexB: number, remotes?: string[]): CommitSelection | null {
   const path = ancestryPath(commits, indexA, indexB)
   if (path.length === 0) {
     return null
@@ -211,30 +255,26 @@ export function commitSelection(commits: Commit[], indexA: number, indexB: numbe
   const [baseHash] = path[path.length - 1].parents
   return {
     kind: "commits",
-    branches: branchesContaining(commits, Math.min(indexA, indexB)),
+    branches: branchesContaining(commits, Math.min(indexA, indexB), remotes),
     commits: path,
     tip: path[0],
     base: baseHash ? commits.find((commit) => commit.hash === baseHash) ?? null : null,
   }
 }
 
-export function refKind(ref: DisplayRef): RefKind {
-  return ref.tag ? "tag" : ref.branch ? "branch" : "remote"
-}
-
 export function refSelection(ref: DisplayRef, sha: string): RefSelection {
-  return { kind: refKind(ref), ref, sha }
+  return { kind: ref.kind, ref, sha }
 }
 
 // Rewriting a range needs a branch that holds it, and a branch holds it when its tip still reaches the newest
 // selected commit. The nearest such tip comes first because it carries the fewest unselected commits along.
-export function branchesContaining(commits: Commit[], tipIndex: number) {
+export function branchesContaining(commits: Commit[], tipIndex: number, remotes?: string[]) {
   const branches: { branch: string, sha: string }[] = []
   for (let index = tipIndex; index >= 0; index -= 1) {
     if (commits[index].refs.length === 0) {
       continue
     }
-    for (const ref of displayRefs(commits[index].refs)) {
+    for (const ref of displayRefs(commits[index].refs, { remotes })) {
       if (ref.branch && ancestryPath(commits, index, tipIndex).length > 0) {
         branches.push({ branch: ref.branch, sha: commits[index].hash })
       }
@@ -267,6 +307,117 @@ export function refName(ref: DisplayRef) {
   return ref.branch ?? ref.label
 }
 
+export function remoteBranchName(ref: DisplayRef) {
+  return ref.remote && ref.label.startsWith(`${ref.remote}/`) ? ref.label.slice(ref.remote.length + 1) : null
+}
+
+export function worktreeChanges({ changedFiles, untrackedFiles }: RowWorktree) {
+  return changedFiles + untrackedFiles
+}
+
+// A worktree is drawn inside the chip naming the branch it holds. One that holds no branch, which is what a
+// rebase or a bisect leaves behind, has no such chip and becomes one of its own.
+export function detachedWorktrees(refs: DisplayRef[], worktrees: RowWorktree[]) {
+  const attached = new Set(refs.flatMap((ref) => ref.worktrees.map((worktree) => worktree.path)))
+  return worktrees.filter((worktree) => !attached.has(worktree.path))
+}
+
+// Every chip on a row competes for the same width, so they are ordered and measured as one list.
+export function rowChips(refs: DisplayRef[], stashes: StashEntry[] = [], worktrees: RowWorktree[] = []): RowChip[] {
+  const chips: RowChip[] = [
+    ...refs.map((ref): RowChip => ({ kind: ref.kind, ref })),
+    ...stashes.map((entry): RowChip => ({ kind: "stash", entry })),
+    ...worktrees.map((worktree): RowChip => ({ kind: "worktree", worktree })),
+  ]
+  return chips.sort((a, b) => chipPriority(a) - chipPriority(b))
+}
+
+function chipPriority(chip: RowChip) {
+  if (chip.kind === "stash") {
+    return CHIP_PRIORITY.stash
+  }
+  return chip.kind === "worktree" ? CHIP_PRIORITY.worktree : refPriority(chip.ref)
+}
+
+// A local branch, a checkout and a stash are what the graph is navigated by, so they keep their place even
+// when the row runs out of width.
+function isProtectedChip(chip: RowChip) {
+  return chip.kind === "stash" || chip.kind === "worktree" || chip.kind === "branch" || chip.ref.checkedOut
+}
+
+// Measuring every row would force layout on each scroll frame, so width is estimated from the label instead.
+// The estimate only decides how many chips are shown; the ones that are shown always render at full width.
+export function textChipWidth(label: string) {
+  return Math.min(CHIP_MAX_WIDTH, CHIP_FIXED_WIDTH + label.length * CHIP_CHARACTER_WIDTH)
+}
+
+// A worktree marker is the icon plus, when it holds uncommitted work, a second icon and a count.
+function worktreeMarkerWidth(worktrees: RowWorktree[]) {
+  return worktrees.reduce((total, worktree) => {
+    const changes = worktreeChanges(worktree)
+    return total + CHIP_ICON_WIDTH + (changes > 0 ? CHIP_ICON_WIDTH + String(changes).length * CHIP_CHARACTER_WIDTH : 0)
+  }, 0)
+}
+
+export function chipWidth(chip: RowChip) {
+  if (chip.kind === "stash") {
+    return textChipWidth(chipLabel(chip))
+  }
+  if (chip.kind === "worktree") {
+    return Math.min(CHIP_MAX_WIDTH, CHIP_FIXED_WIDTH + worktreeMarkerWidth([chip.worktree]) + chip.worktree.name.length * CHIP_CHARACTER_WIDTH)
+  }
+  const marker = chip.ref.checkedOut ? CHIP_HEAD_WIDTH : 0
+  const text = chip.ref.label.length + (refSyncLabel(chip.ref)?.length ?? 0)
+  return Math.min(CHIP_MAX_WIDTH, CHIP_FIXED_WIDTH + marker + worktreeMarkerWidth(chip.ref.worktrees) + text * CHIP_CHARACTER_WIDTH)
+}
+
+function chipsWidth(chips: RowChip[]) {
+  return chips.reduce((total, chip, index) => total + chipWidth(chip) + (index > 0 ? CHIP_GAP : 0), 0)
+}
+
+// How many of the chips fit in the budget, with the lowest priority ones collapsing into a count.
+export function visibleChipCount(chips: RowChip[], budget: number) {
+  if (chipsWidth(chips) <= budget) {
+    return chips.length
+  }
+  const remaining = budget - CHIP_MORE_WIDTH - CHIP_GAP
+  let used = 0
+  let count = 0
+  for (const chip of chips) {
+    used += chipWidth(chip) + (count > 0 ? CHIP_GAP : 0)
+    if (used > remaining && !isProtectedChip(chip)) {
+      break
+    }
+    count += 1
+  }
+  // A row always shows something, even when its first chip alone is wider than the column allows.
+  return Math.max(1, count)
+}
+
+export function chipName(chip: RowChip) {
+  if (chip.kind === "stash") {
+    return chip.entry.name
+  }
+  return chip.kind === "worktree" ? chip.worktree.name : refName(chip.ref)
+}
+
+export function chipLabel(chip: RowChip) {
+  if (chip.kind === "stash") {
+    return chip.entry.message || chip.entry.name
+  }
+  return chip.kind === "worktree" ? chip.worktree.name : chip.ref.label
+}
+
+export function worktreeDescription(worktree: RowWorktree) {
+  const changes = [worktree.changedFiles && `${worktree.changedFiles} changed`, worktree.untrackedFiles && `${worktree.untrackedFiles} untracked`].filter(Boolean).join(", ")
+  return [
+    worktree.isCurrent ? `${worktree.name} is this window's worktree` : worktree.isOpen ? `${worktree.name} is open in another window` : `Checked out at ${worktree.name}`,
+    worktree.branch ? null : "Not on a branch",
+    worktree.pendingOperation && `Currently ${PENDING_OPERATION_LABELS[worktree.pendingOperation]}`,
+    changes || null,
+  ].filter(Boolean).join("\n")
+}
+
 export function splitRefLabel(label: string) {
   return label.length <= REF_TAIL_LENGTH
     ? { start: label, end: "" }
@@ -280,10 +431,7 @@ function refPriority(ref: DisplayRef) {
   if (ref.worktrees.length > 0) {
     return 1
   }
-  if (ref.branch) {
-    return 2
-  }
-  return ref.tag ? 4 : 3
+  return CHIP_PRIORITY[ref.kind]
 }
 
 export function refSyncLabel({ sync }: DisplayRef) {
@@ -314,40 +462,60 @@ export function syncDescription({ sync }: DisplayRef) {
   return counts.length > 0 ? `${sync.upstream}: ${counts.join(", ")}` : `In sync with ${sync.upstream}`
 }
 
-export function displayRefs(refs: string[], checkedOutWorktrees: CheckedOutWorktree[] = [], branchSync?: Map<string, BranchSync>) {
+// Which remote a ref belongs to can only be read from the remotes the repository actually has, since a remote
+// is named freely and "upstream/main" is indistinguishable from a branch called that.
+function remoteOf(ref: string, remotes: string[]) {
+  return remotes.find((remote) => ref.startsWith(`${remote}/`)) ?? null
+}
+
+// The upstream a branch tracks is the pairing its ahead and behind counts are measured against, so a chip
+// that reports those counts has to name that remote and not merely the first one carrying the same name.
+function trackedRemote(branch: string, branchRefs: string[], remotes: string[], sync: BranchSync | null) {
+  const upstream = sync?.upstream
+  const tracked = upstream ? remoteOf(upstream, remotes) : null
+  if (upstream && tracked && branchRefs.includes(upstream)) {
+    return { remote: tracked, ref: upstream }
+  }
+  const remote = remotes.find((candidate) => branchRefs.includes(`${candidate}/${branch}`))
+  return remote ? { remote, ref: `${remote}/${branch}` } : null
+}
+
+export function displayRefs(refs: string[], { branchSync, remotes = DEFAULT_REMOTES, worktrees = [] }: DisplayRefOptions = {}) {
   const checkedOut = refs.find((ref) => ref.startsWith("HEAD -> "))?.slice("HEAD -> ".length)
   const branchRefs = refs.filter((ref) => !ref.startsWith("HEAD -> ") && !ref.startsWith("tag: "))
-  const localBranches = new Set(branchRefs.filter((ref) => !ref.startsWith("origin/")))
-  if (checkedOut && !checkedOut.startsWith("origin/")) {
+  const localBranches = new Set(branchRefs.filter((ref) => !remoteOf(ref, remotes)))
+  if (checkedOut && !remoteOf(checkedOut, remotes)) {
     localBranches.add(checkedOut)
   }
   const consumed = new Set<string>()
   const result: DisplayRef[] = []
 
   for (const branch of localBranches) {
-    const remote = `origin/${branch}`
-    const hasRemote = branchRefs.includes(remote)
+    const sync = branchSync?.get(branch) ?? null
+    const tracking = trackedRemote(branch, branchRefs, remotes, sync)
     consumed.add(branch)
-    if (hasRemote) {
-      consumed.add(remote)
+    if (tracking) {
+      consumed.add(tracking.ref)
     }
-    result.push({ branch, label: hasRemote ? `${branch} · origin` : branch, checkedOut: branch === checkedOut, tag: false, sync: branchSync?.get(branch) ?? null, worktrees: checkedOutWorktrees.filter((worktree) => worktree.branch === branch) })
+    result.push({ branch, label: tracking ? `${branch} · ${tracking.remote}` : branch, checkedOut: branch === checkedOut, kind: "branch", remote: tracking?.remote ?? null, sync, worktrees: worktrees.filter((worktree) => worktree.branch === branch) })
   }
 
   for (const ref of branchRefs) {
-    if (!consumed.has(ref) && ref !== "origin/HEAD") {
-      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, tag: false, sync: null, worktrees: [] })
+    const remote = remoteOf(ref, remotes)
+    if (!consumed.has(ref) && ref !== `${remote}/HEAD`) {
+      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, kind: remote ? "remote" : "branch", remote, sync: null, worktrees: [] })
     }
   }
 
   for (const ref of refs) {
     if (ref.startsWith("tag: ")) {
-      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, tag: true, sync: null, worktrees: [] })
+      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, kind: "tag", remote: null, sync: null, worktrees: [] })
     }
   }
 
-  if (checkedOut?.startsWith("origin/")) {
-    result.push({ branch: null, label: checkedOut, checkedOut: true, tag: false, sync: null, worktrees: [] })
+  const checkedOutRemote = checkedOut && remoteOf(checkedOut, remotes)
+  if (checkedOut && checkedOutRemote) {
+    result.push({ branch: null, label: checkedOut, checkedOut: true, kind: "remote", remote: checkedOutRemote, sync: null, worktrees: [] })
   }
 
   return result.sort((a, b) => refPriority(a) - refPriority(b))
