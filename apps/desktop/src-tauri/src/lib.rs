@@ -876,8 +876,20 @@ fn squash_merge_target(repo_path: &str, tip: &str, primary: &str) -> Option<Stri
         .map(|candidate| candidate.hash)
 }
 
+// A squash that has not been pushed yet lives only on the local counterpart of the primary branch, so the
+// search reaches through to it whenever that counterpart merely extends the remote.
+fn squash_search_reference(repo_path: &str) -> Result<String, String> {
+    let primary = primary_reference(repo_path)?;
+    let name = primary.split_once('/').map_or(primary.as_str(), |(_, name)| name);
+    let local = format!("refs/heads/{name}");
+    if resolve_commit(repo_path, &local).is_ok() && git_succeeds(repo_path, &["merge-base", "--is-ancestor", &primary, &local]) {
+        return Ok(local);
+    }
+    Ok(primary)
+}
+
 fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
-    let Ok(primary) = primary_reference(repo_path) else {
+    let Ok(primary) = squash_search_reference(repo_path) else {
         return Vec::new();
     };
     let Ok(branches) = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads"]) else {
@@ -899,7 +911,7 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
     let Some((host, repository)) = github_repository(&remote) else {
         return edges.into_iter().collect();
     };
-    let Ok(primary) = primary_reference(repo_path) else {
+    let Ok(primary) = squash_search_reference(repo_path) else {
         return edges.into_iter().collect();
     };
     let Some(refs) = git_output(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]) else {
@@ -3197,7 +3209,7 @@ mod tests {
         let still_open = sha("HEAD");
         run(&["checkout", "--quiet", "main"]);
 
-        let primary = primary_reference(&path).unwrap();
+        let primary = squash_search_reference(&path).unwrap();
         let edges: HashMap<_, _> = local_squash_merges(&path).into_iter().collect();
         let open_target = squash_merge_target(&path, &still_open, &primary);
         fs::remove_dir_all(&path).unwrap();
@@ -3206,6 +3218,52 @@ mod tests {
         assert_eq!(edges.get(&after_drift), Some(&after_drift_target), "patch id fallback failed");
         assert_eq!(open_target, None);
         assert!(!edges.contains_key(&still_open));
+    }
+
+    #[test]
+    fn detects_a_squash_merge_that_has_not_been_pushed_yet() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-unpushed-squash-{}", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        let sha = |reference: &str| git_output(&path, &["rev-parse", reference]).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("shared.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+
+        // The remote is left at the branch point, so the squash exists only on the local primary branch.
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+
+        run(&["checkout", "--quiet", "-b", "unpushed"]);
+        write("unpushed.txt", "one\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "work"]);
+        let tip = sha("HEAD");
+        run(&["checkout", "--quiet", "main"]);
+        run(&["merge", "--quiet", "--squash", "unpushed"]);
+        run(&["commit", "--quiet", "--message", "Merge branch 'unpushed'"]);
+        let target = sha("HEAD");
+
+        let primary = primary_reference(&path).unwrap();
+        let reference = squash_search_reference(&path).unwrap();
+        let edges: HashMap<_, _> = local_squash_merges(&path).into_iter().collect();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!(primary, "origin/main");
+        assert_eq!(reference, "refs/heads/main");
+        assert_eq!(edges.get(&tip), Some(&target));
     }
 
     #[test]
