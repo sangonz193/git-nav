@@ -160,6 +160,20 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const selectionEndpointIndexes = useMemo(() => selectionRange
     ? { anchor: commits.findIndex((commit) => commit.hash === selectionRange.anchorHash), focus: commits.findIndex((commit) => commit.hash === selectionRange.focusHash) }
     : null, [commits, selectionRange])
+  // The dragged end can be either the newer or the older one, so the brackets follow the rows, not the anchor.
+  // A drag in flight is read from the drag itself, so the bracket stays under the pointer moving it.
+  const selectionEdges = useMemo(() => {
+    if (!commitsSelection) {
+      return null
+    }
+    const ends = rangeDrag
+      ? { anchor: rangeDrag.anchorIndex, focus: rangeDrag.focusIndex }
+      : selectionEndpointIndexes
+    if (!ends || ends.anchor === -1 || ends.focus === -1) {
+      return null
+    }
+    return { top: Math.min(ends.anchor, ends.focus), bottom: Math.max(ends.anchor, ends.focus) }
+  }, [commitsSelection, rangeDrag, selectionEndpointIndexes])
   const unpushed = useMemo(() => unpushedHashes(commits), [commits])
   const unpushedLaneMasks = useMemo(() => unpushedLanes(commits, unpushed), [commits, unpushed])
   // The oldest unpushed commit is the top of the local segment, so it is the useful place to land.
@@ -1022,8 +1036,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             const refColor = laneColor(commit.lane)
             const currentCheckout = isCurrentCheckout(commit.refs)
             const selected = selectedHashes.has(commit.hash)
-            const selectionHandle = !rangeDrag && selectionEndpointIndexes && (selectionEndpointIndexes.anchor === row.index || selectionEndpointIndexes.focus === row.index)
-            const handleAnchorIndex = selectionHandle && selectionEndpointIndexes.anchor === row.index ? selectionEndpointIndexes.focus : selectionEndpointIndexes?.anchor
+            const edges = selectionEdges
             const canSelectRange = selectionEndpointIndexes && selectionEndpointIndexes.anchor !== -1 && ancestryPath(commits, selectionEndpointIndexes.anchor, row.index).length > 0
             const refs = displayRefs(commit.refs, checkedOutWorktrees, branchSync)
             const [primaryRef, ...overflowRefs] = refs
@@ -1032,8 +1045,11 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                 <ContextMenuTrigger asChild>
                   <article aria-keyshortcuts="Enter Space Shift+Enter Shift+Space" aria-rowindex={row.index + 2} aria-selected={selected} className={`commit-graph-row${viewMode === "branches" ? " commit-graph-row-branches" : ""}${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onKeyDown={(event) => selectCommitFromKeyboard(event, row.index)} onPointerDown={(event) => startRangeDrag(event, row.index)} role="row" style={{ "--commit-ref-color": refColor, gridTemplateColumns: `${graphWidth}px ${viewMode === "graph" ? columnTemplate : "max-content"}`, transform: `translateY(${row.start}px)` } as CSSProperties} tabIndex={0}>
                     <div className="commit-graph-graph-cell">
-                      {selectionHandle && handleAnchorIndex !== undefined && handleAnchorIndex !== -1 && (
-                        <button aria-label={`Adjust selected range ${selectionEndpointIndexes?.anchor === row.index ? "start" : "end"}`} className="commit-graph-selection-handle" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, row.index, handleAnchorIndex) }} type="button" />
+                      {edges?.top === row.index && (
+                        <button aria-label="Adjust the newer end of the selected range" className="commit-graph-selection-handle commit-graph-selection-handle-start" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, row.index, edges.bottom) }} type="button" />
+                      )}
+                      {edges?.bottom === row.index && (
+                        <button aria-label="Adjust the older end of the selected range" className="commit-graph-selection-handle commit-graph-selection-handle-end" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, row.index, edges.top) }} type="button" />
                       )}
                     </div>
                     <div className="commit-graph-summary" role="gridcell">

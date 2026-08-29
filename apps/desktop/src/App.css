@@ -246,18 +246,31 @@ body {
 
 .commit-graph-selection-handle {
   background: #60a5fa;
-  border: 2px solid var(--background);
-  border-radius: 999px;
+  border: 0;
+  border-radius: 2px;
   cursor: ns-resize;
-  height: 28px;
+  height: 3px;
+  left: 6px;
   padding: 0;
   position: absolute;
-  right: 4px;
-  top: 50%;
+  right: 6px;
   touch-action: none;
-  transform: translateY(-50%);
-  width: 28px;
   z-index: 2;
+}
+
+.commit-graph-selection-handle-start {
+  top: -1px;
+}
+
+.commit-graph-selection-handle-end {
+  bottom: -1px;
+}
+
+/* The bar is a hairline, so the press target reaches well past what it draws. */
+.commit-graph-selection-handle::after {
+  content: "";
+  inset: -9px 0;
+  position: absolute;
 }
 
 .commit-graph-row > * {
@@ -495,9 +508,11 @@ button.commit-ref {
   }
 
   .commit-graph-selection-handle {
-    height: 36px;
-    right: 2px;
-    width: 36px;
+    height: 4px;
+  }
+
+  .commit-graph-selection-handle::after {
+    inset: -14px 0;
   }
 }
 
