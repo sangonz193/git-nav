@@ -6,7 +6,7 @@ use std::{
     hash::{Hash, Hasher},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -801,19 +801,33 @@ fn fetch_and_sync_repository(repo_path: &str, database_path: PathBuf) -> Result<
     sync_pull_requests(&mut connection, &host, &repository)
 }
 
+// A `Child` that is dropped without a wait stays a zombie for the lifetime of the app, so every
+// spawn that is abandoned early - a killed walk, a `?` on a parse failure - is reaped here instead.
+struct ChildGuard(Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn patch_id(repo_path: &str, arguments: &[&str]) -> Option<String> {
-    let diff = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(arguments)
-        .stdout(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut diff = ChildGuard(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args(arguments)
+            .stdout(Stdio::piped())
+            .spawn()
+            .ok()?,
+    );
+    let stdout = diff.0.stdout.take()?;
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_path)
         .args(["patch-id", "--stable"])
-        .stdin(diff.stdout?)
+        .stdin(stdout)
         .output()
         .ok()?;
     let value = String::from_utf8(output.stdout).ok()?;
@@ -1486,14 +1500,17 @@ fn walk_commit_graph_page(
 ) -> Result<bool, String> {
     let mut reserved_tip = reserved_lane_tip(repo_path);
     let revisions = graph_revisions(repo_path);
-    let mut child = Command::new("git")
-        .args(["--no-optional-locks", "-C", repo_path, "log"])
-        .args(&revisions)
-        .args(["--topo-order", "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s"])
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())?;
+    let mut child = ChildGuard(
+        Command::new("git")
+            .args(["--no-optional-locks", "-C", repo_path, "log"])
+            .args(&revisions)
+            .args(["--topo-order", "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|error| error.to_string())?,
+    );
     let stdout = child
+        .0
         .stdout
         .take()
         .ok_or_else(|| "Could not read git output.".to_string())?;
@@ -1506,7 +1523,7 @@ fn walk_commit_graph_page(
     let mut deliver = |batch| match on_batch(batch) {
         Ok(()) => Ok(()),
         Err(error) => {
-            let _ = child.kill();
+            let _ = child.0.kill();
             Err(error)
         }
     };
@@ -1514,8 +1531,6 @@ fn walk_commit_graph_page(
     for line in BufReader::new(stdout).lines() {
         let line = line.map_err(|error| error.to_string())?;
         if sent == limit {
-            let _ = child.kill();
-            let _ = child.wait();
             return Ok(true);
         }
         if let Some(commit) = parse_commit(&line, &mut lanes, &mut reserved_tip) {
@@ -1537,7 +1552,7 @@ fn walk_commit_graph_page(
         deliver(batch)?;
     }
 
-    let status = child.wait().map_err(|error| error.to_string())?;
+    let status = child.0.wait().map_err(|error| error.to_string())?;
     if status.success() {
         Ok(false)
     } else {
@@ -3584,6 +3599,43 @@ mod tests {
 
         assert_eq!(subjects, ["second"]);
         assert!(has_more);
+    }
+
+    fn zombie_children() -> usize {
+        let pid = std::process::id().to_string();
+        let output = Command::new("ps").args(["-ax", "-o", "ppid=,stat="]).output().unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next() == Some(pid.as_str()) && fields.next().is_some_and(|stat| stat.starts_with('Z'))
+            })
+            .count()
+    }
+
+    #[test]
+    fn reaps_the_git_processes_a_graph_walk_leaves_behind() {
+        let (path, run) = scratch_repository("graph-reaping");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "first"]);
+        fs::write(Path::new(&path).join("tracked.txt"), "contents\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "second"]);
+
+        walk_commit_graph_page(&path, 0, 1, |_| Ok(())).unwrap();
+        walk_commit_graph_page(&path, 0, usize::MAX, |_| Err("the receiver is gone".to_string())).unwrap_err();
+        patch_id(&path, &["show", "HEAD"]).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        // Tests share a process, so a parallel case can hold a child of its own for an instant.
+        let mut remaining = zombie_children();
+        for _ in 0..20 {
+            if remaining == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            remaining = zombie_children();
+        }
+        assert_eq!(remaining, 0);
     }
 
     #[test]
