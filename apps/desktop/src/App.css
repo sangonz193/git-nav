@@ -245,7 +245,7 @@ body {
 }
 
 .commit-graph-selection-handle {
-  background: #60a5fa;
+  background: var(--foreground);
   border: 0;
   border-radius: 2px;
   cursor: ns-resize;
@@ -290,25 +290,19 @@ body {
   z-index: 2;
 }
 
+/* The row fill is reserved for selection, so the checkout marker is the branch-colored edge alone. */
 .commit-graph-row.commit-graph-row-current {
-  background: color-mix(in srgb, var(--commit-ref-color) 10%, transparent);
   box-shadow: inset 2px 0 0 var(--commit-ref-color);
 }
 
-@media (hover: hover) {
-  .commit-graph-row.commit-graph-row-current:hover {
-    background: color-mix(in srgb, var(--commit-ref-color) 16%, transparent);
-  }
-}
-
 .commit-graph-row.commit-graph-row-selected {
-  background: rgb(96 165 250 / 20%);
-  box-shadow: inset 0 0 0 1px rgb(96 165 250 / 40%);
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 32%, transparent);
 }
 
 @media (hover: hover) {
   .commit-graph-row.commit-graph-row-selected:hover {
-    background: rgb(96 165 250 / 28%);
+    background: color-mix(in srgb, var(--foreground) 22%, transparent);
   }
 }
 
@@ -329,8 +323,7 @@ body {
 }
 
 .commit-graph-row.commit-graph-row-current.commit-graph-row-selected {
-  background: color-mix(in srgb, var(--commit-ref-color) 12%, rgb(96 165 250 / 20%));
-  box-shadow: inset 2px 0 0 var(--commit-ref-color), inset 0 0 0 1px rgb(96 165 250 / 40%);
+  box-shadow: inset 2px 0 0 var(--commit-ref-color), inset 0 0 0 1px color-mix(in srgb, var(--foreground) 32%, transparent);
 }
 
 .commit-graph-selection-bar {
