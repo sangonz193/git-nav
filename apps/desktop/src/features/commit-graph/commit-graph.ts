@@ -104,9 +104,6 @@ const CHIP_HEAD_WIDTH = 34
 const CHIP_ICON_WIDTH = 15
 const CHIP_MORE_WIDTH = 28
 export const CHIP_GAP = 3
-// Matches the max-width a chip is given in CSS. Without it a long label is counted at its full length, and
-// chips that would have fit within the cap collapse into the count instead.
-const CHIP_MAX_WIDTH = 180
 // Refs share the commit column with the subject, which keeps the rest of it.
 export const REF_BUDGET_SHARE = 0.5
 
@@ -346,9 +343,10 @@ function isProtectedChip(chip: RowChip) {
 }
 
 // Measuring every row would force layout on each scroll frame, so width is estimated from the label instead.
-// The estimate only decides how many chips are shown; the ones that are shown always render at full width.
-export function textChipWidth(label: string) {
-  return Math.min(CHIP_MAX_WIDTH, CHIP_FIXED_WIDTH + label.length * CHIP_CHARACTER_WIDTH)
+// A chip never renders wider than the whole ref budget, so counting it above that would collapse chips that
+// the row still has room for.
+export function textChipWidth(label: string, maxWidth: number) {
+  return Math.min(maxWidth, CHIP_FIXED_WIDTH + label.length * CHIP_CHARACTER_WIDTH)
 }
 
 // A worktree marker is the icon plus, when it holds uncommitted work, a second icon and a count.
@@ -359,32 +357,32 @@ function worktreeMarkerWidth(worktrees: RowWorktree[]) {
   }, 0)
 }
 
-export function chipWidth(chip: RowChip) {
+export function chipWidth(chip: RowChip, maxWidth: number) {
   if (chip.kind === "stash") {
-    return textChipWidth(chipLabel(chip))
+    return textChipWidth(chipLabel(chip), maxWidth)
   }
   if (chip.kind === "worktree") {
-    return Math.min(CHIP_MAX_WIDTH, CHIP_FIXED_WIDTH + worktreeMarkerWidth([chip.worktree]) + chip.worktree.name.length * CHIP_CHARACTER_WIDTH)
+    return Math.min(maxWidth, CHIP_FIXED_WIDTH + worktreeMarkerWidth([chip.worktree]) + chip.worktree.name.length * CHIP_CHARACTER_WIDTH)
   }
   const marker = chip.ref.checkedOut ? CHIP_HEAD_WIDTH : 0
   const text = chip.ref.label.length + (refSyncLabel(chip.ref)?.length ?? 0)
-  return Math.min(CHIP_MAX_WIDTH, CHIP_FIXED_WIDTH + marker + worktreeMarkerWidth(chip.ref.worktrees) + text * CHIP_CHARACTER_WIDTH)
+  return Math.min(maxWidth, CHIP_FIXED_WIDTH + marker + worktreeMarkerWidth(chip.ref.worktrees) + text * CHIP_CHARACTER_WIDTH)
 }
 
-function chipsWidth(chips: RowChip[]) {
-  return chips.reduce((total, chip, index) => total + chipWidth(chip) + (index > 0 ? CHIP_GAP : 0), 0)
+function chipsWidth(chips: RowChip[], maxWidth: number) {
+  return chips.reduce((total, chip, index) => total + chipWidth(chip, maxWidth) + (index > 0 ? CHIP_GAP : 0), 0)
 }
 
 // How many of the chips fit in the budget, with the lowest priority ones collapsing into a count.
 export function visibleChipCount(chips: RowChip[], budget: number) {
-  if (chipsWidth(chips) <= budget) {
+  if (chipsWidth(chips, budget) <= budget) {
     return chips.length
   }
   const remaining = budget - CHIP_MORE_WIDTH - CHIP_GAP
   let used = 0
   let count = 0
   for (const chip of chips) {
-    used += chipWidth(chip) + (count > 0 ? CHIP_GAP : 0)
+    used += chipWidth(chip, budget) + (count > 0 ? CHIP_GAP : 0)
     if (used > remaining && !isProtectedChip(chip)) {
       break
     }

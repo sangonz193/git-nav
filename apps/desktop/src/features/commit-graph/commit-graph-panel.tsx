@@ -1251,7 +1251,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             ) : <div className="commit-graph-header-cell" role="columnheader">Branches</div>}
           </div>
         </div>
-        <div className="commit-graph-space" ref={graphSpace} style={{ height: rowVirtualizer.getTotalSize(), minWidth: tableWidth }}>
+        <div className="commit-graph-space" ref={graphSpace} style={{ "--commit-ref-budget": `${refBudget}px`, height: rowVirtualizer.getTotalSize(), minWidth: tableWidth } as CSSProperties}>
           <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
           {virtualRows.map((row) => {
             const commit = commits[row.index]

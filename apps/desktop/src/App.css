@@ -325,9 +325,12 @@ body {
   overflow: visible;
 }
 
-.commit-graph-row-branches .commit-ref,
-.commit-graph-row-branches .commit-ref-worktree {
+.commit-graph-row-branches .commit-graph-refs {
   max-width: none;
+}
+
+.commit-graph-row-branches .commit-ref {
+  flex: none;
 }
 
 .commit-graph-row.commit-graph-row-current.commit-graph-row-selected {
@@ -371,10 +374,13 @@ body {
   overflow: hidden;
 }
 
+/* The group is what the row can spare for refs, and the chips inside it share that width rather than each
+   being clipped to a constant, so a lone branch name renders whole however long it is. */
 .commit-graph-refs {
   display: flex;
   flex: none;
   gap: 3px;
+  max-width: var(--commit-ref-budget, 100%);
   min-width: 0;
   overflow: hidden;
 }
@@ -389,9 +395,9 @@ body {
   border-radius: 3px 5px 5px 3px;
   color: var(--foreground);
   display: inline-flex;
-  flex: none;
+  flex: 0 1 auto;
   gap: 3px;
-  max-width: 180px;
+  min-width: 0;
   overflow: hidden;
   padding: 1px 4px 1px 6px;
   white-space: nowrap;
@@ -466,6 +472,7 @@ button.commit-ref {
 
 .commit-ref-more {
   background: transparent;
+  flex: none;
   border-color: color-mix(in srgb, var(--foreground) 18%, transparent);
   border-left-color: color-mix(in srgb, var(--foreground) 28%, transparent);
   color: var(--muted-foreground);
@@ -517,6 +524,7 @@ button.commit-ref {
 .commit-ref-head {
   background: var(--commit-ref-color);
   border-radius: 2px;
+  flex: none;
   color: #09090b;
   font-size: 0.625rem;
   font-weight: 700;

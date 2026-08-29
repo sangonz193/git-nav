@@ -371,7 +371,7 @@ describe("detachedWorktrees", () => {
     const [chip] = rowChips(displayRefs(["main"], { worktrees: [dirty] }))
     const [clean] = rowChips(displayRefs(["main"]))
     expect(worktreeChanges(dirty)).toBe(7)
-    expect(chipWidth(chip)).toBeGreaterThan(chipWidth(clean))
+    expect(chipWidth(chip, 460)).toBeGreaterThan(chipWidth(clean, 460))
   })
 
   test("orders a detached worktree ahead of the branches it is parked beside", () => {
@@ -413,16 +413,24 @@ describe("visibleChipCount", () => {
     expect(shown.map((chip) => chip.kind)).toEqual(["branch", "stash"])
   })
 
-  test("counts a long label at the width CSS caps it to", () => {
-    const long = rowChips(displayRefs(["a".repeat(200)]))
-    const short = rowChips(displayRefs(["a".repeat(60)]))
-    expect(chipWidth(long[0])).toBe(chipWidth(short[0]))
+  // A chip renders at most as wide as the whole ref group, so counting it above that would fold away chips
+  // the row still has room for.
+  test("counts a long label at the budget rather than its full length", () => {
+    const [long] = rowChips(displayRefs(["a".repeat(200)]))
+    const [fitting] = rowChips(displayRefs(["a".repeat(20)]))
+    expect(chipWidth(long, 460)).toBe(460)
+    expect(chipWidth(fitting, 460)).toBeLessThan(460)
+    expect(chipWidth(long, 200)).toBe(200)
   })
 
-  test("keeps chips that fit once long labels stop being over-counted", () => {
+  test("keeps every chip a wide column has room for", () => {
     const refs = displayRefs(["HEAD -> main", "origin/main", "origin/other"], { remotes: ["origin"] })
-    const chips = rowChips(refs, [{ base: "a", branch: "main", date: "", message: "fix(graph): a stash message about as long as a commit subject", name: "stash@{0}", sha: "s" }])
-    expect(visibleChipCount(chips, 460)).toBe(chips.length)
+    const stash = (message: string) => ({ base: "a", branch: "main", date: "", message, name: "stash@{0}", sha: "s" })
+    const shown = rowChips(refs, [stash("set aside")])
+    // A label past the budget takes the whole group, so the remote folds rather than pushing the subject out.
+    const crowded = rowChips(refs, [stash("a".repeat(400))])
+    expect(visibleChipCount(shown, 460)).toBe(shown.length)
+    expect(visibleChipCount(crowded, 460)).toBe(2)
   })
 
   test("always shows one chip, however narrow the column is", () => {
