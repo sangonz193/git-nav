@@ -635,6 +635,11 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (event.button !== 0 || !scroll || !space || (event.target as HTMLElement).closest(".commit-ref")) {
       return
     }
+    // A menu opened from this row renders in a portal, and React bubbles its events back through here,
+    // so a click on a menu item would otherwise start a drag anchored on the row behind it.
+    if (!event.currentTarget.contains(event.target as Node)) {
+      return
+    }
     // Dragging a finger across the rows scrolls the graph, so touch only adjusts a range from a handle.
     if (anchorIndex === undefined && event.pointerType !== "mouse") {
       return
