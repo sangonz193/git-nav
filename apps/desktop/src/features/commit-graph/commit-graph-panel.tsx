@@ -1212,7 +1212,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         </div>
       )}
       {commits.length === 0 && !error && <p className="commit-graph-status">Loading commits…</p>}
-      {error && <p className="commit-graph-status text-destructive">{error}</p>}
+      {error && <p className="commit-graph-error" role="alert">{error}</p>}
       {cleanupReport && <p className="commit-graph-cleanup-report">{cleanupReport}</p>}
       {completed && (
         <div className="commit-graph-cleanup-report flex items-center gap-3">

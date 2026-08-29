@@ -559,6 +559,22 @@ button.commit-ref {
   position: absolute;
 }
 
+.commit-graph-error {
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--destructive) 55%, transparent);
+  border-radius: 6px;
+  bottom: 12px;
+  color: var(--destructive);
+  left: 50%;
+  margin: 0;
+  max-width: min(720px, calc(100% - 32px));
+  padding: 8px 12px;
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: pre-line;
+  word-break: break-word;
+}
+
 .commit-graph-cleanup-report {
   background: color-mix(in srgb, var(--background) 94%, transparent);
   border: 1px solid rgb(255 255 255 / 12%);
