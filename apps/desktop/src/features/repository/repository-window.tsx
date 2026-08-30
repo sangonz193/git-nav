@@ -62,7 +62,7 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label="New tab"
-        className="flex size-[34px] items-center justify-center rounded-[9px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
+        className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
       >
         <Plus className="size-4" />
       </DropdownMenuTrigger>

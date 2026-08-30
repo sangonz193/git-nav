@@ -17,7 +17,9 @@ import { WORKTREE_REF, type DiffPanelParams } from "../repository/repository-win
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
 const LARGE_DIFF_LINES = 1200
-const DIFF_FONT_SIZE = 12
+// Monospace runs wider than the interface face, so it is set a step below the interface size to read as the
+// same size beside it.
+const DIFF_FONT_SIZE = 11
 const DIFF_ROW_HEIGHT = DIFF_FONT_SIZE * 1.6
 const HUNK_ROW_HEIGHT = 30
 const FILE_HEADER_HEIGHT = 30

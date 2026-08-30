@@ -14,12 +14,12 @@
   --dv-icon-hover-background-color: var(--accent);
   --dv-separator-border: var(--border);
   --dv-tab-divider-color: transparent;
-  --dv-tabs-and-actions-container-height: 42px;
+  --dv-tabs-and-actions-container-height: 36px;
   --dv-tab-font-size: 0.875rem;
   --dv-tab-margin: 4px;
-  --dv-tab-border-radius: 9px;
+  --dv-tab-border-radius: var(--radius-md);
   --dv-overlay-z-index: 999;
-  --dv-floating-box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  --dv-floating-box-shadow: var(--overlay-shadow);
 }
 
 .git-nav-dockview-theme .dv-tabs-and-actions-container {
@@ -31,11 +31,24 @@
 }
 
 .git-nav-dockview-theme .dv-tab {
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   cursor: default;
-  height: 34px;
+  height: 28px;
   margin: 0;
   overflow: hidden;
+}
+
+/* A tab that can be closed always shows how, so the width the action takes is accounted for rather than
+   reserved and blank. */
+.git-nav-dockview-theme .dv-tab.dv-inactive-tab .dv-default-tab .dv-default-tab-action {
+  visibility: visible;
+}
+
+@media (hover: hover) {
+  .git-nav-dockview-theme .dv-tab.dv-inactive-tab:hover {
+    background-color: color-mix(in oklch, var(--muted), transparent 50%);
+    color: var(--foreground);
+  }
 }
 
 .git-nav-dockview-theme .dv-tab .dv-default-tab-action {
@@ -820,6 +833,12 @@ button.commit-ref {
   min-width: 0;
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* The diff view sets Menlo inline on its table wrapper, which reads a size larger than the rest of the app
+   at the same pixel size. */
+.diff-view-container table {
+  font-family: var(--font-mono);
 }
 
 .diff-file-space {
