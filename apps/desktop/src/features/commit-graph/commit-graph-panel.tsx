@@ -307,15 +307,6 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       : currentCheckoutRow * rowHeight >= scroll.top + scroll.height
         ? "down"
         : null
-  // The oldest unpushed commit is the top of the local segment, so it is the useful place to land.
-  const oldestUnpushedIndex = useMemo(() => {
-    for (let index = commits.length - 1; index >= 0; index -= 1) {
-      if (unpushed.has(commits[index].hash)) {
-        return index
-      }
-    }
-    return -1
-  }, [commits, unpushed])
   const squashMergeEdges = useMemo(() => {
     if (squashMergeInferences.length === 0) {
       return []
@@ -715,12 +706,6 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       }
       updateScroll()
     })
-  }
-
-  function scrollToOldestUnpushed() {
-    if (oldestUnpushedIndex !== -1) {
-      scrollToCommit(oldestUnpushedIndex)
-    }
   }
 
   // A commit inside a collapsed run has no row of its own, so the run it sits in is opened and the scroll
@@ -1364,13 +1349,6 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
               <Search />
             </Button>
           </Hinted>
-          {unpushed.size > 0 && (
-            <Hinted hint="Scroll to the oldest commit that no remote has">
-              <Button onClick={scrollToOldestUnpushed} size="sm" type="button" variant="outline">
-                {`${unpushed.size} unpushed`}
-              </Button>
-            </Hinted>
-          )}
         </div>
         <div className="flex items-center gap-1">
           {!isDesktop && graphOffset > 0 && (
