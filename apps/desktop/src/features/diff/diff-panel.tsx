@@ -230,7 +230,7 @@ function ReferencePicker({ label, onCommit, onBranch, path }: { label: string; o
 
   useEffect(() => {
     if (canvas.current && scroll.height > 0) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top, height: scroll.height, squashMergeEdges: [] })
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top, height: scroll.height, rows: null, squashMergeEdges: [] })
     }
   }, [commits, scroll, virtualRows])
 

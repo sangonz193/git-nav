@@ -8,14 +8,15 @@ import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescript
 import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, Cloud, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Tag, Terminal, Undo2, X } from "lucide-react"
+import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, Cloud, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Tag, Terminal, Undo2, X } from "lucide-react"
 import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, chipLabel, chipName, clampGraphWidth, detachedWorktrees, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, rowChips, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
+import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
+import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit } from "./commit-graph-view"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
@@ -30,9 +31,9 @@ const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TIMEOUT = 30_000
+const SEARCH_DEBOUNCE = 120
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
 type BranchSelection = { baseSha: string, headSha: string, baseLabel: string, headLabel: string }
-type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBranches: boolean, deleteSquashMergedBranches: boolean }
 type CleanResult = { report: string } | { result: BranchCleanup }
 type CleanupCandidate = { branch: string, reasons: CleanupReason[] }
 type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch" | "squashedIntoDefaultBranch"
@@ -41,10 +42,10 @@ type SelectedRef = { ref: DisplayRef, sha: string }
 type SelectionRange = { anchorHash: string, focusHash: string }
 type WorktreeStatus = { path: string, branch: string, head: string, isDetached: boolean, changedFiles: number, untrackedFiles: number, pendingOperation: PendingOperation | null }
 type GraphWindowComplete = { hasMore: boolean }
-type ViewMode = "graph" | "branches"
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Label: ContextMenuLabel, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
 const SELECTION_LABELS = { branch: "Branch", remote: "Remote branch", tag: "Tag" }
+const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
 const CHIP_ICONS = { branch: GitBranch, remote: Cloud, stash: Archive, tag: Tag, worktree: AppWindow }
 function Hinted({ children, hint }: { children: ReactNode, hint: string }) {
   return (
@@ -70,7 +71,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [error, setError] = useState<string | null>(null)
   const [cleanupReport, setCleanupReport] = useState<string | null>(null)
   const [isCleanConfirmationOpen, setIsCleanConfirmationOpen] = useState(false)
-  const [cleanOptions, setCleanOptions] = useState<CleanOptions>({ deleteMergedPullRequestBranches: true, deleteMergedBranches: false, deleteSquashMergedBranches: false })
+  const [config, updateConfig] = useViewConfig()
+  const cleanOptions = config.cleanOptions
   const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(null)
   const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(null)
   const [request, setRequest] = useState<OperationRequest | null>(null)
@@ -89,14 +91,22 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
-  const [viewMode, setViewMode] = useState<ViewMode>("graph")
   const [rowHeight, setRowHeight] = useState(ROW_HEIGHT)
+  // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchInput, setSearchInput] = useState("")
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchHitIndex, setSearchHitIndex] = useState(0)
   const scrollElement = useRef<HTMLDivElement>(null)
   const graphSpace = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const searchField = useRef<HTMLInputElement>(null)
   const savedScrollTop = useRef(0)
   const refreshAnchor = useRef<{ hash: string; offset: number } | null>(null)
+  const pendingScrollHash = useRef<string | null>(null)
   const commitsRef = useRef(commits)
+  const rowsRef = useRef<GraphRow[] | null>(null)
   const fingerprint = useRef<string | null>(null)
   const fingerprintGeneration = useRef(0)
   const isScrollElementVisible = useRef(false)
@@ -108,9 +118,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       setCleanupReport(null)
     }
     const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
-    const index = Math.floor(scrollTop / rowHeight)
-    const commit = commitsRef.current[index]
-    refreshAnchor.current = commit ? { hash: commit.hash, offset: scrollTop - index * rowHeight } : null
+    const row = Math.floor(scrollTop / rowHeight)
+    const commit = commitsRef.current[rowsRef.current ? rowsRef.current[row]?.index ?? -1 : row]
+    refreshAnchor.current = commit ? { hash: commit.hash, offset: scrollTop - row * rowHeight } : null
     // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
     fingerprint.current = null
     fingerprintGeneration.current += 1
@@ -138,27 +148,13 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const columnTemplate = table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ")
   // Refs share the commit column with the subject, which keeps whatever they do not take.
   const refBudget = table.getAllLeafColumns()[0].getSize() * REF_BUDGET_SHARE
-  const tableWidth = viewMode === "graph" ? graphWidth + table.getTotalSize() : graphWidth
-  const rowVirtualizer = useVirtualizer({
-    count: commits.length,
-    getScrollElement: () => scrollElement.current,
-    estimateSize: () => rowHeight,
-    overscan: 12,
-  })
-  const virtualRows = rowVirtualizer.getVirtualItems()
+  const tableWidth = graphWidth + table.getTotalSize()
   // Until the repository reports its remotes, refs are classified against the conventional one rather than
   // against none, which would read every remote branch as a local one. Repository state is re-read on a timer,
   // so the list is held by its contents: a fresh array each poll would redraw the whole graph.
   const remoteNames = repository?.remotes?.join("\n")
   const remotes = useMemo(() => remoteNames?.split("\n"), [remoteNames])
   const currentCheckoutIndex = useMemo(() => commits.findIndex((commit) => isCurrentCheckout(commit.refs)), [commits])
-  const checkoutScrollDirection = currentCheckoutIndex === -1 || scroll.height === 0
-    ? null
-    : (currentCheckoutIndex + 1) * rowHeight < scroll.top + GRAPH_HEADER_HEIGHT
-      ? "up"
-      : currentCheckoutIndex * rowHeight >= scroll.top + scroll.height
-        ? "down"
-        : null
   // A worktree's name and openness come from the project snapshot while its uncommitted work and pending
   // operation come from its status, and the two only describe the same checkout once they are joined.
   const worktrees = useMemo(() => {
@@ -236,6 +232,69 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }, [stashes])
   const unpushed = useMemo(() => unpushedHashes(commits, remotes), [commits, remotes])
   const unpushedLaneMasks = useMemo(() => unpushedLanes(commits, unpushed), [commits, unpushed])
+  const chipContext = useMemo<ChipContext>(
+    () => ({ branchSync, chipKinds: config.chipKinds, remotes, stashesByBase, worktreesByHead }),
+    [branchSync, config.chipKinds, remotes, stashesByBase, worktreesByHead]
+  )
+  // Worktrees and stashes are re-read on a timer and land as fresh maps every time, so what a run collapses
+  // on is held by its contents. Rebuilding the rows for a poll that changed nothing would walk the whole
+  // history every few seconds.
+  const marksKey = useMemo(() => [
+    remoteNames,
+    CHIP_KINDS.filter((kind) => config.chipKinds[kind]).join(","),
+    [...stashesByBase.keys()].sort().join(","),
+    [...worktreesByHead.keys()].sort().join(","),
+  ].join("|"), [config.chipKinds, remoteNames, stashesByBase, worktreesByHead])
+  // Rows exist only while runs are being collapsed. Without them a row is a commit, which is what the rest of
+  // the panel already reads its indexes as.
+  const rowsCache = useRef<{ commits: Commit[], marksKey: string, revealed: ReadonlySet<string>, value: GraphRows } | null>(null)
+  const rows = useMemo(() => {
+    if (!config.collapseUnmarked) {
+      rowsCache.current = null
+      return null
+    }
+    const cache = rowsCache.current
+    // A batch only ever adds to the end of the graph, so the rows already built stand and only the new tail
+    // is scanned. Rebuilding them per batch would walk the whole history once for every five hundred commits.
+    const continues = cache !== null
+      && cache.marksKey === marksKey
+      && cache.revealed === revealed
+      && commits.length >= cache.commits.length
+      && commits[cache.commits.length - 1] === cache.commits[cache.commits.length - 1]
+    const value = appendGraphRows(continues ? cache.value : null, commits, (commit) => isMarkedCommit(commit, chipContext), (hash) => revealed.has(hash))
+    rowsCache.current = { commits, marksKey, revealed, value }
+    return value.rows
+  }, [chipContext, commits, config.collapseUnmarked, marksKey, revealed])
+  const searchHits = useMemo(
+    () => isSearchOpen ? searchGraph(commits, searchQuery, { remotes, stashesByBase }) : [],
+    [commits, isSearchOpen, remotes, searchQuery, stashesByBase]
+  )
+  const cleanCandidateCount = cleanPreview?.length ?? 0
+  const rowCount = rows ? rows.length : commits.length
+  const commitIndexAtRow = useCallback((row: number) => rows ? rows[row]?.index ?? 0 : row, [rows])
+  const rowOfCommit = useCallback((index: number) => rows ? rowIndexOfCommit(rows, index) : index, [rows])
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollElement.current,
+    estimateSize: () => rowHeight,
+    overscan: 12,
+  })
+  const virtualRows = rowVirtualizer.getVirtualItems()
+  const currentCheckoutRow = currentCheckoutIndex === -1 ? -1 : rowOfCommit(currentCheckoutIndex)
+  // The brackets are drawn on rows while the drag they adjust is anchored on commits, so an endpoint carries both.
+  const selectionRowEdges = selectionEdges && {
+    bottom: rowOfCommit(selectionEdges.bottom),
+    bottomCommit: selectionEdges.bottom,
+    top: rowOfCommit(selectionEdges.top),
+    topCommit: selectionEdges.top,
+  }
+  const checkoutScrollDirection = currentCheckoutRow === -1 || scroll.height === 0
+    ? null
+    : (currentCheckoutRow + 1) * rowHeight < scroll.top + GRAPH_HEADER_HEIGHT
+      ? "up"
+      : currentCheckoutRow * rowHeight >= scroll.top + scroll.height
+        ? "down"
+        : null
   // The oldest unpushed commit is the top of the local segment, so it is the useful place to land.
   const oldestUnpushedIndex = useMemo(() => {
     for (let index = commits.length - 1; index >= 0; index -= 1) {
@@ -253,9 +312,18 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     return squashMergeInferences.flatMap(([branchHash, targetHash]) => {
       const branchIndex = indexes.get(branchHash)
       const targetIndex = indexes.get(targetHash)
-      return branchIndex === undefined || targetIndex === undefined ? [] : [{ branchIndex, targetIndex }]
+      if (branchIndex === undefined || targetIndex === undefined) {
+        return []
+      }
+      return [{
+        branchLane: commits[branchIndex].lane,
+        branchRow: rowOfCommit(branchIndex),
+        isLocal: unpushed.has(branchHash),
+        targetLane: commits[targetIndex].lane,
+        targetRow: rowOfCommit(targetIndex),
+      }]
     })
-  }, [commits, squashMergeInferences])
+  }, [commits, rowOfCommit, squashMergeInferences, unpushed])
   const fetchMutation = useMutation({
     mutationFn: () => invoke("fetch_and_sync_pull_requests", { repoPath: params.path }),
     onMutate: () => {
@@ -295,10 +363,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   })
   const { isPending: isCleanPreviewPending, mutate: previewCleanCandidates } = useMutation({
     mutationFn: (options: CleanOptions) => invoke<CleanupCandidate[]>("preview_cleanup_candidates", { repoPath: params.path, options }),
-    onMutate: () => {
-      setCleanPreview(null)
-      setCleanPreviewError(null)
-    },
+    // The count stands until a newer one replaces it, so a refresh does not blank the badge on its way through.
+    onMutate: () => setCleanPreviewError(null),
     onSuccess: setCleanPreview,
     onError: (message) => setCleanPreviewError(String(message)),
   })
@@ -442,6 +508,24 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }, [commits])
 
   useEffect(() => {
+    rowsRef.current = rows
+  }, [rows])
+
+  // Opening a run moves every row below it, so the commit that asked for the scroll is followed to its new place.
+  useEffect(() => {
+    const hash = pendingScrollHash.current
+    if (!hash) {
+      return
+    }
+    const index = commits.findIndex((commit) => commit.hash === hash)
+    if (index === -1) {
+      return
+    }
+    pendingScrollHash.current = null
+    rowVirtualizer.scrollToIndex(rowOfCommit(index), { align: "center" })
+  }, [commits, rowOfCommit, rowVirtualizer])
+
+  useEffect(() => {
     let disposed = false
     const poll = () => {
       const generation = fingerprintGeneration.current
@@ -479,9 +563,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (index === -1) {
       return
     }
-    element.scrollTop = index * rowHeight + anchor.offset
+    element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
     refreshAnchor.current = null
-  }, [commits])
+  }, [commits, rowHeight, rowOfCommit])
 
   useEffect(() => {
     if (!cleanupReport) {
@@ -499,11 +583,20 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     return () => window.clearTimeout(timeout)
   }, [completed])
 
+  // The badge counts what the dialog would delete, so the candidates are read for the options in force and
+  // re-read when the repository changes rather than on a timer of their own.
   useEffect(() => {
-    if (isCleanConfirmationOpen) {
-      previewCleanCandidates(cleanOptions)
-    }
-  }, [cleanOptions, isCleanConfirmationOpen, previewCleanCandidates])
+    previewCleanCandidates(cleanOptions)
+  }, [cleanOptions, graphVersion, previewCleanCandidates])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setSearchQuery(searchInput), SEARCH_DEBOUNCE)
+    return () => window.clearTimeout(timeout)
+  }, [searchInput])
+
+  useEffect(() => {
+    setSearchHitIndex(0)
+  }, [searchQuery])
 
   useEffect(() => {
     let disposed = false
@@ -543,9 +636,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
     }
-  }, [commits, graphWidth, scroll, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
+  }, [commits, graphWidth, rowHeight, rows, scroll, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
 
   function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
     const originX = "touches" in event ? event.touches[0].clientX : event.clientX
@@ -588,8 +681,87 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   function scrollToOldestUnpushed() {
     if (oldestUnpushedIndex !== -1) {
-      rowVirtualizer.scrollToIndex(oldestUnpushedIndex, { align: "center" })
+      scrollToCommit(oldestUnpushedIndex)
     }
+  }
+
+  // A commit inside a collapsed run has no row of its own, so the run it sits in is opened and the scroll
+  // waits for the rows that opening it produces.
+  function scrollToCommit(index: number) {
+    const row = rowOfCommit(index)
+    if (rows && rows[row]?.hidden > 0) {
+      const start = commits[rows[row].index].hash
+      pendingScrollHash.current = commits[index].hash
+      setRevealed((current) => new Set(current).add(start))
+      return
+    }
+    rowVirtualizer.scrollToIndex(row, { align: "center" })
+  }
+
+  function collapseUnmarkedCommits(collapse: boolean) {
+    const top = commits[commitIndexAtRow(Math.floor((scrollElement.current?.scrollTop ?? 0) / rowHeight))]
+    pendingScrollHash.current = top?.hash ?? null
+    setRevealed(new Set())
+    updateConfig({ collapseUnmarked: collapse })
+  }
+
+  function revealRun(startHash: string) {
+    setRevealed((current) => new Set(current).add(startHash))
+  }
+
+  function openSearch() {
+    setIsSearchOpen(true)
+    requestAnimationFrame(() => searchField.current?.select())
+  }
+
+  function onPanelKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if ((event.metaKey || event.ctrlKey) && event.key === "f") {
+      event.preventDefault()
+      openSearch()
+    }
+  }
+
+  function onSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      // The graph clears its selection on Escape, which is not what closing this bar is asking for.
+      event.stopPropagation()
+      setIsSearchOpen(false)
+      return
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault()
+      if (searchHits.length === 0) {
+        return
+      }
+      const step = event.key === "ArrowDown" ? 1 : searchHits.length - 1
+      const next = (searchHitIndex + step) % searchHits.length
+      setSearchHitIndex(next)
+      activateSearchHit(searchHits[next])
+      return
+    }
+    if (event.key === "Enter" && searchHits[searchHitIndex]) {
+      event.preventDefault()
+      activateSearchHit(searchHits[searchHitIndex])
+      setIsSearchOpen(false)
+    }
+  }
+
+  function activateSearchHit(hit: SearchHit) {
+    const commit = commits[hit.commitIndex]
+    if (!commit) {
+      return
+    }
+    if (hit.kind === "commit" || hit.kind === "stash") {
+      setSelectedRef(null)
+      setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
+    } else {
+      const ref = displayRefs(commit.refs, { branchSync, remotes, worktrees: worktreesByHead.get(commit.hash) }).find((candidate) => refName(candidate) === hit.label)
+      if (ref) {
+        setSelectionRange(null)
+        setSelectedRef({ ref, sha: commit.hash })
+      }
+    }
+    scrollToCommit(hit.commitIndex)
   }
 
   function showGraphWindow(offset: number) {
@@ -603,7 +775,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (currentCheckoutIndex === -1) {
       return
     }
-    rowVirtualizer.scrollToIndex(currentCheckoutIndex, { align: "center" })
+    scrollToCommit(currentCheckoutIndex)
   }
 
   async function openRefDiff(reference: string) {
@@ -758,7 +930,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
     const focusIndexAt = () => {
       const offset = pointerY - space.getBoundingClientRect().top
-      return Math.max(0, Math.min(commits.length - 1, Math.floor(offset / rowHeight)))
+      return commitIndexAtRow(Math.max(0, Math.min(rowCount - 1, Math.floor(offset / rowHeight))))
     }
 
     const autoScroll = () => {
@@ -1122,34 +1294,67 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   }
 
   return (
-    <main className="relative flex h-full flex-col overflow-hidden bg-background">
+    <main className="relative flex h-full flex-col overflow-hidden bg-background" onKeyDown={onPanelKeyDown}>
       <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
-        <ButtonGroup aria-label="View mode">
-          <Button aria-pressed={viewMode === "graph"} onClick={() => setViewMode("graph")} size="sm" type="button" variant={viewMode === "graph" ? "outline" : "ghost"}>
-            Graph
-          </Button>
-          <Button aria-pressed={viewMode === "branches"} onClick={() => setViewMode("branches")} size="sm" type="button" variant={viewMode === "branches" ? "outline" : "ghost"}>
-            Branches
-          </Button>
-        </ButtonGroup>
         <div className="flex items-center gap-1">
+          <DropdownMenu>
+            <Tooltip>
+              <DropdownMenuTrigger asChild>
+                <TooltipTrigger asChild>
+                  <Button size="sm" type="button" variant="outline">
+                    <SlidersHorizontal />
+                    View
+                  </Button>
+                </TooltipTrigger>
+              </DropdownMenuTrigger>
+              <TooltipContent>Choose what the graph shows</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Show</DropdownMenuLabel>
+              {CHIP_KINDS.map((kind) => (
+                <DropdownMenuCheckboxItem
+                  checked={config.chipKinds[kind]}
+                  key={kind}
+                  onCheckedChange={(checked) => updateConfig({ chipKinds: { ...config.chipKinds, [kind]: checked === true } })}
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  {CHIP_KIND_LABELS[kind]}
+                </DropdownMenuCheckboxItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={config.collapseUnmarked}
+                onCheckedChange={(checked) => collapseUnmarkedCommits(checked === true)}
+                onSelect={(event) => event.preventDefault()}
+              >
+                Collapse commits nothing points at
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Hinted hint="Find a branch, tag or commit">
+            <Button aria-label="Search the graph" onClick={openSearch} size="icon-sm" type="button" variant="outline">
+              <Search />
+            </Button>
+          </Hinted>
           {unpushed.size > 0 && (
             <Hinted hint="Scroll to the oldest commit that no remote has">
-              <Button onClick={scrollToOldestUnpushed} size="sm" type="button" variant="ghost">
+              <Button onClick={scrollToOldestUnpushed} size="sm" type="button" variant="outline">
                 {`${unpushed.size} unpushed`}
               </Button>
             </Hinted>
           )}
+        </div>
+        <div className="flex items-center gap-1">
           {!isDesktop && graphOffset > 0 && (
             <Hinted hint="Show newer commits">
-              <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE))} size="sm" type="button" variant="ghost">
+              <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE))} size="sm" type="button" variant="outline">
                 Newer
               </Button>
             </Hinted>
           )}
           {!isDesktop && hasOlderCommits && (
             <Hinted hint="Show older commits">
-              <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(graphOffset + BROWSER_GRAPH_WINDOW_SIZE)} size="sm" type="button" variant="ghost">
+              <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(graphOffset + BROWSER_GRAPH_WINDOW_SIZE)} size="sm" type="button" variant="outline">
                 Older
               </Button>
             </Hinted>
@@ -1158,9 +1363,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
             <Tooltip>
               <DropdownMenuTrigger asChild>
                 <TooltipTrigger asChild>
-                  <Button size="sm" type="button" variant="ghost">
+                  <Button size="sm" type="button" variant="outline">
                     <Archive />
-                    {stashes.length > 0 ? stashes.length : "Stash"}
+                    <span className="tabular-nums">{stashes.length > 0 ? stashes.length : "Stash"}</span>
                   </Button>
                 </TooltipTrigger>
               </DropdownMenuTrigger>
@@ -1172,14 +1377,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
               {stashes.length === 0 && !repository?.isDirty && <DropdownMenuItem disabled>Nothing is stashed</DropdownMenuItem>}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Hinted hint="Clean merged branches">
-            <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="icon" type="button" variant="ghost">
+          <Hinted hint={cleanCandidateCount > 0 ? `${cleanCandidateCount} branch${cleanCandidateCount === 1 ? "" : "es"} can be cleaned` : "Clean merged branches"}>
+            <Button aria-label="Clean merged branches" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => setIsCleanConfirmationOpen(true)} size="sm" type="button" variant="outline">
               {cleanMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Broom />}
+              {cleanCandidateCount > 0 && <span className="tabular-nums">{cleanCandidateCount}</span>}
             </Button>
           </Hinted>
           <ButtonGroup>
             <Hinted hint="Refresh graph">
-              <Button aria-label="Refresh graph" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => refreshGraph()} size="icon" type="button" variant="ghost">
+              <Button aria-label="Refresh graph" disabled={fetchMutation.isPending || cleanMutation.isPending} onClick={() => refreshGraph()} size="icon-sm" type="button" variant="outline">
                 {fetchMutation.isPending ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
               </Button>
             </Hinted>
@@ -1187,7 +1393,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
               <Tooltip>
                 <DropdownMenuTrigger asChild>
                   <TooltipTrigger asChild>
-                    <Button aria-label="Fetch options" className="w-6" disabled={fetchMutation.isPending || cleanMutation.isPending} size="icon" type="button" variant="ghost">
+                    <Button aria-label="Fetch options" className="w-6" disabled={fetchMutation.isPending || cleanMutation.isPending} size="icon-sm" type="button" variant="outline">
                       <ChevronDown />
                     </Button>
                   </TooltipTrigger>
@@ -1204,6 +1410,50 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </ButtonGroup>
         </div>
       </div>
+      {isSearchOpen && (
+        <div className="absolute top-11 right-2 z-10 w-80 overflow-hidden rounded-lg border bg-background shadow-lg">
+          <div className="flex items-center gap-1 border-b px-2 py-1">
+            <Search className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              aria-label="Search refs and commits"
+              className="h-7 min-w-0 flex-1 bg-transparent text-sm outline-none"
+              onChange={(event) => setSearchInput(event.target.value)}
+              onKeyDown={onSearchKeyDown}
+              placeholder="Branch, tag or commit"
+              ref={searchField}
+              value={searchInput}
+            />
+            {searchHits.length > 0 && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{`${searchHitIndex + 1}/${searchHits.length}`}</span>}
+            <Button aria-label="Close search" onClick={() => setIsSearchOpen(false)} size="icon-xs" type="button" variant="ghost">
+              <X />
+            </Button>
+          </div>
+          <ul className="max-h-64 overflow-y-auto p-1">
+            {searchHits.map((hit, index) => {
+              const Icon = hit.kind === "commit" ? GitCompareArrows : CHIP_ICONS[hit.kind]
+              return (
+                <li key={`${hit.kind}-${hit.commitIndex}-${hit.label}`}>
+                  <button
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left ${index === searchHitIndex ? "bg-accent text-accent-foreground" : ""}`}
+                    onClick={() => {
+                      setSearchHitIndex(index)
+                      activateSearchHit(hit)
+                    }}
+                    type="button"
+                  >
+                    <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">{hit.label}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{hit.detail}</span>
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+            {searchQuery.trim() !== "" && searchHits.length === 0 && <li className="px-2 py-1 text-sm text-muted-foreground">No matches</li>}
+          </ul>
+        </div>
+      )}
       <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--commit-row-height": `${rowHeight}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
           <div className="commit-graph-header-content" role="row" style={{ minWidth: tableWidth }}>
@@ -1224,58 +1474,77 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                 role="separator"
               />
             </div>
-            {viewMode === "graph" ? (
-              <div className="commit-graph-header-columns" style={{ gridTemplateColumns: columnTemplate }}>
-                {table.getFlatHeaders().map((header) => (
-                  <div className="commit-graph-header-cell" key={header.id} role="columnheader">
-                    <table.FlexRender header={header} />
-                    {header.column.getCanResize() && (
-                      <div
-                        aria-label={`Resize ${String(header.column.columnDef.header)} column`}
-                        className={`commit-graph-resize-handle${header.column.getIsResizing() ? " is-resizing" : ""}`}
-                        onDoubleClick={() => header.column.resetSize()}
-                        onMouseDown={(event) => {
-                          event.preventDefault()
-                          header.getResizeHandler()(event)
-                        }}
-                        onTouchStart={(event) => {
-                          event.preventDefault()
-                          header.getResizeHandler()(event)
-                        }}
-                        role="separator"
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : <div className="commit-graph-header-cell" role="columnheader">Branches</div>}
+            <div className="commit-graph-header-columns" style={{ gridTemplateColumns: columnTemplate }}>
+              {table.getFlatHeaders().map((header) => (
+                <div className="commit-graph-header-cell" key={header.id} role="columnheader">
+                  <table.FlexRender header={header} />
+                  {header.column.getCanResize() && (
+                    <div
+                      aria-label={`Resize ${String(header.column.columnDef.header)} column`}
+                      className={`commit-graph-resize-handle${header.column.getIsResizing() ? " is-resizing" : ""}`}
+                      onDoubleClick={() => header.column.resetSize()}
+                      onMouseDown={(event) => {
+                        event.preventDefault()
+                        header.getResizeHandler()(event)
+                      }}
+                      onTouchStart={(event) => {
+                        event.preventDefault()
+                        header.getResizeHandler()(event)
+                      }}
+                      role="separator"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
         <div className="commit-graph-space" ref={graphSpace} style={{ "--commit-ref-budget": `${refBudget}px`, height: rowVirtualizer.getTotalSize(), minWidth: tableWidth } as CSSProperties}>
           <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
           {virtualRows.map((row) => {
-            const commit = commits[row.index]
+            const graphRow = rows?.[row.index]
+            const index = graphRow ? graphRow.index : row.index
+            const commit = commits[index]
+            if (!commit) {
+              return null
+            }
+            if (graphRow && graphRow.hidden > 0) {
+              return (
+                <div
+                  aria-rowindex={row.index + 2}
+                  className="commit-graph-row commit-graph-row-collapsed"
+                  key={commit.hash}
+                  role="row"
+                  style={{ gridTemplateColumns: `${graphWidth}px ${columnTemplate}`, transform: `translateY(${row.start}px)` }}
+                >
+                  <div className="commit-graph-graph-cell" />
+                  <div role="gridcell">
+                    <button className="commit-graph-collapsed-label" onClick={() => revealRun(commit.hash)} type="button">
+                      <ChevronsDownUp />
+                      {`${graphRow.hidden} commit${graphRow.hidden === 1 ? "" : "s"}`}
+                    </button>
+                  </div>
+                </div>
+              )
+            }
             const refColor = laneColor(commit.lane)
             const currentCheckout = isCurrentCheckout(commit.refs)
             const selected = selectedHashes.has(commit.hash)
-            const edges = selectionEdges
-            const canSelectRange = selectionEndpointIndexes && selectionEndpointIndexes.anchor !== -1 && ancestryPath(commits, selectionEndpointIndexes.anchor, row.index).length > 0
-            const rowWorktrees = worktreesByHead.get(commit.hash) ?? []
-            const refs = displayRefs(commit.refs, { branchSync, remotes, worktrees: rowWorktrees })
-            const chips = rowChips(refs, stashesByBase.get(commit.hash), detachedWorktrees(refs, rowWorktrees))
-            // Branches view has a row as wide as its content, so nothing there has to give up its place.
-            const shown = viewMode === "branches" ? chips.length : visibleChipCount(chips, refBudget)
+            const edges = selectionRowEdges
+            const canSelectRange = selectionEndpointIndexes && selectionEndpointIndexes.anchor !== -1 && ancestryPath(commits, selectionEndpointIndexes.anchor, index).length > 0
+            const chips = commitChips(commit, chipContext)
+            const shown = visibleChipCount(chips, refBudget)
             const overflowChips = chips.slice(shown)
             return (
               <ContextMenu key={commit.hash}>
                 <ContextMenuTrigger asChild>
-                  <article aria-keyshortcuts="Enter Space Shift+Enter Shift+Space" aria-rowindex={row.index + 2} aria-selected={selected} className={`commit-graph-row${viewMode === "branches" ? " commit-graph-row-branches" : ""}${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onKeyDown={(event) => selectCommitFromKeyboard(event, row.index)} onPointerDown={(event) => startRangeDrag(event, row.index)} role="row" style={{ "--commit-ref-color": refColor, gridTemplateColumns: `${graphWidth}px ${viewMode === "graph" ? columnTemplate : "max-content"}`, transform: `translateY(${row.start}px)` } as CSSProperties} tabIndex={0}>
+                  <article aria-keyshortcuts="Enter Space Shift+Enter Shift+Space" aria-rowindex={row.index + 2} aria-selected={selected} className={`commit-graph-row${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onKeyDown={(event) => selectCommitFromKeyboard(event, index)} onPointerDown={(event) => startRangeDrag(event, index)} role="row" style={{ "--commit-ref-color": refColor, gridTemplateColumns: `${graphWidth}px ${columnTemplate}`, transform: `translateY(${row.start}px)` } as CSSProperties} tabIndex={0}>
                     <div className="commit-graph-graph-cell">
                       {edges?.top === row.index && (
-                        <button aria-label="Adjust the newer end of the selected range" className="commit-graph-selection-handle commit-graph-selection-handle-start" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, row.index, edges.bottom) }} type="button" />
+                        <button aria-label="Adjust the newer end of the selected range" className="commit-graph-selection-handle commit-graph-selection-handle-start" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, index, edges.bottomCommit) }} type="button" />
                       )}
                       {edges?.bottom === row.index && (
-                        <button aria-label="Adjust the older end of the selected range" className="commit-graph-selection-handle commit-graph-selection-handle-end" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, row.index, edges.top) }} type="button" />
+                        <button aria-label="Adjust the older end of the selected range" className="commit-graph-selection-handle commit-graph-selection-handle-end" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, index, edges.topCommit) }} type="button" />
                       )}
                     </div>
                     <div className="commit-graph-summary" role="gridcell">
@@ -1299,17 +1568,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                       </DropdownMenu>
                     )}
                   </div>
-                  {viewMode === "graph" && <span className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}>{commit.subject || "(no subject)"}</span>}
+                  <span className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}>{commit.subject || "(no subject)"}</span>
                 </div>
-                {viewMode === "graph" && <>
-                  <span className="text-muted-foreground" role="gridcell">{commit.author}</span>
-                  <time className="text-muted-foreground" dateTime={commit.date} role="gridcell">{relativeDate(commit.date)}</time>
-                  <code className="text-muted-foreground" role="gridcell">{commit.hash.slice(0, 8)}</code>
-                </>}
+                <span className="text-muted-foreground" role="gridcell">{commit.author}</span>
+                <time className="text-muted-foreground" dateTime={commit.date} role="gridcell">{relativeDate(commit.date)}</time>
+                <code className="text-muted-foreground" role="gridcell">{commit.hash.slice(0, 8)}</code>
                   </article>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
-                  {menuHeader(contextMenuComponents, rowHeader(row.index), commit.subject || "(no subject)")}
+                  {menuHeader(contextMenuComponents, rowHeader(index), commit.subject || "(no subject)")}
                   <ContextMenuItem onSelect={() => { setSelectedRef(null); setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash }) }}>
                     <GitCompareArrows />
                     Select commit
@@ -1320,7 +1587,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                       Select range to here
                     </ContextMenuItem>
                   )}
-                  <OperationMenuItems components={contextMenuComponents} onSelect={setRequest} repository={repository} source={selection} target={rowTarget(row.index)} />
+                  <OperationMenuItems components={contextMenuComponents} onSelect={setRequest} repository={repository} source={selection} target={rowTarget(index)} />
                   <ContextMenuItem disabled={commit.parents.length === 0} onSelect={() => openCommitDiff(commit)}>
                     <FileDiff />
                     Show commit diff
@@ -1416,15 +1683,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </AlertDialogHeader>
           <div className="grid gap-3 text-sm">
             <label className="flex items-start gap-2">
-              <input checked={cleanOptions.deleteMergedPullRequestBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => setCleanOptions((options) => ({ ...options, deleteMergedPullRequestBranches: event.target.checked }))} type="checkbox" />
+              <input checked={cleanOptions.deleteMergedPullRequestBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { ...cleanOptions, deleteMergedPullRequestBranches: event.target.checked } })} type="checkbox" />
               <span>Delete branches whose merged pull request head matches the local tip.</span>
             </label>
             <label className="flex items-start gap-2">
-              <input checked={cleanOptions.deleteMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => setCleanOptions((options) => ({ ...options, deleteMergedBranches: event.target.checked }))} type="checkbox" />
+              <input checked={cleanOptions.deleteMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { ...cleanOptions, deleteMergedBranches: event.target.checked } })} type="checkbox" />
               <span>Delete branches with no commits ahead of the default branch that are not checked out in any worktree.</span>
             </label>
             <label className="flex items-start gap-2">
-              <input checked={cleanOptions.deleteSquashMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => setCleanOptions((options) => ({ ...options, deleteSquashMergedBranches: event.target.checked }))} type="checkbox" />
+              <input checked={cleanOptions.deleteSquashMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { ...cleanOptions, deleteSquashMergedBranches: event.target.checked } })} type="checkbox" />
               <span>Delete branches whose changes already sit on the default branch as one squashed commit, matched by content rather than by a record of the merge.</span>
             </label>
           </div>

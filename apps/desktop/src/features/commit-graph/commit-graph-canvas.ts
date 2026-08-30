@@ -1,10 +1,15 @@
 import { GRAPH_GUTTER, GRAPH_WIDTH, LANE_WIDTH, laneColor, parentEdgeColor, ROW_HEIGHT, startsLane, type Commit } from "./commit-graph"
+import type { GraphRow } from "./commit-graph-view"
 
 // Unpushed work keeps the colour of the branch it belongs to and gives up some of its weight instead.
 const UNPUSHED_ALPHA = 0.45
+// A collapsed run stands for commits that are not drawn, so the lines crossing it are broken rather than solid.
+const COLLAPSED_DASH = [2, 3]
 // Fading each stroke on its own would darken every place two of them overlap, so they are collected on one
 // layer at full strength and that layer is faded once.
 let unpushedLayer: HTMLCanvasElement | null = null
+
+type SquashMergeEdge = { branchLane: number; branchRow: number; isLocal: boolean; targetLane: number; targetRow: number }
 
 type CommitGraphDrawing = {
   canvas: HTMLCanvasElement
@@ -12,7 +17,8 @@ type CommitGraphDrawing = {
   items: { index: number; start: number }[]
   scrollTop: number
   height: number
-  squashMergeEdges: { branchIndex: number; targetIndex: number }[]
+  rows: GraphRow[] | null
+  squashMergeEdges: SquashMergeEdge[]
   unpushed?: Set<string>
   unpushedLanes?: number[]
   width?: number
@@ -36,7 +42,7 @@ function unpushedContext(pixelWidth: number, pixelHeight: number, ratio: number,
   return context
 }
 
-export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squashMergeEdges, unpushed, unpushedLanes, width = GRAPH_WIDTH, rowHeight = ROW_HEIGHT }: CommitGraphDrawing) {
+export function drawCommitGraph({ canvas, commits, items, scrollTop, height, rows, squashMergeEdges, unpushed, unpushedLanes, width = GRAPH_WIDTH, rowHeight = ROW_HEIGHT }: CommitGraphDrawing) {
   const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
   const pixelWidth = Math.ceil(width * ratio)
@@ -73,20 +79,18 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
     layer.lineWidth = 1.5
     layer.setLineDash([3, 4])
   }
-  for (const { branchIndex, targetIndex } of squashMergeEdges) {
-    const branchY = branchIndex * rowHeight - scrollTop + rowHeight / 2
-    const targetY = targetIndex * rowHeight - scrollTop + rowHeight / 2
+  for (const { branchLane, branchRow, isLocal, targetLane, targetRow } of squashMergeEdges) {
+    const branchY = branchRow * rowHeight - scrollTop + rowHeight / 2
+    const targetY = targetRow * rowHeight - scrollTop + rowHeight / 2
     if (Math.max(branchY, targetY) < 0 || Math.min(branchY, targetY) > height) {
       continue
     }
-    const branch = commits[branchIndex]
-    const target = commits[targetIndex]
-    const branchX = GRAPH_GUTTER + branch.lane * LANE_WIDTH
-    const targetX = GRAPH_GUTTER + target.lane * LANE_WIDTH
+    const branchX = GRAPH_GUTTER + branchLane * LANE_WIDTH
+    const targetX = GRAPH_GUTTER + targetLane * LANE_WIDTH
     const middleY = (branchY + targetY) / 2
     // The edge belongs to the branch that was squashed away, so it carries that branch's weight.
-    const layer = layerFor(unpushed?.has(branch.hash) ?? false)
-    layer.strokeStyle = laneColor(branch.lane)
+    const layer = layerFor(isLocal)
+    layer.strokeStyle = laneColor(branchLane)
     layer.beginPath()
     layer.moveTo(branchX, branchY)
     layer.bezierCurveTo(branchX, middleY, targetX, middleY, targetX, targetY)
@@ -98,8 +102,10 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
   }
 
   for (const item of items) {
-    const commit = commits[item.index]
-    if (!commit) {
+    const row = rows?.[item.index]
+    const commitIndex = row ? row.index : item.index
+    const commit = commits[commitIndex]
+    if (!commit || (rows && !row)) {
       continue
     }
 
@@ -107,12 +113,34 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
     const endY = startY + rowHeight
     const startX = GRAPH_GUTTER + commit.lane * LANE_WIDTH
     const isLocal = unpushed?.has(commit.hash) ?? false
-    const previousCommit = commits[item.index - 1]
+
+    // A collapsed run draws only the lines that reach across it, so the branches on either side stay joined
+    // while the commits between them keep no place of their own.
+    if (row && row.hidden > 0) {
+      const localLanes = unpushedLanes?.[commitIndex] ?? 0
+      for (let lane = 0; lane < 31; lane += 1) {
+        if (!(row.lanes & (1 << lane))) {
+          continue
+        }
+        const target = layerFor(Boolean(localLanes & (1 << lane)))
+        const x = GRAPH_GUTTER + lane * LANE_WIDTH
+        target.setLineDash(COLLAPSED_DASH)
+        target.strokeStyle = laneColor(lane)
+        target.beginPath()
+        target.moveTo(x, startY - rowHeight / 2)
+        target.lineTo(x, endY - rowHeight / 2)
+        target.stroke()
+        target.setLineDash([])
+      }
+      continue
+    }
+
+    const previousCommit = commits[commitIndex - 1]
     const previousActiveLanes = previousCommit?.activeLanes ?? []
 
-    const previousLanes = unpushedLanes?.[item.index - 1] ?? 0
+    const previousLanes = unpushedLanes?.[commitIndex - 1] ?? 0
     for (let lane = 0; lane < previousActiveLanes.length; lane += 1) {
-      if (!previousActiveLanes[lane] || startsLane(commits, item.index - 1, lane) || !commit.incomingLanes.includes(lane)) {
+      if (!previousActiveLanes[lane] || startsLane(commits, commitIndex - 1, lane) || !commit.incomingLanes.includes(lane)) {
         continue
       }
       const target = layerFor(Boolean(previousLanes & (1 << lane)))
@@ -128,10 +156,10 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, squ
       target.stroke()
     }
 
-    const activeLanes = unpushedLanes?.[item.index] ?? 0
-    const nextCommit = commits[item.index + 1]
+    const activeLanes = unpushedLanes?.[commitIndex] ?? 0
+    const nextCommit = commits[commitIndex + 1]
     for (let lane = 0; lane < commit.activeLanes.length; lane += 1) {
-      if (!commit.activeLanes[lane] || startsLane(commits, item.index, lane) || nextCommit?.incomingLanes.includes(lane)) {
+      if (!commit.activeLanes[lane] || startsLane(commits, commitIndex, lane) || nextCommit?.incomingLanes.includes(lane)) {
         continue
       }
       const target = layerFor(Boolean(activeLanes & (1 << lane)))

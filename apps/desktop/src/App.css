@@ -314,23 +314,39 @@ body {
   }
 }
 
-.commit-graph-row-branches {
-  min-width: max-content;
-  right: auto;
+/* A run of commits nothing points at keeps one row between the branches on either side of it. */
+.commit-graph-row-collapsed {
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+@media (hover: hover) {
+  .commit-graph-row-collapsed:hover {
+    background: rgb(255 255 255 / 4%);
+    color: var(--foreground);
+  }
+}
+
+.commit-graph-collapsed-label {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 0.75rem;
+  gap: 6px;
+  padding: 0;
   width: 100%;
 }
 
-.commit-graph-row-branches .commit-graph-summary,
-.commit-graph-row-branches .commit-graph-refs {
-  overflow: visible;
-}
-
-.commit-graph-row-branches .commit-graph-refs {
-  max-width: none;
-}
-
-.commit-graph-row-branches .commit-ref {
-  flex: none;
+.commit-graph-collapsed-label svg {
+  height: 12px;
+  width: 12px;
 }
 
 .commit-graph-row.commit-graph-row-current.commit-graph-row-selected {
