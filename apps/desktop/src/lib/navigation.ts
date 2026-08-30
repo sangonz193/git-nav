@@ -27,3 +27,14 @@ export async function openWorktree(path: string, target: WorktreeTarget) {
     window.open(repositoryUrl(resolved), "_blank")
   }
 }
+
+/**
+ * A Tauri webview has nowhere to put a second tab, so the desktop app hands the link to the system
+ * browser. The served app is already in one.
+ */
+export async function openPullRequest(url: string) {
+  if (isDesktop) {
+    return invoke<void>("open_url", { url })
+  }
+  window.open(url, "_blank", "noopener")
+}

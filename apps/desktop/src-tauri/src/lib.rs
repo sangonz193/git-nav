@@ -43,6 +43,7 @@ commands![
     open_repository,
     update_command,
     open_worktree,
+    open_url,
     project_snapshot,
     stream_commit_graph,
     repository_fingerprint,
@@ -50,6 +51,7 @@ commands![
     worktree_status,
     inferred_squash_merge_edges,
     fetch_and_sync_pull_requests,
+    branch_pull_requests,
     squashed_branch_candidates,
     preview_cleanup_candidates,
     delete_squashed_branches,
@@ -633,6 +635,9 @@ fn worktree_name(path: &str) -> String {
 #[derive(Deserialize)]
 struct GithubPullRequest {
     number: i64,
+    title: String,
+    state: String,
+    draft: bool,
     merged_at: Option<String>,
     merge_commit_sha: Option<String>,
     updated_at: String,
@@ -641,7 +646,25 @@ struct GithubPullRequest {
 
 #[derive(Deserialize)]
 struct GithubPullRequestHead {
+    #[serde(rename = "ref")]
+    reference: String,
+    repo: Option<GithubRepositoryRef>,
     sha: String,
+}
+
+#[derive(Deserialize)]
+struct GithubRepositoryRef {
+    full_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchPullRequest {
+    branch: String,
+    number: i64,
+    state: String,
+    title: String,
+    url: String,
 }
 
 fn github_repository(remote: &str) -> Option<(String, String)> {
@@ -660,8 +683,8 @@ fn github_repository(remote: &str) -> Option<(String, String)> {
     (!owner.is_empty() && !repository.is_empty()).then_some((host.to_string(), format!("{owner}/{repository}")))
 }
 
-fn github_pull_requests(host: &str, repository: &str) -> Option<Vec<GithubPullRequest>> {
-    let endpoint = format!("repos/{repository}/pulls?state=closed&sort=updated&direction=desc&per_page=100");
+fn github_pull_request_page(host: &str, repository: &str, state: &str) -> Option<Vec<GithubPullRequest>> {
+    let endpoint = format!("repos/{repository}/pulls?state={state}&sort=updated&direction=desc&per_page=100");
     let mut command = Command::new("gh");
     command.args(["api", "--method", "GET", "--header", "Accept: application/vnd.github+json"]);
     if host != "github.com" {
@@ -673,6 +696,14 @@ fn github_pull_requests(host: &str, repository: &str) -> Option<Vec<GithubPullRe
         .success()
         .then(|| serde_json::from_slice(&output.stdout).ok())
         .flatten()
+}
+
+// Closed pull requests are what a merge is recognised by, and open ones are what a branch is marked with, and
+// each page only reaches as far back as its own state, so both are read.
+fn github_pull_requests(host: &str, repository: &str) -> Option<Vec<GithubPullRequest>> {
+    let mut pull_requests = github_pull_request_page(host, repository, "closed")?;
+    pull_requests.extend(github_pull_request_page(host, repository, "open")?);
+    Some(pull_requests)
 }
 
 fn git_succeeds(path: &str, arguments: &[&str]) -> bool {
@@ -719,6 +750,23 @@ fn migrate_pull_request_database(connection: &mut Connection) -> Result<(), Stri
             .map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
+    if version < 2 {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        // Clearing the sync record brings the next read forward so the rows already stored gain the new columns.
+        transaction
+            .execute_batch(
+                "
+                ALTER TABLE pull_requests ADD COLUMN head_ref TEXT;
+                ALTER TABLE pull_requests ADD COLUMN state TEXT;
+                ALTER TABLE pull_requests ADD COLUMN title TEXT;
+                ALTER TABLE pull_requests ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0;
+                DELETE FROM pull_request_syncs;
+                INSERT INTO schema_migrations (version) VALUES (2);
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -751,25 +799,41 @@ fn sync_pull_requests(connection: &mut Connection, host: &str, repository: &str)
     let pull_requests = github_pull_requests(host, repository).ok_or_else(|| "Could not load pull requests.".to_string())?;
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     for pull_request in pull_requests {
+        // A pull request raised from a fork names a branch in that fork, and names like "patch-1" are common
+        // enough there to land on a local branch that has nothing to do with it.
+        let head_ref = pull_request
+            .head
+            .repo
+            .as_ref()
+            .is_some_and(|repo| repo.full_name.eq_ignore_ascii_case(repository))
+            .then_some(pull_request.head.reference.as_str());
         transaction
             .execute(
                 "
-                INSERT INTO pull_requests (host, repository, number, head_sha, merge_commit_sha, merged_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                INSERT INTO pull_requests (host, repository, number, head_sha, head_ref, merge_commit_sha, merged_at, state, title, is_draft, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 ON CONFLICT(host, repository, number) DO UPDATE SET
                   head_sha = excluded.head_sha,
+                  head_ref = excluded.head_ref,
                   merge_commit_sha = excluded.merge_commit_sha,
                   merged_at = excluded.merged_at,
+                  state = excluded.state,
+                  title = excluded.title,
+                  is_draft = excluded.is_draft,
                   updated_at = excluded.updated_at
-                WHERE excluded.updated_at > pull_requests.updated_at
+                WHERE excluded.updated_at > pull_requests.updated_at OR pull_requests.head_ref IS NULL
                 ",
                 params![
                     host,
                     repository,
                     pull_request.number,
                     pull_request.head.sha,
+                    head_ref,
                     pull_request.merge_commit_sha,
                     pull_request.merged_at,
+                    pull_request.state,
+                    pull_request.title,
+                    pull_request.draft,
                     pull_request.updated_at,
                 ],
             )
@@ -790,6 +854,81 @@ fn sync_pull_requests(connection: &mut Connection, host: &str, repository: &str)
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
+}
+
+fn pull_request_state(state: &str, is_draft: bool, merged_at: Option<&str>) -> &'static str {
+    if merged_at.is_some() {
+        "merged"
+    } else if state != "open" {
+        "closed"
+    } else if is_draft {
+        "draft"
+    } else {
+        "open"
+    }
+}
+
+fn pull_request_rank(state: &str) -> u8 {
+    match state {
+        "open" | "draft" => 2,
+        "merged" => 1,
+        _ => 0,
+    }
+}
+
+type PullRequestRow = (String, i64, String, bool, Option<String>, String);
+
+// A branch name outlives the pull requests raised from it, so the one it is marked with is whichever is still
+// open, and failing that the newest one that closed.
+fn rank_branch_pull_requests(host: &str, repository: &str, rows: Vec<PullRequestRow>) -> Vec<BranchPullRequest> {
+    let mut best: HashMap<String, BranchPullRequest> = HashMap::new();
+    for (branch, number, state, is_draft, merged_at, title) in rows {
+        let state = pull_request_state(&state, is_draft, merged_at.as_deref());
+        if best.get(&branch).is_some_and(|current| {
+            (pull_request_rank(&current.state), current.number) > (pull_request_rank(state), number)
+        }) {
+            continue;
+        }
+        let url = format!("https://{host}/{repository}/pull/{number}");
+        best.insert(branch.clone(), BranchPullRequest { branch, number, state: state.to_string(), title, url });
+    }
+    let mut pull_requests: Vec<_> = best.into_values().collect();
+    pull_requests.sort_by(|a, b| a.branch.cmp(&b.branch));
+    pull_requests
+}
+
+fn pull_requests_by_branch(repo_path: &str, database_path: PathBuf) -> Result<Vec<BranchPullRequest>, String> {
+    let remote = git_output(repo_path, &["remote", "get-url", "origin"]).ok_or_else(|| "Could not identify the origin remote.".to_string())?;
+    let (host, repository) = github_repository(&remote).ok_or_else(|| "Only GitHub remotes are supported.".to_string())?;
+    let mut connection = pull_request_database(database_path)?;
+    // What is already stored still answers the question when the remote cannot be reached.
+    if should_sync_pull_requests(&connection, &host, &repository)? {
+        let _ = sync_pull_requests(&mut connection, &host, &repository);
+    }
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT head_ref, number, state, is_draft, merged_at, title
+            FROM pull_requests
+            WHERE host = ?1 AND repository = ?2 AND head_ref IS NOT NULL
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![host, repository], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                row.get::<_, bool>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .collect();
+    Ok(rank_branch_pull_requests(&host, &repository, rows))
 }
 
 fn fetch_and_sync_repository(repo_path: &str, database_path: PathBuf) -> Result<(), String> {
@@ -1609,6 +1748,15 @@ async fn inferred_squash_merge_edges(repo_path: String) -> Vec<(String, String)>
 async fn fetch_and_sync_pull_requests(repo_path: String) -> Result<(), String> {
     let database_path = pull_request_database_path()?;
     tauri::async_runtime::spawn_blocking(move || fetch_and_sync_repository(&repo_path, database_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command]
+async fn branch_pull_requests(repo_path: String) -> Result<Vec<BranchPullRequest>, String> {
+    let database_path = pull_request_database_path()?;
+    tauri::async_runtime::spawn_blocking(move || pull_requests_by_branch(&repo_path, database_path))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -3054,7 +3202,60 @@ mod tests {
         let version = connection
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
+        connection
+            .execute(
+                "INSERT INTO pull_requests (host, repository, number, head_sha, head_ref, state, title, is_draft, updated_at) VALUES ('github.com', 'octocat/hello-world', 1, 'abc', 'feature', 'open', 'A title', 0, '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn reads_the_branch_and_the_fork_a_pull_request_was_raised_from() {
+        let payload = r#"[{"number":7,"title":"A title","state":"open","draft":true,"merged_at":null,"merge_commit_sha":null,"updated_at":"2026-01-01T00:00:00Z","head":{"ref":"feature","sha":"abc","repo":{"full_name":"someone/hello-world"}}}]"#;
+
+        let pull_requests: Vec<GithubPullRequest> = serde_json::from_str(payload).unwrap();
+
+        assert_eq!(pull_requests[0].head.reference, "feature");
+        assert_eq!(pull_requests[0].head.repo.as_ref().map(|repo| repo.full_name.as_str()), Some("someone/hello-world"));
+        assert!(pull_requests[0].draft);
+    }
+
+    #[test]
+    fn marks_a_branch_with_the_pull_request_that_is_still_open() {
+        let rows = vec![
+            ("feature".to_string(), 1, "closed".to_string(), false, Some("2026-01-01T00:00:00Z".to_string()), "Merged".to_string()),
+            ("feature".to_string(), 2, "open".to_string(), true, None, "Draft".to_string()),
+            ("feature".to_string(), 3, "closed".to_string(), false, None, "Abandoned".to_string()),
+        ];
+
+        let pull_requests = rank_branch_pull_requests("github.com", "octocat/hello-world", rows);
+
+        assert_eq!(
+            pull_requests,
+            vec![BranchPullRequest {
+                branch: "feature".to_string(),
+                number: 2,
+                state: "draft".to_string(),
+                title: "Draft".to_string(),
+                url: "https://github.com/octocat/hello-world/pull/2".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_newest_merged_pull_request_of_a_branch() {
+        let rows = vec![
+            ("feature".to_string(), 4, "closed".to_string(), false, Some("2026-01-01T00:00:00Z".to_string()), "First".to_string()),
+            ("feature".to_string(), 7, "closed".to_string(), false, Some("2026-02-01T00:00:00Z".to_string()), "Second".to_string()),
+            ("feature".to_string(), 9, "closed".to_string(), false, None, "Closed".to_string()),
+        ];
+
+        let pull_requests = rank_branch_pull_requests("github.com", "octocat/hello-world", rows);
+
+        assert_eq!(pull_requests[0].number, 7);
+        assert_eq!(pull_requests[0].state, "merged");
     }
 
     #[test]
@@ -4101,6 +4302,27 @@ fn launch_worktree(path: &str, target: &str) -> Result<(), String> {
     {
         let _ = (path, target);
         Err("Opening worktrees outside Git Nav is currently supported on macOS only.".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("Only https links can be opened.".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&url)
+            .status()
+            .map_err(|error| error.to_string())?
+            .success()
+            .then_some(())
+            .ok_or_else(|| "Could not open the link.".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Opening links outside Git Nav is currently supported on macOS only.".to_string())
     }
 }
 

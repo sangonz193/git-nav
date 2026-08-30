@@ -40,6 +40,16 @@ export type BranchSync = {
   isGone: boolean
 }
 
+export type PullRequestState = "open" | "draft" | "merged" | "closed"
+
+export type BranchPullRequest = {
+  branch: string
+  number: number
+  state: PullRequestState
+  title: string
+  url: string
+}
+
 export type StashEntry = { base: string | null, branch: string | null, date: string, message: string, name: string, sha: string }
 
 export type DisplayRef = {
@@ -47,6 +57,7 @@ export type DisplayRef = {
   label: string
   checkedOut: boolean
   kind: RefKind
+  pullRequest: BranchPullRequest | null
   // For a remote ref, the remote it lives on. For a local branch, the remote it is paired with, if any.
   remote: string | null
   sync: BranchSync | null
@@ -64,6 +75,7 @@ export type RowChip =
 
 export type DisplayRefOptions = {
   branchSync?: Map<string, BranchSync>
+  pullRequests?: Map<string, BranchPullRequest>
   remotes?: string[]
   worktrees?: RowWorktree[]
 }
@@ -102,6 +114,10 @@ const CHIP_FIXED_WIDTH = 32
 const CHIP_CHARACTER_WIDTH = 6.6
 const CHIP_HEAD_WIDTH = 34
 const CHIP_ICON_WIDTH = 15
+// The divider and its padding, the state glyph and the gap after it, none of which depend on the number.
+const CHIP_PULL_REQUEST_WIDTH = 21
+// A pull request number and a sync label are both drawn a size below the ref name they follow.
+const CHIP_MARKER_CHARACTER_WIDTH = 5.2
 const CHIP_MORE_WIDTH = 28
 export const CHIP_GAP = 3
 // Refs share the commit column with the subject, which keeps the rest of it.
@@ -365,8 +381,10 @@ export function chipWidth(chip: RowChip, maxWidth: number) {
     return Math.min(maxWidth, CHIP_FIXED_WIDTH + worktreeMarkerWidth([chip.worktree]) + chip.worktree.name.length * CHIP_CHARACTER_WIDTH)
   }
   const marker = chip.ref.checkedOut ? CHIP_HEAD_WIDTH : 0
-  const text = chip.ref.label.length + (refSyncLabel(chip.ref)?.length ?? 0)
-  return Math.min(maxWidth, CHIP_FIXED_WIDTH + marker + worktreeMarkerWidth(chip.ref.worktrees) + text * CHIP_CHARACTER_WIDTH)
+  const pullRequest = pullRequestLabel(chip.ref)
+  const badge = pullRequest ? CHIP_PULL_REQUEST_WIDTH + pullRequest.length * CHIP_MARKER_CHARACTER_WIDTH : 0
+  const sync = (refSyncLabel(chip.ref)?.length ?? 0) * CHIP_MARKER_CHARACTER_WIDTH
+  return Math.min(maxWidth, CHIP_FIXED_WIDTH + marker + badge + sync + worktreeMarkerWidth(chip.ref.worktrees) + chip.ref.label.length * CHIP_CHARACTER_WIDTH)
 }
 
 function chipsWidth(chips: RowChip[], maxWidth: number) {
@@ -432,6 +450,16 @@ function refPriority(ref: DisplayRef) {
   return CHIP_PRIORITY[ref.kind]
 }
 
+const PULL_REQUEST_STATE_LABELS: Record<PullRequestState, string> = { open: "Open", draft: "Draft", merged: "Merged", closed: "Closed" }
+
+export function pullRequestLabel({ pullRequest }: DisplayRef) {
+  return pullRequest ? `#${pullRequest.number}` : null
+}
+
+export function pullRequestDescription({ pullRequest }: DisplayRef) {
+  return pullRequest ? `#${pullRequest.number} ${PULL_REQUEST_STATE_LABELS[pullRequest.state]} · ${pullRequest.title}` : null
+}
+
 export function refSyncLabel({ sync }: DisplayRef) {
   if (!sync) {
     return null
@@ -460,6 +488,13 @@ export function syncDescription({ sync }: DisplayRef) {
   return counts.length > 0 ? `${sync.upstream}: ${counts.join(", ")}` : `In sync with ${sync.upstream}`
 }
 
+// A pull request is raised from a branch name, which a ref that only exists on a remote carries behind the
+// name of that remote.
+function pullRequestOf(ref: string, remote: string | null, pullRequests: Map<string, BranchPullRequest> | undefined) {
+  const branch = remote ? ref.slice(remote.length + 1) : ref
+  return pullRequests?.get(branch) ?? null
+}
+
 // Which remote a ref belongs to can only be read from the remotes the repository actually has, since a remote
 // is named freely and "upstream/main" is indistinguishable from a branch called that.
 function remoteOf(ref: string, remotes: string[]) {
@@ -478,7 +513,7 @@ function trackedRemote(branch: string, branchRefs: string[], remotes: string[], 
   return remote ? { remote, ref: `${remote}/${branch}` } : null
 }
 
-export function displayRefs(refs: string[], { branchSync, remotes = DEFAULT_REMOTES, worktrees = [] }: DisplayRefOptions = {}) {
+export function displayRefs(refs: string[], { branchSync, pullRequests, remotes = DEFAULT_REMOTES, worktrees = [] }: DisplayRefOptions = {}) {
   const checkedOut = refs.find((ref) => ref.startsWith("HEAD -> "))?.slice("HEAD -> ".length)
   const branchRefs = refs.filter((ref) => !ref.startsWith("HEAD -> ") && !ref.startsWith("tag: "))
   const localBranches = new Set(branchRefs.filter((ref) => !remoteOf(ref, remotes)))
@@ -495,25 +530,25 @@ export function displayRefs(refs: string[], { branchSync, remotes = DEFAULT_REMO
     if (tracking) {
       consumed.add(tracking.ref)
     }
-    result.push({ branch, label: tracking ? `${branch} · ${tracking.remote}` : branch, checkedOut: branch === checkedOut, kind: "branch", remote: tracking?.remote ?? null, sync, worktrees: worktrees.filter((worktree) => worktree.branch === branch) })
+    result.push({ branch, label: tracking ? `${branch} · ${tracking.remote}` : branch, checkedOut: branch === checkedOut, kind: "branch", pullRequest: pullRequests?.get(branch) ?? null, remote: tracking?.remote ?? null, sync, worktrees: worktrees.filter((worktree) => worktree.branch === branch) })
   }
 
   for (const ref of branchRefs) {
     const remote = remoteOf(ref, remotes)
     if (!consumed.has(ref) && ref !== `${remote}/HEAD`) {
-      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, kind: remote ? "remote" : "branch", remote, sync: null, worktrees: [] })
+      result.push({ branch: null, label: ref, checkedOut: ref === checkedOut, kind: remote ? "remote" : "branch", pullRequest: pullRequestOf(ref, remote, pullRequests), remote, sync: null, worktrees: [] })
     }
   }
 
   for (const ref of refs) {
     if (ref.startsWith("tag: ")) {
-      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, kind: "tag", remote: null, sync: null, worktrees: [] })
+      result.push({ branch: null, label: ref.slice("tag: ".length), checkedOut: false, kind: "tag", pullRequest: null, remote: null, sync: null, worktrees: [] })
     }
   }
 
   const checkedOutRemote = checkedOut && remoteOf(checkedOut, remotes)
   if (checkedOut && checkedOutRemote) {
-    result.push({ branch: null, label: checkedOut, checkedOut: true, kind: "remote", remote: checkedOutRemote, sync: null, worktrees: [] })
+    result.push({ branch: null, label: checkedOut, checkedOut: true, kind: "remote", pullRequest: pullRequestOf(checkedOut, checkedOutRemote, pullRequests), remote: checkedOutRemote, sync: null, worktrees: [] })
   }
 
   return result.sort((a, b) => refPriority(a) - refPriority(b))

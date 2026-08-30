@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 
-import { detachedWorktrees, displayRefs, isCurrentCheckout, rowChips, type BranchSync, type Commit, type RowChip, type RowWorktree, type StashEntry } from "./commit-graph"
+import { detachedWorktrees, displayRefs, isCurrentCheckout, rowChips, type BranchPullRequest, type BranchSync, type Commit, type RowChip, type RowWorktree, type StashEntry } from "./commit-graph"
 
 export type ChipKind = "branch" | "remote" | "stash" | "tag"
 export type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBranches: boolean, deleteSquashMergedBranches: boolean }
@@ -58,6 +58,7 @@ export function useViewConfig() {
 export type ChipContext = {
   branchSync: Map<string, BranchSync>
   chipKinds: Record<ChipKind, boolean>
+  pullRequests: Map<string, BranchPullRequest>
   remotes: string[] | undefined
   stashesByBase: Map<string, StashEntry[]>
   worktreesByHead: Map<string, RowWorktree[]>
@@ -71,9 +72,9 @@ function isPinnedChip(chip: RowChip) {
   return chip.kind !== "stash" && (chip.ref.checkedOut || chip.ref.worktrees.length > 0)
 }
 
-export function commitChips(commit: Commit, { branchSync, chipKinds, remotes, stashesByBase, worktreesByHead }: ChipContext) {
+export function commitChips(commit: Commit, { branchSync, chipKinds, pullRequests, remotes, stashesByBase, worktreesByHead }: ChipContext) {
   const worktrees = worktreesByHead.get(commit.hash) ?? []
-  const refs = displayRefs(commit.refs, { branchSync, remotes, worktrees })
+  const refs = displayRefs(commit.refs, { branchSync, pullRequests, remotes, worktrees })
   const chips = rowChips(refs, stashesByBase.get(commit.hash), detachedWorktrees(refs, worktrees))
   return chips.filter((chip) => chip.kind === "worktree" || isPinnedChip(chip) || chipKinds[chip.kind])
 }

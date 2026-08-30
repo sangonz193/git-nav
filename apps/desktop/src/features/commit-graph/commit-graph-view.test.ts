@@ -32,6 +32,7 @@ function context(overrides: Partial<ChipContext> = {}): ChipContext {
   return {
     branchSync: new Map(),
     chipKinds: DEFAULT_VIEW_CONFIG.chipKinds,
+    pullRequests: new Map(),
     remotes: ["origin"],
     stashesByBase: new Map(),
     worktreesByHead: new Map(),

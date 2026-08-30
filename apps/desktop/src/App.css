@@ -446,7 +446,46 @@ body {
 .commit-ref-sync {
   color: var(--muted-foreground);
   flex: none;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* The pull request a branch carries is state, not identity, so it is divided off from the name and reads a
+   size below it. The glyph is what carries the state, which leaves the number quiet and legible without
+   colour. */
+.commit-ref-pull-request {
+  align-items: center;
+  border-left: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  flex: none;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  gap: 2px;
+  margin-left: 2px;
+  padding-left: 5px;
+}
+
+/* A chip kind that recolours its icons, as a remote chip does, would otherwise reach the state glyph too. */
+.commit-ref .commit-ref-pull-request svg {
+  height: 11px;
+  width: 11px;
+}
+
+.commit-ref .commit-ref-pull-request-open svg {
+  color: #34d399;
+}
+
+.commit-ref .commit-ref-pull-request-draft svg {
+  color: #a1a1aa;
+}
+
+.commit-ref .commit-ref-pull-request-merged svg {
+  color: #a78bfa;
+}
+
+.commit-ref .commit-ref-pull-request-closed svg {
+  color: #f87171;
 }
 
 /* An upstream that was deleted is the one genuinely stale thing a chip can report. */

@@ -17,6 +17,8 @@ import {
   isCurrentCheckout,
   laneColor,
   parentEdgeColor,
+  pullRequestDescription,
+  pullRequestLabel,
   refSelection,
   refSyncLabel,
   relativeDate,
@@ -29,6 +31,7 @@ import {
   unpushedLanes,
   visibleChipCount,
   worktreeChanges,
+  type BranchPullRequest,
   type BranchSync,
   type RowWorktree,
   type StashEntry,
@@ -186,6 +189,7 @@ describe("displayRefs", () => {
         label: "main · origin",
         checkedOut: false,
         kind: "branch",
+        pullRequest: null,
         remote: "origin",
         sync: null,
         worktrees: [],
@@ -215,6 +219,7 @@ describe("displayRefs", () => {
         label: "feature",
         checkedOut: true,
         kind: "branch",
+        pullRequest: null,
         remote: null,
         sync: null,
         worktrees: [],
@@ -229,6 +234,7 @@ describe("displayRefs", () => {
         label: "origin/main",
         checkedOut: true,
         kind: "remote",
+        pullRequest: null,
         remote: "origin",
         sync: null,
         worktrees: [],
@@ -243,6 +249,7 @@ describe("displayRefs", () => {
         label: "main",
         checkedOut: false,
         kind: "branch",
+        pullRequest: null,
         remote: null,
         sync: null,
         worktrees: [],
@@ -252,6 +259,7 @@ describe("displayRefs", () => {
         label: "v1.0.0",
         checkedOut: false,
         kind: "tag",
+        pullRequest: null,
         remote: null,
         sync: null,
         worktrees: [],
@@ -617,6 +625,41 @@ describe("branch sync", () => {
   test("reports no state without sync data", () => {
     expect(refSyncLabel(ref(null))).toBe(null)
     expect(syncDescription(ref(null))).toBe(null)
+  })
+})
+
+describe("branch pull requests", () => {
+  const pullRequest = (overrides: Partial<BranchPullRequest> = {}): BranchPullRequest => ({
+    branch: "feature",
+    number: 12,
+    state: "open",
+    title: "Add the thing",
+    url: "https://github.com/octocat/hello-world/pull/12",
+    ...overrides,
+  })
+  const pullRequests = (...entries: BranchPullRequest[]) => new Map(entries.map((entry) => [entry.branch, entry]))
+
+  test("marks the branch a pull request was raised from", () => {
+    const refs = displayRefs(["feature", "origin/feature"], { pullRequests: pullRequests(pullRequest()) })
+    expect(pullRequestLabel(refs[0])).toBe("#12")
+    expect(pullRequestDescription(refs[0])).toBe("#12 Open · Add the thing")
+  })
+
+  test("marks a branch that only exists on a remote", () => {
+    const refs = displayRefs(["origin/feature"], { pullRequests: pullRequests(pullRequest({ state: "draft" })) })
+    expect(pullRequestLabel(refs[0])).toBe("#12")
+    expect(pullRequestDescription(refs[0])).toBe("#12 Draft · Add the thing")
+  })
+
+  test("leaves tags and unrelated branches unmarked", () => {
+    const refs = displayRefs(["main", "tag: v1"], { pullRequests: pullRequests(pullRequest()) })
+    expect(refs.map(pullRequestLabel)).toEqual([null, null])
+  })
+
+  test("counts the number towards the width a chip needs", () => {
+    const [marked] = rowChips(displayRefs(["feature"], { pullRequests: pullRequests(pullRequest()) }))
+    const [plain] = rowChips(displayRefs(["feature"]))
+    expect(chipWidth(marked, 460)).toBeGreaterThan(chipWidth(plain, 460))
   })
 })
 

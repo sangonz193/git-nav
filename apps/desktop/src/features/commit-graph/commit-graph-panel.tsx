@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
 import { invoke, isDesktop, stream } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
-import { openWorktree, type WorktreeTarget } from "@/lib/navigation"
+import { openPullRequest, openWorktree, type WorktreeTarget } from "@/lib/navigation"
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
@@ -11,11 +11,11 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, Con
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, Cloud, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Tag, Terminal, Undo2, X } from "lucide-react"
+import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, Cloud, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Tag, Terminal, Undo2, X } from "lucide-react"
 import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
+import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
 import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit } from "./commit-graph-view"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
@@ -47,6 +47,7 @@ const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Labe
 const SELECTION_LABELS = { branch: "Branch", remote: "Remote branch", tag: "Tag" }
 const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
 const CHIP_ICONS = { branch: GitBranch, remote: Cloud, stash: Archive, tag: Tag, worktree: AppWindow }
+const PULL_REQUEST_ICONS = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed }
 function Hinted({ children, hint }: { children: ReactNode, hint: string }) {
   return (
     <Tooltip>
@@ -83,6 +84,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(false)
   const [projectWorktrees, setProjectWorktrees] = useState<ProjectWorktree[]>([])
   const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(new Map())
+  const [pullRequests, setPullRequests] = useState<Map<string, BranchPullRequest>>(new Map())
   const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(null)
   const [selectedRef, setSelectedRef] = useState<SelectedRef | null>(null)
@@ -199,9 +201,9 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       return commitsSelection
     }
     const commit = commits.find((candidate) => candidate.hash === selectedRef.sha)
-    const ref = commit && displayRefs(commit.refs, { branchSync, remotes, worktrees: worktreesByHead.get(selectedRef.sha) }).find((candidate) => refName(candidate) === refName(selectedRef.ref))
+    const ref = commit && displayRefs(commit.refs, { branchSync, pullRequests, remotes, worktrees: worktreesByHead.get(selectedRef.sha) }).find((candidate) => refName(candidate) === refName(selectedRef.ref))
     return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
-  }, [branchSync, commits, commitsSelection, remotes, selectedRef, worktreesByHead])
+  }, [branchSync, commits, commitsSelection, pullRequests, remotes, selectedRef, worktreesByHead])
   const selectedHashes = useMemo(() => new Set(commitsSelection?.commits.map((commit) => commit.hash)), [commitsSelection])
   const selectionEndpointIndexes = useMemo(() => selectionRange
     ? { anchor: commits.findIndex((commit) => commit.hash === selectionRange.anchorHash), focus: commits.findIndex((commit) => commit.hash === selectionRange.focusHash) }
@@ -233,8 +235,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const unpushed = useMemo(() => unpushedHashes(commits, remotes), [commits, remotes])
   const unpushedLaneMasks = useMemo(() => unpushedLanes(commits, unpushed), [commits, unpushed])
   const chipContext = useMemo<ChipContext>(
-    () => ({ branchSync, chipKinds: config.chipKinds, remotes, stashesByBase, worktreesByHead }),
-    [branchSync, config.chipKinds, remotes, stashesByBase, worktreesByHead]
+    () => ({ branchSync, chipKinds: config.chipKinds, pullRequests, remotes, stashesByBase, worktreesByHead }),
+    [branchSync, config.chipKinds, pullRequests, remotes, stashesByBase, worktreesByHead]
   )
   // Worktrees and stashes are re-read on a timer and land as fresh maps every time, so what a run collapses
   // on is held by its contents. Rebuilding the rows for a poll that changed nothing would walk the whole
@@ -370,6 +372,10 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   })
   const openWorktreeMutation = useMutation({
     mutationFn: ({ path, target }: { path: string, target: WorktreeTarget }) => openWorktree(path, target),
+    onError: (message) => setError(String(message)),
+  })
+  const openPullRequestMutation = useMutation({
+    mutationFn: (url: string) => openPullRequest(url),
     onError: (message) => setError(String(message)),
   })
   const undoMutation = useMutation({
@@ -621,6 +627,28 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     }
   }, [params.path, refreshWorktreeStatus])
 
+  // The backend answers from what it has already stored and refreshes from GitHub on its own interval, so a
+  // poll costs a read whether or not it lands on one of those refreshes.
+  useEffect(() => {
+    let disposed = false
+    const refresh = () => {
+      invoke<BranchPullRequest[]>("branch_pull_requests", { repoPath: params.path })
+        .then((entries) => {
+          if (!disposed) {
+            setPullRequests(new Map(entries.map((entry) => [entry.branch, entry])))
+          }
+        })
+        .catch(() => undefined)
+    }
+
+    refresh()
+    const interval = window.setInterval(refresh, PULL_REQUEST_SYNC_INTERVAL)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+    }
+  }, [graphVersion, params.path])
+
   useEffect(() => {
     if (!selection) {
       return
@@ -755,7 +783,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       setSelectedRef(null)
       setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
     } else {
-      const ref = displayRefs(commit.refs, { branchSync, remotes, worktrees: worktreesByHead.get(commit.hash) }).find((candidate) => refName(candidate) === hit.label)
+      const ref = displayRefs(commit.refs, { branchSync, pullRequests, remotes, worktrees: worktreesByHead.get(commit.hash) }).find((candidate) => refName(candidate) === hit.label)
       if (ref) {
         setSelectionRange(null)
         setSelectedRef({ ref, sha: commit.hash })
@@ -1032,6 +1060,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   function refMenuItems(ref: DisplayRef, sha: string, components: RefMenuComponents) {
     const { Item, Sub, SubContent, SubTrigger } = components
     const reference = refName(ref)
+    const pullRequest = ref.pullRequest
     return (
       <>
         {menuHeader(components, reference, syncDescription(ref) ?? SELECTION_LABELS[ref.kind])}
@@ -1044,6 +1073,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           <Copy />
           Copy ref name
         </Item>
+        {pullRequest && (
+          <Item onSelect={() => openPullRequestMutation.mutate(pullRequest.url)}>
+            <GitPullRequest />
+            {`Open pull request #${pullRequest.number}`}
+          </Item>
+        )}
         {ref.worktrees.length > 0 && (
           <Sub>
             <SubTrigger>
@@ -1231,7 +1266,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if (chip.kind === "worktree") {
       return worktreeDescription(chip.worktree)
     }
-    return [chip.ref.label, syncDescription(chip.ref), ...chip.ref.worktrees.map(worktreeDescription)].filter(Boolean).join("\n")
+    return [chip.ref.label, pullRequestDescription(chip.ref), syncDescription(chip.ref), ...chip.ref.worktrees.map(worktreeDescription)].filter(Boolean).join("\n")
   }
 
   function rowChip(chip: RowChip, sha: string, key?: string) {
@@ -1241,6 +1276,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     // name read the other way round and keep their opening characters instead.
     const { start, end } = ref ? splitRefLabel(ref.label) : { start: chipLabel(chip), end: "" }
     const sync = ref && refSyncLabel(ref)
+    const pullRequest = ref?.pullRequest ?? null
+    const PullRequestIcon = PULL_REQUEST_ICONS[pullRequest?.state ?? "open"]
     // A worktree holding no branch is a chip of its own; one holding a branch is a marker inside that chip.
     const chipWorktrees = chip.kind === "worktree" ? [chip.worktree] : ref?.worktrees ?? []
     const selected = ref !== null && selectedRef !== null && refName(selectedRef.ref) === refName(ref) && selectedRef.sha === sha
@@ -1282,6 +1319,12 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
               <span className="commit-ref-label-start">{start}</span>
               {end && <span className="commit-ref-label-end">{end}</span>}
             </span>
+                {pullRequest && (
+                  <span className={`commit-ref-pull-request commit-ref-pull-request-${pullRequest.state}`}>
+                    <PullRequestIcon />
+                    {`#${pullRequest.number}`}
+                  </span>
+                )}
                 {sync && <span className={`commit-ref-sync${ref?.sync?.isGone ? " commit-ref-sync-gone" : ""}`}>{sync}</span>}
               </button>
             </TooltipTrigger>
