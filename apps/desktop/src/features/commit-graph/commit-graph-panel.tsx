@@ -17,6 +17,7 @@ import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboard
 import { drawCommitGraph } from "./commit-graph-canvas"
 import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
 import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit } from "./commit-graph-view"
+import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
@@ -270,6 +271,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
   const searchHits = useMemo(
     () => isSearchOpen ? searchGraph(commits, searchQuery, { remotes, stashesByBase }) : [],
     [commits, isSearchOpen, remotes, searchQuery, stashesByBase]
+  )
+  const searchMenuItems = useMemo(
+    () => searchHits.map((hit): SearchMenuItem => ({
+      detail: hit.detail,
+      icon: hit.kind === "commit" ? GitCompareArrows : CHIP_ICONS[hit.kind],
+      key: `${hit.kind}-${hit.commitIndex}-${hit.label}`,
+      label: hit.label,
+    })),
+    [searchHits]
   )
   const cleanCandidateCount = cleanPreview?.length ?? 0
   const rowCount = rows ? rows.length : commits.length
@@ -746,31 +756,6 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     if ((event.metaKey || event.ctrlKey) && event.key === "f") {
       event.preventDefault()
       openSearch()
-    }
-  }
-
-  function onSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Escape") {
-      // The graph clears its selection on Escape, which is not what closing this bar is asking for.
-      event.stopPropagation()
-      setIsSearchOpen(false)
-      return
-    }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault()
-      if (searchHits.length === 0) {
-        return
-      }
-      const step = event.key === "ArrowDown" ? 1 : searchHits.length - 1
-      const next = (searchHitIndex + step) % searchHits.length
-      setSearchHitIndex(next)
-      activateSearchHit(searchHits[next])
-      return
-    }
-    if (event.key === "Enter" && searchHits[searchHitIndex]) {
-      event.preventDefault()
-      activateSearchHit(searchHits[searchHitIndex])
-      setIsSearchOpen(false)
     }
   }
 
@@ -1454,47 +1439,28 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         </div>
       </div>
       {isSearchOpen && (
-        <div className="absolute top-11 right-2 z-10 w-80 overflow-hidden rounded-lg border bg-background shadow-lg">
-          <div className="flex items-center gap-1 border-b px-2 py-1">
-            <Search className="size-3.5 shrink-0 text-muted-foreground" />
-            <input
-              aria-label="Search refs and commits"
-              className="h-7 min-w-0 flex-1 bg-transparent text-sm outline-none"
-              onChange={(event) => setSearchInput(event.target.value)}
-              onKeyDown={onSearchKeyDown}
-              placeholder="Branch, tag or commit"
-              ref={searchField}
-              value={searchInput}
-            />
-            {searchHits.length > 0 && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{`${searchHitIndex + 1}/${searchHits.length}`}</span>}
-            <Button aria-label="Close search" onClick={() => setIsSearchOpen(false)} size="icon-xs" type="button" variant="ghost">
-              <X />
-            </Button>
-          </div>
-          <ul className="max-h-64 overflow-y-auto p-1">
-            {searchHits.map((hit, index) => {
-              const Icon = hit.kind === "commit" ? GitCompareArrows : CHIP_ICONS[hit.kind]
-              return (
-                <li key={`${hit.kind}-${hit.commitIndex}-${hit.label}`}>
-                  <button
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left ${index === searchHitIndex ? "bg-accent text-accent-foreground" : ""}`}
-                    onClick={() => {
-                      setSearchHitIndex(index)
-                      activateSearchHit(hit)
-                    }}
-                    type="button"
-                  >
-                    <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm">{hit.label}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{hit.detail}</span>
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
-            {searchQuery.trim() !== "" && searchHits.length === 0 && <li className="px-2 py-1 text-sm text-muted-foreground">No matches</li>}
-          </ul>
+        <div className="absolute top-11 right-2 z-10 w-80">
+          <SearchMenu
+            activeIndex={searchHitIndex}
+            inputLabel="Search refs and commits"
+            inputRef={searchField}
+            items={searchMenuItems}
+            onClose={() => setIsSearchOpen(false)}
+            onHighlight={(index) => {
+              setSearchHitIndex(index)
+              activateSearchHit(searchHits[index])
+            }}
+            onQueryChange={setSearchInput}
+            onSelect={(index, source) => {
+              setSearchHitIndex(index)
+              activateSearchHit(searchHits[index])
+              if (source === "enter") {
+                setIsSearchOpen(false)
+              }
+            }}
+            placeholder="Branch, tag or commit"
+            query={searchInput}
+          />
         </div>
       )}
       <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--commit-row-height": `${rowHeight}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>

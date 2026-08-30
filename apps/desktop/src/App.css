@@ -76,7 +76,6 @@ body {
 /* Without this the panels hand their overscroll to the viewport, which pulls to refresh on touch. */
 .commit-graph-scroll,
 .diff-file-list,
-.diff-picker-scroll,
 .diff-view-container {
   overscroll-behavior: contain;
 }
@@ -710,136 +709,51 @@ button.commit-ref {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  position: relative;
 }
 
 .diff-toolbar {
   align-items: center;
-  border-bottom: 1px solid rgb(255 255 255 / 8%);
+  border-bottom: 1px solid var(--border);
   display: flex;
-  gap: 8px;
-  padding: 8px 12px;
-}
-
-.diff-reference-picker {
-  position: relative;
-}
-
-.diff-picker-menu {
-  background: #0d0d0f;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 8px;
-  box-shadow: 0 16px 40px rgb(0 0 0 / 50%);
-  left: 0;
-  overflow: hidden;
-  position: absolute;
-  top: calc(100% + 6px);
-  width: min(720px, calc(100vw - 32px));
-  z-index: 10;
-}
-
-.diff-picker-header {
-  border-bottom: 1px solid rgb(255 255 255 / 8%);
-  color: #a1a1aa;
-  padding: 9px 12px;
-}
-
-.diff-picker-graph-header {
-  color: #a1a1aa;
-  display: grid;
-  font-size: 0.75rem;
-  font-weight: 600;
-  grid-template-columns: 112px 260px minmax(220px, 1fr) 84px;
-  min-width: 676px;
-  padding: 8px 0;
-  text-transform: uppercase;
-}
-
-.diff-picker-graph-header > * {
-  padding: 0 8px;
-}
-
-.diff-picker-scroll {
-  height: min(560px, calc(100vh - 190px));
-  overflow: auto;
-}
-
-.diff-picker-space {
-  min-width: 676px;
-  position: relative;
-}
-
-.diff-picker-graph-canvas {
-  left: auto;
-  pointer-events: none;
-  position: sticky;
-  top: 0;
-  width: 112px;
-  z-index: 1;
-}
-
-.diff-picker-row {
-  align-items: center;
-  border-bottom: 1px solid rgb(255 255 255 / 4%);
-  cursor: pointer;
-  display: grid;
-  grid-template-columns: 260px minmax(220px, 1fr) 84px;
-  height: 32px;
-  left: 112px;
-  position: absolute;
-  right: 0;
-  top: 0;
-}
-
-.diff-picker-row:hover {
-  background: rgb(255 255 255 / 4%);
-}
-
-.diff-picker-row > * {
-  min-width: 0;
-  padding: 0 8px;
-}
-
-.diff-picker-row-refs {
-  display: flex;
-  gap: 3px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.diff-picker-ref {
-  align-items: center;
-  background: color-mix(in srgb, var(--commit-ref-color) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--commit-ref-color) 34%, transparent);
-  border-radius: 4px;
-  color: var(--commit-ref-color);
-  display: inline-flex;
-  gap: 3px;
-  font: inherit;
-  overflow: hidden;
-  padding: 1px 4px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.diff-picker-ref:hover {
-  background: color-mix(in srgb, var(--commit-ref-color) 26%, transparent);
-}
-
-.diff-picker-empty {
-  color: #a1a1aa;
-  padding: 16px;
+  gap: 4px;
+  padding: 4px 8px;
 }
 
 .diff-content {
   flex: 1;
   min-height: 0;
+  position: relative;
+}
+
+.diff-drawer-backdrop {
+  background: rgb(0 0 0 / 45%);
+  inset: 0;
+  position: absolute;
+  z-index: 4;
+}
+
+.diff-drawer {
+  background: var(--background);
+  border-right: 1px solid var(--border);
+  bottom: 0;
+  box-shadow: 8px 0 24px rgb(0 0 0 / 35%);
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: min(320px, 80%);
+  z-index: 5;
 }
 
 .diff-file-list {
-  border-right: 1px solid rgb(255 255 255 / 8%);
+  border-right: 1px solid var(--border);
   height: 100%;
   overflow: auto;
-  padding: 6px;
+  padding: 4px;
+}
+
+.diff-drawer .diff-file-list {
+  border-right: 0;
 }
 
 .diff-file {
@@ -848,15 +762,19 @@ button.commit-ref {
   color: inherit;
   display: flex;
   font: inherit;
-  gap: 8px;
-  padding: 7px 8px;
+  gap: 6px;
+  padding: 4px 8px;
   text-align: left;
   width: 100%;
 }
 
-.diff-file:hover,
+.diff-file:hover {
+  background: var(--muted);
+}
+
 .diff-file.is-selected {
-  background: rgb(255 255 255 / 8%);
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .diff-folder-button {
@@ -865,27 +783,35 @@ button.commit-ref {
   color: inherit;
   display: flex;
   font: inherit;
-  gap: 6px;
-  padding-block: 6px;
+  gap: 4px;
+  padding-block: 4px;
   padding-right: 8px;
   text-align: left;
   width: 100%;
 }
 
 .diff-folder-button:hover {
-  background: rgb(255 255 255 / 8%);
+  background: var(--muted);
 }
 
 .diff-folder-button svg {
-  color: #a1a1aa;
+  color: var(--muted-foreground);
   flex: 0 0 auto;
 }
 
+/* A finger needs more than a pointer does, and the tree is the panel's only list to hit. */
+@media (pointer: coarse) {
+  .diff-file,
+  .diff-folder-button {
+    padding-block: 8px;
+  }
+}
+
 .diff-file-status {
-  color: #60a5fa;
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   font-weight: 700;
+  text-align: center;
   width: 12px;
 }
 
@@ -908,28 +834,30 @@ button.commit-ref {
 }
 
 .diff-file-card {
-  border-bottom: 1px solid rgb(255 255 255 / 8%);
+  border-bottom: 1px solid var(--border);
 }
 
 .diff-file-card-header {
   align-items: center;
-  background: #131316;
-  border-bottom: 1px solid rgb(255 255 255 / 8%);
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
   display: flex;
-  gap: 8px;
-  height: 34px;
-  padding: 0 12px;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
   position: sticky;
   top: 0;
   z-index: 2;
 }
 
 .diff-file-card-path {
+  font-size: 0.8125rem;
   min-width: 0;
 }
 
 .diff-file-card-stat {
   display: flex;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   gap: 6px;
   margin-left: auto;
@@ -937,14 +865,15 @@ button.commit-ref {
 
 .diff-file-card-notice {
   align-items: center;
-  color: #a1a1aa;
+  color: var(--muted-foreground);
   display: flex;
   gap: 12px;
-  height: 44px;
-  padding: 0 12px;
+  height: 40px;
+  padding: 0 8px;
 }
 
 .diff-empty {
-  color: #a1a1aa;
-  padding: 20px;
+  color: var(--muted-foreground);
+  padding: 16px;
 }
+

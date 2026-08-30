@@ -133,6 +133,8 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::delete_branch => Exposure::Api(post(crate::__http_delete_branch)),
         IpcCommand::compare_refs => Exposure::Api(post(crate::__http_compare_refs)),
         IpcCommand::reference_picker_commits => Exposure::Api(post(crate::__http_reference_picker_commits)),
+        IpcCommand::repository_references => Exposure::Api(post(crate::__http_repository_references)),
+        IpcCommand::resolve_revision => Exposure::Api(post(crate::__http_resolve_revision)),
         IpcCommand::select_branch_range => Exposure::Api(post(crate::__http_select_branch_range)),
         IpcCommand::diff_file => Exposure::Api(post(crate::__http_diff_file)),
         IpcCommand::predict_rebase_conflicts => Exposure::Api(post(crate::__http_predict_rebase_conflicts)),
