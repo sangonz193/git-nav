@@ -66,8 +66,14 @@
 }
 
 .git-nav-dockview-theme .dv-right-actions-container {
-  align-items: center;
   padding: 0 8px 0 4px;
+}
+
+/* Dockview stretches its react mount to the strip height, so the action has to centre itself inside it. */
+.git-nav-dockview-theme .dv-right-actions-container .dv-react-part {
+  align-items: center;
+  display: flex;
+  justify-content: center;
 }
 
 .git-nav-dockview-theme .dv-void-container {
