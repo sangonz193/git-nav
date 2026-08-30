@@ -1009,9 +1009,17 @@ fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String
     let protected = ["main", "master", primary_branch]
         .into_iter()
         .collect::<HashSet<_>>();
+    // Reachability is asked of git once for every branch at a time, since this runs on every repository
+    // change rather than only when the cleanup dialog is opened.
     let refs = git_output_allow_empty(
         repo_path,
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        &[
+            "for-each-ref",
+            "--merged",
+            &primary,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ],
     )?;
     let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
     let checked_out = parse_worktree_records(&worktrees)
@@ -1023,12 +1031,6 @@ fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String
     Ok(refs
         .lines()
         .filter(|branch| !protected.contains(branch) && !checked_out.contains(*branch))
-        .filter(|branch| {
-            git_succeeds(
-                repo_path,
-                &["merge-base", "--is-ancestor", branch, &primary],
-            )
-        })
         .map(str::to_string)
         .collect())
 }
