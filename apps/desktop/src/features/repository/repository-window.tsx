@@ -2,7 +2,6 @@ import {
   DockviewReact,
   type IDockviewHeaderActionsProps,
   type IWatermarkPanelProps,
-  themeDark,
 } from "dockview-react"
 import { GitCompareArrows, GitGraph, Plus } from "lucide-react"
 import { createContext, useContext } from "react"
@@ -63,7 +62,7 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label="New tab"
-        className="flex size-[34px] items-center justify-center rounded-[9px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100 data-[state=open]:bg-zinc-800 data-[state=open]:text-zinc-100"
+        className="flex size-[34px] items-center justify-center rounded-[9px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
       >
         <Plus className="size-4" />
       </DropdownMenuTrigger>
@@ -103,7 +102,7 @@ const repositoryPanels = {
 }
 
 const repositoryDockviewTheme = {
-  ...themeDark,
+  name: "git-nav",
   className: "git-nav-dockview-theme",
   dndOverlayBorder: "2px solid #3b82f6",
   dndOverlayMounting: "absolute" as const,
