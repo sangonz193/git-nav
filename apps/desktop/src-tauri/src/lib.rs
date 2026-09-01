@@ -11,8 +11,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    ipc::Channel, webview::PageLoadEvent, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
-    WindowEvent,
+    ipc::Channel, window::Color, AppHandle, Manager, RunEvent, Theme, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 mod server;
@@ -1440,6 +1440,24 @@ fn project_snapshot(
     project_at(&path, &open_worktrees)
 }
 
+/// The two `html` background colours from index.html, so a window carries the page's own surface from the
+/// moment it appears rather than the platform default.
+fn theme_background(theme: Theme) -> Color {
+    match theme {
+        Theme::Dark => Color(10, 10, 10, 255),
+        _ => Color(255, 255, 255, 255),
+    }
+}
+
+fn reveal_window(window: &WebviewWindow) -> Result<(), String> {
+    let theme = window.theme().unwrap_or(Theme::Light);
+    window
+        .set_background_color(Some(theme_background(theme)))
+        .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
 fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
     let project = remember_repository(path, &app.state::<OpenWorktrees>())?;
     let worktree_path = worktree_path(path)?;
@@ -1463,6 +1481,7 @@ fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
             .visible(false)
             .build()
             .map_err(|error| error.to_string())?;
+        reveal_window(&window)?;
         window.on_window_event({
             let app = app.clone();
             let label = label.clone();
@@ -4542,17 +4561,14 @@ pub fn run() {
     }
 
     builder
-        .on_page_load(|webview, payload| {
-            if matches!(payload.event(), PageLoadEvent::Finished) {
-                let _ = webview.window().show();
-            }
-        })
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenWorktrees::default())
         .invoke_handler(invoke_handler())
         .setup(move |app| {
             if let Some(path) = &repository_path {
                 open_repository_window(app.handle(), path)?;
+            } else if let Some(window) = app.get_webview_window("main") {
+                reveal_window(&window)?;
             }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -4563,6 +4579,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // macOS only grants the process activation once the run loop is going, so a shell-launched
+            // app has to claim the foreground here rather than while its window is being built.
+            if matches!(event, RunEvent::Ready) {
+                if let Some(window) = app.webview_windows().values().next() {
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }
