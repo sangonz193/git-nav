@@ -14,7 +14,7 @@ function repositoryPath() {
 
 export function App() {
   const path = repositoryPath()
-  const { theme } = useTheme()
+  const theme = useTheme()
 
   return (
     // A tooltip opens on hover after a beat, and again without one while the pointer stays among neighbours.

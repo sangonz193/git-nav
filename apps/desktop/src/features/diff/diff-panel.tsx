@@ -341,7 +341,7 @@ function FileDiffCard({ entry, expanded, file, mode, onExpand, theme, wrap }: { 
 }
 
 export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
-  const { theme } = useTheme()
+  const theme = useTheme()
   const [refs, setRefs] = useState<SelectedRefs>({
     base: params.baseRef,
     head: params.headRef,
@@ -370,7 +370,6 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
   const sources = useReferenceSources(params.path, picker !== null, version)
   const tree = useMemo(() => fileTree(comparison?.files ?? []), [comparison])
   const files = useMemo(() => flattenTree(tree), [tree])
-  const diffTheme = theme === "light" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark"
 
   const rowVirtualizer = useVirtualizer({
     count: files.length,
@@ -570,7 +569,7 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
                 file={file}
                 mode={mode}
                 onExpand={() => setExpanded((current) => new Set(current).add(fileKey(file)))}
-                theme={diffTheme}
+                theme={theme}
                 wrap={wrap}
               />
             </div>
