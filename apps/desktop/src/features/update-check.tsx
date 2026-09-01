@@ -27,12 +27,6 @@ async function checkForUpdate() {
   if (!command) return
 
   try {
-    localStorage.setItem(LAST_CHECK_KEY, String(Date.now()))
-  } catch {
-    return
-  }
-
-  try {
     const [currentVersion, response] = await Promise.all([
       getVersion(),
       fetch("https://registry.npmjs.org/git-nav/latest"),
@@ -40,11 +34,13 @@ async function checkForUpdate() {
     if (!response.ok) return
     const latestVersion = ((await response.json()) as { version?: unknown })
       .version
-    if (
-      typeof latestVersion !== "string" ||
-      compareVersions(currentVersion, latestVersion) >= 0
-    )
-      return
+    if (typeof latestVersion !== "string") return
+
+    // Only a conclusive answer opens the interval, so a check that could not reach the registry runs
+    // again on the next launch instead of going quiet for hours.
+    localStorage.setItem(LAST_CHECK_KEY, String(Date.now()))
+
+    if (compareVersions(currentVersion, latestVersion) >= 0) return
 
     toast("Update available", {
       description: (
