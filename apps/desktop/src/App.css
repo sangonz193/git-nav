@@ -447,9 +447,12 @@ body {
   width: 12px;
 }
 
+/* The tail does not shrink, so without a clip of its own it paints over the pull request and sync badges
+   that follow it once a crowded row squeezes the chip. */
 .commit-ref-label {
   display: flex;
   min-width: 0;
+  overflow: hidden;
 }
 
 /* The label is split mid-word, so the space before a separator has to survive into the next span. */
