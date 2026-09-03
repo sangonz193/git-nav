@@ -1,17 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import { argumentsForExecutable } from "../bin/arguments.js";
 
 describe("argumentsForExecutable", () => {
   test("resolves a relative repository path", () => {
-    expect(argumentsForExecutable(["."], "/workspace/project")).toEqual([
-      "/workspace/project",
-    ]);
+    expect(
+      argumentsForExecutable(["."], "/workspace/project", posix.resolve),
+    ).toEqual(["/workspace/project"]);
   });
 
   test("preserves an absolute repository path", () => {
     expect(
-      argumentsForExecutable(["/workspace/repository"], "/other-workspace"),
+      argumentsForExecutable(
+        ["/workspace/repository"],
+        "/other-workspace",
+        posix.resolve,
+      ),
     ).toEqual(["/workspace/repository"]);
   });
 

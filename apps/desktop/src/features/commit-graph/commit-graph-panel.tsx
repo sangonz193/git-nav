@@ -27,6 +27,7 @@ const EMPTY_COMMITS: Commit[] = []
 const PULL_REQUEST_SYNC_INTERVAL = 60_000
 const BROWSER_GRAPH_WINDOW_SIZE = 2_000
 const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
+const REPOSITORY_FOCUS_DEBOUNCE = 150
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
@@ -534,7 +535,13 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
 
   useEffect(() => {
     let disposed = false
+    let isPolling = false
+    let focusTimeout: number | null = null
     const poll = () => {
+      if (isPolling) {
+        return
+      }
+      isPolling = true
       const generation = fingerprintGeneration.current
       return invoke<string>("repository_fingerprint", { repoPath: params.path })
         .then((value) => {
@@ -548,15 +555,30 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           fingerprint.current = value
         })
         .catch(() => undefined)
+        .finally(() => {
+          isPolling = false
+        })
+    }
+    const pollOnFocus = () => {
+      if (focusTimeout !== null) {
+        window.clearTimeout(focusTimeout)
+      }
+      focusTimeout = window.setTimeout(() => {
+        focusTimeout = null
+        poll()
+      }, REPOSITORY_FOCUS_DEBOUNCE)
     }
 
     poll()
     const interval = window.setInterval(poll, REPOSITORY_FINGERPRINT_INTERVAL)
-    window.addEventListener("focus", poll)
+    window.addEventListener("focus", pollOnFocus)
     return () => {
       disposed = true
       window.clearInterval(interval)
-      window.removeEventListener("focus", poll)
+      if (focusTimeout !== null) {
+        window.clearTimeout(focusTimeout)
+      }
+      window.removeEventListener("focus", pollOnFocus)
     }
   }, [params.path, refreshGraph])
 

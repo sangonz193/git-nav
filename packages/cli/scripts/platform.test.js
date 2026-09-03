@@ -12,6 +12,13 @@ describe("binaryPathFor", () => {
     );
   });
 
+  test.each(["x64", "arm64"])(
+    "selects the Windows executable for %s",
+    (arch) => {
+      expect(binaryPathFor("win32", arch)).toBe("git-nav.exe");
+    },
+  );
+
   test("rejects unsupported platforms", () => {
     expect(binaryPathFor("freebsd", "x64")).toBeUndefined();
   });

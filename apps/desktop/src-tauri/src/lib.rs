@@ -12,6 +12,8 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{
     ipc::Channel, window::Color, AppHandle, Manager, RunEvent, Theme, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
@@ -93,6 +95,8 @@ const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
 const MINIMUM_MERGE_TREE_VERSION: (u32, u32) = (2, 38);
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 // Not a legal ref name, so it cannot collide with anything the user could name a branch or tag.
 const WORKTREE_REF: &str = ":worktree";
 const REFERENCE_FORMAT: &str = "%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(contents:subject)%00%(*contents:subject)%00%(creatordate:iso-strict)";
@@ -108,13 +112,25 @@ const APPIMAGE_PATH_ENVIRONMENT: [&str; 6] = [
 ];
 
 fn external_command(program: &str) -> Command {
+    let command = Command::new(program);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let mut command = command;
+    #[cfg(target_os = "linux")]
+    sanitize_appimage_environment(&mut command);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn desktop_process(program: &str) -> Command {
     #[cfg(target_os = "linux")]
     {
         let mut command = Command::new(program);
         sanitize_appimage_environment(&mut command);
         command
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
         Command::new(program)
     }
@@ -3356,6 +3372,39 @@ mod tests {
     }
 
     #[test]
+    fn constructs_windows_worktree_commands() {
+        let path = "C:\\workspace\\git-nav";
+
+        assert_eq!(
+            windows_worktree_commands(path, "vscode"),
+            Ok(vec![DesktopCommand::hidden("code.cmd", vec![path.to_string()])])
+        );
+        assert_eq!(
+            windows_worktree_commands(path, "finder"),
+            Ok(vec![DesktopCommand::new("explorer.exe", vec![path.to_string()])])
+        );
+        assert_eq!(
+            windows_worktree_commands(path, "terminal"),
+            Ok(vec![
+                DesktopCommand::new("wt.exe", vec!["-d".to_string(), path.to_string()]),
+                DesktopCommand::in_directory("powershell.exe", path),
+                DesktopCommand::in_directory("cmd.exe", path),
+            ])
+        );
+    }
+
+    #[test]
+    fn constructs_windows_url_commands() {
+        assert_eq!(
+            windows_url_command("https://github.com/sangonz193/git-nav".to_string()),
+            DesktopCommand::new(
+                "explorer.exe",
+                vec!["https://github.com/sangonz193/git-nav".to_string()],
+            )
+        );
+    }
+
+    #[test]
     fn only_accepts_https_urls() {
         assert!(is_https_url("https://github.com/sangonz193/git-nav"));
         assert!(!is_https_url("http://github.com/sangonz193/git-nav"));
@@ -3364,22 +3413,29 @@ mod tests {
 
     #[test]
     fn uses_the_invocation_directory_for_relative_paths() {
+        let cwd = env::temp_dir().join("workspace");
+        let expected = cwd.join("repository").to_string_lossy().into_owned();
         let path = repository_path_from_args(
             &["git-nav".to_string(), "repository".to_string()],
-            "/workspace",
+            &cwd.to_string_lossy(),
         );
 
-        assert_eq!(path.as_deref(), Some("/workspace/repository"));
+        assert_eq!(path.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
     fn preserves_absolute_paths() {
+        let expected = env::temp_dir()
+            .join("workspace")
+            .join("repository")
+            .to_string_lossy()
+            .into_owned();
         let path = repository_path_from_args(
-            &["git-nav".to_string(), "/workspace/repository".to_string()],
-            "/other-workspace",
+            &["git-nav".to_string(), expected.clone()],
+            &env::temp_dir().join("other-workspace").to_string_lossy(),
         );
 
-        assert_eq!(path.as_deref(), Some("/workspace/repository"));
+        assert_eq!(path.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -4043,6 +4099,7 @@ mod tests {
         run(&["config", "user.email", "tests@example.com"]);
         run(&["config", "user.name", "Tests"]);
         run(&["config", "commit.gpgsign", "false"]);
+        run(&["config", "core.autocrlf", "false"]);
         write(&path, "tracked.txt", "base\n");
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "base"]);
@@ -4171,7 +4228,24 @@ mod tests {
         run(&["config", "user.email", "tests@example.com"]);
         run(&["config", "user.name", "Tests"]);
         run(&["config", "commit.gpgsign", "false"]);
+        run(&["config", "core.autocrlf", "false"]);
         (path, run)
+    }
+
+    fn remove_scratch_repository(path: &str) {
+        for attempt in 0..20 {
+            match fs::remove_dir_all(path) {
+                Ok(()) => return,
+                Err(error)
+                    if cfg!(target_os = "windows")
+                        && error.raw_os_error() == Some(32)
+                        && attempt < 19 =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => panic!("Could not remove scratch repository: {error}"),
+            }
+        }
     }
 
     #[test]
@@ -4192,12 +4266,13 @@ mod tests {
             .flatten()
             .map(|commit| commit[5].as_str().unwrap().to_string())
             .collect::<Vec<_>>();
-        fs::remove_dir_all(&path).unwrap();
+        remove_scratch_repository(&path);
 
         assert_eq!(subjects, ["second"]);
         assert!(has_more);
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn zombie_children() -> usize {
         let pid = std::process::id().to_string();
         let output = Command::new("ps").args(["-ax", "-o", "ppid=,stat="]).output().unwrap();
@@ -4210,6 +4285,7 @@ mod tests {
             .count()
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn reaps_the_git_processes_a_graph_walk_leaves_behind() {
         let (path, run) = scratch_repository("graph-reaping");
@@ -4591,16 +4667,22 @@ struct DesktopCommand {
     program: &'static str,
     arguments: Vec<String>,
     current_dir: Option<String>,
+    hide_console: bool,
 }
 
 impl DesktopCommand {
     fn new(program: &'static str, arguments: Vec<String>) -> Self {
-        Self { program, arguments, current_dir: None }
+        Self { program, arguments, current_dir: None, hide_console: false }
     }
 
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(any(target_os = "linux", target_os = "windows", test))]
     fn in_directory(program: &'static str, path: &str) -> Self {
-        Self { program, arguments: Vec::new(), current_dir: Some(path.to_string()) }
+        Self { program, arguments: Vec::new(), current_dir: Some(path.to_string()), hide_console: false }
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    fn hidden(program: &'static str, arguments: Vec<String>) -> Self {
+        Self { program, arguments, current_dir: None, hide_console: true }
     }
 }
 
@@ -4643,9 +4725,32 @@ fn linux_url_command(url: String) -> DesktopCommand {
     DesktopCommand::new("xdg-open", vec![url])
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "windows", test))]
+fn windows_worktree_commands(path: &str, target: &str) -> Result<Vec<DesktopCommand>, String> {
+    match target {
+        "vscode" => Ok(vec![DesktopCommand::hidden("code.cmd", vec![path.to_string()])]),
+        "finder" => Ok(vec![DesktopCommand::new("explorer.exe", vec![path.to_string()])]),
+        "terminal" => Ok(vec![
+            DesktopCommand::new("wt.exe", vec!["-d".to_string(), path.to_string()]),
+            DesktopCommand::in_directory("powershell.exe", path),
+            DesktopCommand::in_directory("cmd.exe", path),
+        ]),
+        _ => Err("Unknown worktree target.".to_string()),
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_url_command(url: String) -> DesktopCommand {
+    DesktopCommand::new("explorer.exe", vec![url])
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn start_desktop_command(command: &DesktopCommand) -> Result<(), std::io::Error> {
-    let mut process = external_command(command.program);
+    let mut process = desktop_process(command.program);
+    #[cfg(target_os = "windows")]
+    if command.hide_console {
+        process.creation_flags(CREATE_NO_WINDOW);
+    }
     process.args(&command.arguments);
     if let Some(path) = &command.current_dir {
         process.current_dir(path);
@@ -4655,6 +4760,25 @@ fn start_desktop_command(command: &DesktopCommand) -> Result<(), std::io::Error>
             let _ = child.wait();
         });
     })
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn start_first_desktop_command(
+    commands: Vec<DesktopCommand>,
+    target: &str,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for command in commands {
+        match start_desktop_command(&command) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => errors.push(command.program),
+            Err(error) => return Err(format!("Could not open {target}: {error}")),
+        }
+    }
+    Err(format!(
+        "Could not find an application to open {target}. Tried: {}.",
+        errors.join(", ")
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -4681,24 +4805,16 @@ fn launch_worktree(path: &str, target: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let commands = linux_worktree_commands(path, target)?;
-        let mut errors = Vec::new();
-        for command in commands {
-            match start_desktop_command(&command) {
-                Ok(()) => return Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => errors.push(command.program),
-                Err(error) => return Err(format!("Could not open {target}: {error}")),
-            }
-        }
-        Err(format!(
-            "Could not find an application to open {target}. Tried: {}.",
-            errors.join(", ")
-        ))
+        start_first_desktop_command(linux_worktree_commands(path, target)?, target)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        start_first_desktop_command(windows_worktree_commands(path, target)?, target)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (path, target);
-        Err("Opening worktrees outside Git Nav is currently supported on macOS and Linux only.".to_string())
+        Err("Opening worktrees outside Git Nav is currently supported on macOS, Linux, and Windows only.".to_string())
     }
 }
 
@@ -4717,9 +4833,14 @@ fn open_url(url: String) -> Result<(), String> {
         start_desktop_command(&linux_url_command(url))
             .map_err(|error| format!("Could not open the link: {error}"))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
     {
-        Err("Opening links outside Git Nav is currently supported on macOS and Linux only.".to_string())
+        start_desktop_command(&windows_url_command(url))
+            .map_err(|error| format!("Could not open the link: {error}"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err("Opening links outside Git Nav is currently supported on macOS, Linux, and Windows only.".to_string())
     }
 }
 
