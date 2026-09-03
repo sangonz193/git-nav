@@ -69,6 +69,75 @@ const commitColumns = commitColumnHelper.columns([
   commitColumnHelper.accessor("hash", { header: "Commit", maxSize: 160, minSize: 68, size: 84 }),
 ])
 
+function RowContextMenuBody({ canSelectRange, chipMenuEntry, chips, commit, copyText, diffSelectedRange, index, menuHeader, onRequest, openCommitDiff, openRangeDiff, repository, selectCommit, selectRangeTo, selected, source, targetForRow }: {
+  canSelectRange: (index: number) => boolean
+  chipMenuEntry: (chip: RowChip, sha: string, key: string, components: RefMenuComponents) => ReactNode
+  chips: RowChip[]
+  commit: Commit
+  copyText: (value: string) => void
+  diffSelectedRange: CommitSelection | null
+  index: number
+  menuHeader: (components: RefMenuComponents, name: string, detail?: string | null) => ReactNode
+  onRequest: (request: OperationRequest) => void
+  openCommitDiff: (commit: Commit) => void
+  openRangeDiff: (selection: CommitSelection) => void
+  repository: RepositoryState | null
+  selectCommit: (commit: Commit) => void
+  selectRangeTo: (commit: Commit) => void
+  selected: boolean
+  source: Selection | null
+  targetForRow: (index: number) => CommitSelection
+}) {
+  const target = targetForRow(index)
+  return (
+    <>
+      {menuHeader(contextMenuComponents, target.commits.length === 1 ? target.tip.hash.slice(0, 8) : `${target.commits.length} commits`, commit.subject || "(no subject)")}
+      <ContextMenuItem onSelect={() => selectCommit(commit)}>
+        <GitCompareArrows />
+        Select commit
+      </ContextMenuItem>
+      {canSelectRange(index) && (
+        <ContextMenuItem onSelect={() => selectRangeTo(commit)}>
+          <GitCompareArrows />
+          Select range to here
+        </ContextMenuItem>
+      )}
+      <OperationMenuItems components={contextMenuComponents} onSelect={onRequest} repository={repository} source={source} target={target} />
+      <ContextMenuItem disabled={commit.parents.length === 0} onSelect={() => openCommitDiff(commit)}>
+        <FileDiff />
+        Show commit diff
+      </ContextMenuItem>
+      {selected && diffSelectedRange && diffSelectedRange.commits.length > 1 && (
+        <ContextMenuItem disabled={!diffSelectedRange.base} onSelect={() => openRangeDiff(diffSelectedRange)}>
+          <GitCompareArrows />
+          Diff selected range
+        </ContextMenuItem>
+      )}
+      {chips.length === 1 && chipMenuEntry(chips[0], commit.hash, chipName(chips[0]), contextMenuComponents)}
+      {chips.length > 1 && (
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <GitBranch />
+            Refs
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {chips.map((chip, index) => chipMenuEntry(chip, commit.hash, `${chipName(chip)}-${index}`, contextMenuComponents))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      )}
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => copyText(commit.hash)}>
+        <Copy />
+        Copy SHA
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => copyText(commit.subject)}>
+        <Copy />
+        Copy commit subject
+      </ContextMenuItem>
+    </>
+  )
+}
+
 export function CommitGraphPanel(props: IDockviewPanelProps<RepositoryPanelParams>) {
   const [config, updateConfig] = useViewConfig()
   if (!config) {
@@ -301,6 +370,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     overscan: 12,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
+  const virtualScrollTop = rowVirtualizer.scrollOffset ?? 0
   const currentCheckoutRow = currentCheckoutIndex === -1 ? -1 : rowOfCommit(currentCheckoutIndex)
   // The brackets are drawn on rows while the drag they adjust is anchored on commits, so an endpoint carries both.
   const selectionRowEdges = selectionEdges && {
@@ -695,9 +765,9 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: scroll.top - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: virtualScrollTop - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
     }
-  }, [commits, graphWidth, rowHeight, rows, scroll, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
+  }, [commits, graphWidth, rowHeight, rows, scroll.height, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows, virtualScrollTop])
 
   function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
     const originX = "touches" in event ? event.touches[0].clientX : event.clientX
@@ -925,14 +995,26 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     refreshGraph()
   }
 
-  function rowHeader(index: number) {
-    const target = rowTarget(index)
-    return target.commits.length === 1 ? target.tip.hash.slice(0, 8) : `${target.commits.length} commits`
-  }
-
   // Right-clicking inside the selection keeps it whole, and right-clicking outside it acts on the row under the pointer.
   function rowTarget(index: number) {
     return selectedHashes.has(commits[index].hash) && commitsSelection ? commitsSelection : commitSelection(commits, index, index)!
+  }
+
+  function canSelectRange(index: number) {
+    return selectionEndpointIndexes !== null && selectionEndpointIndexes.anchor !== -1 && ancestryPath(commits, selectionEndpointIndexes.anchor, index).length > 0
+  }
+
+  function selectCommit(commit: Commit) {
+    setSelectedRef(null)
+    setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
+  }
+
+  function selectRangeTo(commit: Commit) {
+    if (!selectionEndpointIndexes) {
+      return
+    }
+    setSelectedRef(null)
+    setSelectionRange({ anchorHash: commits[selectionEndpointIndexes.anchor].hash, focusHash: commit.hash })
   }
 
   function startRangeDrag(event: ReactPointerEvent<HTMLElement>, index: number, anchorIndex?: number) {
@@ -1598,49 +1680,25 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
                   </article>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
-                  {menuHeader(contextMenuComponents, rowHeader(index), commit.subject || "(no subject)")}
-                  <ContextMenuItem onSelect={() => { setSelectedRef(null); setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash }) }}>
-                    <GitCompareArrows />
-                    Select commit
-                  </ContextMenuItem>
-                  {canSelectRange && selectionEndpointIndexes && (
-                    <ContextMenuItem onSelect={() => { setSelectedRef(null); setSelectionRange({ anchorHash: commits[selectionEndpointIndexes.anchor].hash, focusHash: commit.hash }) }}>
-                      <GitCompareArrows />
-                      Select range to here
-                    </ContextMenuItem>
-                  )}
-                  <OperationMenuItems components={contextMenuComponents} onSelect={setRequest} repository={repository} source={selection} target={rowTarget(index)} />
-                  <ContextMenuItem disabled={commit.parents.length === 0} onSelect={() => openCommitDiff(commit)}>
-                    <FileDiff />
-                    Show commit diff
-                  </ContextMenuItem>
-                  {selected && commitsSelection && commitsSelection.commits.length > 1 && (
-                    <ContextMenuItem disabled={!commitsSelection.base} onSelect={() => openRangeDiff(commitsSelection)}>
-                      <GitCompareArrows />
-                      Diff selected range
-                    </ContextMenuItem>
-                  )}
-                  {chips.length === 1 && chipMenuEntry(chips[0], commit.hash, chipName(chips[0]), contextMenuComponents)}
-                  {chips.length > 1 && (
-                    <ContextMenuSub>
-                      <ContextMenuSubTrigger>
-                        <GitBranch />
-                        Refs
-                      </ContextMenuSubTrigger>
-                      <ContextMenuSubContent>
-                        {chips.map((chip, index) => chipMenuEntry(chip, commit.hash, `${chipName(chip)}-${index}`, contextMenuComponents))}
-                      </ContextMenuSubContent>
-                    </ContextMenuSub>
-                  )}
-                  <ContextMenuSeparator />
-                  <ContextMenuItem onSelect={() => copyText(commit.hash)}>
-                    <Copy />
-                    Copy SHA
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => copyText(commit.subject)}>
-                    <Copy />
-                    Copy commit subject
-                  </ContextMenuItem>
+                  <RowContextMenuBody
+                    canSelectRange={canSelectRange}
+                    chipMenuEntry={chipMenuEntry}
+                    chips={chips}
+                    commit={commit}
+                    copyText={copyText}
+                    diffSelectedRange={selected ? commitsSelection : null}
+                    index={index}
+                    menuHeader={menuHeader}
+                    onRequest={setRequest}
+                    openCommitDiff={openCommitDiff}
+                    openRangeDiff={openRangeDiff}
+                    repository={repository}
+                    selectCommit={selectCommit}
+                    selectRangeTo={selectRangeTo}
+                    selected={selected}
+                    source={selection}
+                    targetForRow={rowTarget}
+                  />
                 </ContextMenuContent>
               </ContextMenu>
             )

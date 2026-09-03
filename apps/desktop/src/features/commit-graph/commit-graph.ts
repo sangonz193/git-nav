@@ -283,18 +283,25 @@ export function refSelection(ref: DisplayRef, sha: string): RefSelection {
 // selected commit. The nearest such tip comes first because it carries the fewest unselected commits along.
 export function branchesContaining(commits: Commit[], tipIndex: number, remotes?: string[]) {
   const branches: { branch: string, sha: string }[] = []
+  const reachesTip = new Set([commits[tipIndex].hash])
   for (let index = tipIndex; index >= 0; index -= 1) {
-    if (commits[index].refs.length === 0) {
+    const commit = commits[index]
+    if (index !== tipIndex && commit.parents.some((parent) => reachesTip.has(parent))) {
+      reachesTip.add(commit.hash)
+    }
+    if (!reachesTip.has(commit.hash) || commit.refs.length === 0) {
       continue
     }
-    for (const ref of displayRefs(commits[index].refs, { remotes })) {
-      if (ref.branch && ancestryPath(commits, index, tipIndex).length > 0) {
-        branches.push({ branch: ref.branch, sha: commits[index].hash })
+    for (const ref of displayRefs(commit.refs, { remotes })) {
+      if (ref.branch) {
+        branches.push({ branch: ref.branch, sha: commit.hash })
       }
     }
   }
   return branches
 }
+
+let relativeTimeFormatter: Intl.RelativeTimeFormat | null = null
 
 export function relativeDate(value: string) {
   const milliseconds = Date.parse(value)
@@ -313,7 +320,7 @@ export function relativeDate(value: string) {
     ["second", 1],
   ]
   const [unit, size] = units.find(([, size]) => Math.abs(seconds) >= size) ?? units.at(-1)!
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds / size), unit)
+  return (relativeTimeFormatter ??= new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })).format(Math.round(seconds / size), unit)
 }
 
 export function refName(ref: DisplayRef) {
