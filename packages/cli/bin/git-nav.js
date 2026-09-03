@@ -6,20 +6,13 @@ import { dirname, join, normalize, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { argumentsForExecutable } from "./arguments.js";
+import { binaryPathFor } from "./platform.js";
 
 const require = createRequire(import.meta.url);
 
-const binaryPaths = new Map([
-  ["darwin-arm64", "Git Nav.app/Contents/MacOS/git-nav"],
-  ["darwin-x64", "Git Nav.app/Contents/MacOS/git-nav"],
-  ["linux-arm64", "git-nav"],
-  ["linux-x64", "git-nav"],
-  ["win32-arm64", "git-nav.exe"],
-  ["win32-x64", "git-nav.exe"],
-]);
-
 const platformKey = `${process.platform}-${process.arch}`;
-const binaryPath = binaryPaths.get(platformKey);
+const binaryPath = binaryPathFor(process.platform, process.arch);
 
 if (!binaryPath) {
   console.error(`Unsupported platform: ${platformKey}`);
@@ -91,11 +84,16 @@ try {
 }
 
 const updateCommand = updateCommandFor(packageRoot);
-const child = spawn(executable, process.argv.slice(2), {
+const childEnvironment = {
+  ...process.env,
+  ...(updateCommand ? { GIT_NAV_UPDATE_COMMAND: updateCommand } : {}),
+  ...(process.platform === "linux" && binaryPath.endsWith(".AppImage")
+    ? { APPIMAGE_EXTRACT_AND_RUN: "1" }
+    : {}),
+};
+const child = spawn(executable, argumentsForExecutable(process.argv.slice(2)), {
   stdio: "inherit",
-  env: updateCommand
-    ? { ...process.env, GIT_NAV_UPDATE_COMMAND: updateCommand }
-    : process.env,
+  env: childEnvironment,
 });
 
 child.on("error", (error) => {

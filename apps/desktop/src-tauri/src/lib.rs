@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use rusqlite::{params, Connection, OptionalExtension};
+#[cfg(any(target_os = "linux", test))]
+use std::ffi::{OsStr, OsString};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     env, fs,
@@ -94,6 +96,61 @@ const MINIMUM_MERGE_TREE_VERSION: (u32, u32) = (2, 38);
 // Not a legal ref name, so it cannot collide with anything the user could name a branch or tag.
 const WORKTREE_REF: &str = ":worktree";
 const REFERENCE_FORMAT: &str = "%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(contents:subject)%00%(*contents:subject)%00%(creatordate:iso-strict)";
+
+#[cfg(any(target_os = "linux", test))]
+const APPIMAGE_PATH_ENVIRONMENT: [&str; 6] = [
+    "LD_LIBRARY_PATH",
+    "PATH",
+    "XDG_DATA_DIRS",
+    "GSETTINGS_SCHEMA_DIR",
+    "GIO_MODULE_DIR",
+    "GIO_EXTRA_MODULES",
+];
+
+fn external_command(program: &str) -> Command {
+    #[cfg(target_os = "linux")]
+    {
+        let mut command = Command::new(program);
+        sanitize_appimage_environment(&mut command);
+        command
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Command::new(program)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn sanitized_appimage_path_list(value: &OsStr, app_dir: &Path) -> Option<OsString> {
+    // AppRun appends the original values after its bundled prefixes, so retain every non-bundled entry.
+    let paths: Vec<_> = env::split_paths(value).filter(|path| !path.starts_with(app_dir)).collect();
+    (!paths.is_empty()).then(|| env::join_paths(paths).expect("split environment paths must rejoin"))
+}
+
+#[cfg(target_os = "linux")]
+fn sanitize_appimage_environment(command: &mut Command) {
+    let (Some(app_dir), Some(_)) = (env::var_os("APPDIR"), env::var_os("APPIMAGE")) else {
+        return;
+    };
+    apply_appimage_environment(command, Path::new(&app_dir), |name| env::var_os(name));
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn apply_appimage_environment(
+    command: &mut Command,
+    app_dir: &Path,
+    value: impl Fn(&str) -> Option<OsString>,
+) {
+    for name in APPIMAGE_PATH_ENVIRONMENT {
+        let Some(value) = value(name) else {
+            continue;
+        };
+        match sanitized_appimage_path_list(&value, app_dir) {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -400,7 +457,7 @@ fn save_recent_path(repository_path: &str) -> Result<(), String> {
 }
 
 fn git_output(path: &str, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = external_command("git")
         .arg("-C")
         .arg(path)
         .args(arguments)
@@ -417,7 +474,7 @@ fn git_output(path: &str, arguments: &[&str]) -> Option<String> {
 }
 
 fn git_output_bytes(path: &str, arguments: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new("git")
+    let output = external_command("git")
         .arg("-C")
         .arg(path)
         .args(arguments)
@@ -428,7 +485,7 @@ fn git_output_bytes(path: &str, arguments: &[&str]) -> Option<Vec<u8>> {
 }
 
 fn git_output_allow_empty(path: &str, arguments: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = external_command("git")
         .arg("-C")
         .arg(path)
         .args(arguments)
@@ -705,7 +762,7 @@ fn github_repository(remote: &str) -> Option<(String, String)> {
 
 fn github_pull_request_page(host: &str, repository: &str, state: &str) -> Option<Vec<GithubPullRequest>> {
     let endpoint = format!("repos/{repository}/pulls?state={state}&sort=updated&direction=desc&per_page=100");
-    let mut command = Command::new("gh");
+    let mut command = external_command("gh");
     command.args(["api", "--method", "GET", "--header", "Accept: application/vnd.github+json"]);
     if host != "github.com" {
         command.args(["--hostname", host]);
@@ -727,7 +784,7 @@ fn github_pull_requests(host: &str, repository: &str) -> Option<Vec<GithubPullRe
 }
 
 fn git_succeeds(path: &str, arguments: &[&str]) -> bool {
-    Command::new("git")
+    external_command("git")
         .arg("-C")
         .arg(path)
         .args(arguments)
@@ -974,7 +1031,7 @@ impl Drop for ChildGuard {
 
 fn patch_id(repo_path: &str, arguments: &[&str]) -> Option<String> {
     let mut diff = ChildGuard(
-        Command::new("git")
+        external_command("git")
             .arg("-C")
             .arg(repo_path)
             .args(arguments)
@@ -983,7 +1040,7 @@ fn patch_id(repo_path: &str, arguments: &[&str]) -> Option<String> {
             .ok()?,
     );
     let stdout = diff.0.stdout.take()?;
-    let output = Command::new("git")
+    let output = external_command("git")
         .arg("-C")
         .arg(repo_path)
         .args(["patch-id", "--stable"])
@@ -1682,7 +1739,7 @@ fn walk_commit_graph_page(
     let mut reserved_tip = reserved_lane_tip(repo_path);
     let revisions = graph_revisions(repo_path);
     let mut child = ChildGuard(
-        Command::new("git")
+        external_command("git")
             .args(["--no-optional-locks", "-C", repo_path, "log"])
             .args(&revisions)
             .args(["--topo-order", "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s"])
@@ -2087,7 +2144,7 @@ fn diff_file(
 }
 
 fn git_result(path: &str, arguments: &[&str]) -> Result<Output, String> {
-    Command::new("git")
+    external_command("git")
         .arg("-C")
         .arg(path)
         .args(arguments)
@@ -3179,6 +3236,131 @@ async fn stash_action(repo_path: String, name: String, sha: String, action: Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn joined_paths<const N: usize>(paths: [&str; N]) -> OsString {
+        env::join_paths(paths).unwrap()
+    }
+
+    #[test]
+    fn removes_mounted_appimage_paths_and_preserves_original_values() {
+        let app_dir = Path::new("/tmp/.mount_gitnav");
+        let value = joined_paths([
+            "/tmp/.mount_gitnav/usr/bin",
+            "/tmp/.mount_gitnav/usr/lib",
+            "/home/user/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+        ]);
+
+        assert_eq!(
+            sanitized_appimage_path_list(&value, app_dir),
+            Some(joined_paths(["/home/user/bin", "/usr/local/bin", "/usr/bin"]))
+        );
+    }
+
+    #[test]
+    fn removes_extracted_appimage_paths_wherever_apprun_inserted_them() {
+        let app_dir = Path::new("/tmp/appimage_extracted_1234");
+        let value = joined_paths([
+            "/tmp/appimage_extracted_1234/usr/share",
+            "/usr/share",
+            "/tmp/appimage_extracted_1234/usr/share/",
+            "/custom/share",
+        ]);
+
+        assert_eq!(
+            sanitized_appimage_path_list(&value, app_dir),
+            Some(joined_paths(["/usr/share", "/custom/share"]))
+        );
+    }
+
+    #[test]
+    fn removes_an_appimage_only_environment_value() {
+        assert_eq!(
+            sanitized_appimage_path_list(
+                OsStr::new("/tmp/.mount_gitnav/usr/share/glib-2.0/schemas"),
+                Path::new("/tmp/.mount_gitnav"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn preserves_paths_outside_the_exact_appimage_root() {
+        let value = joined_paths(["/tmp/.mount_gitnav-tools/bin", "/tmp/.mount_gitnav/usr/bin"]);
+
+        assert_eq!(
+            sanitized_appimage_path_list(&value, Path::new("/tmp/.mount_gitnav")),
+            Some(OsString::from("/tmp/.mount_gitnav-tools/bin"))
+        );
+    }
+
+    #[test]
+    fn applies_sanitization_to_every_external_command_environment_variable() {
+        let app_dir = Path::new("/tmp/.mount_gitnav");
+        let mut command = Command::new("git");
+        apply_appimage_environment(&mut command, app_dir, |_| {
+            Some(joined_paths(["/tmp/.mount_gitnav/usr/lib", "/original/value"]))
+        });
+        let changes: HashMap<_, _> = command
+            .get_envs()
+            .map(|(name, value)| (name.to_string_lossy().into_owned(), value.map(OsStr::to_os_string)))
+            .collect();
+
+        for name in APPIMAGE_PATH_ENVIRONMENT {
+            assert_eq!(changes.get(name), Some(&Some(OsString::from("/original/value"))));
+        }
+    }
+
+    #[test]
+    fn constructs_macos_worktree_commands() {
+        assert_eq!(
+            macos_worktree_command("/workspace/git-nav", "vscode"),
+            Ok(DesktopCommand::new(
+                "open",
+                vec![
+                    "-a".to_string(),
+                    "Visual Studio Code".to_string(),
+                    "/workspace/git-nav".to_string(),
+                ],
+            ))
+        );
+    }
+
+    #[test]
+    fn constructs_linux_worktree_commands() {
+        let commands = linux_worktree_commands("/workspace/git-nav", "terminal").unwrap();
+
+        assert_eq!(
+            commands.first(),
+            Some(&DesktopCommand::new(
+                "xdg-terminal-exec",
+                vec!["--dir=/workspace/git-nav".to_string()],
+            ))
+        );
+        assert!(commands.iter().skip(1).all(|command| {
+            command.arguments.is_empty()
+                && command.current_dir.as_deref() == Some("/workspace/git-nav")
+        }));
+    }
+
+    #[test]
+    fn constructs_linux_url_commands() {
+        assert_eq!(
+            linux_url_command("https://github.com/sangonz193/git-nav".to_string()),
+            DesktopCommand::new(
+                "xdg-open",
+                vec!["https://github.com/sangonz193/git-nav".to_string()],
+            )
+        );
+    }
+
+    #[test]
+    fn only_accepts_https_urls() {
+        assert!(is_https_url("https://github.com/sangonz193/git-nav"));
+        assert!(!is_https_url("http://github.com/sangonz193/git-nav"));
+        assert!(!is_https_url("file:///workspace/git-nav"));
+    }
 
     #[test]
     fn uses_the_invocation_directory_for_relative_paths() {
@@ -4404,50 +4586,145 @@ fn update_command() -> Option<String> {
     env::var("GIT_NAV_UPDATE_COMMAND").ok()
 }
 
+#[derive(Debug, PartialEq)]
+struct DesktopCommand {
+    program: &'static str,
+    arguments: Vec<String>,
+    current_dir: Option<String>,
+}
+
+impl DesktopCommand {
+    fn new(program: &'static str, arguments: Vec<String>) -> Self {
+        Self { program, arguments, current_dir: None }
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn in_directory(program: &'static str, path: &str) -> Self {
+        Self { program, arguments: Vec::new(), current_dir: Some(path.to_string()) }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_worktree_command(path: &str, target: &str) -> Result<DesktopCommand, String> {
+    let arguments = match target {
+        "vscode" => vec!["-a".to_string(), "Visual Studio Code".to_string(), path.to_string()],
+        "terminal" => vec!["-a".to_string(), "Terminal".to_string(), path.to_string()],
+        "finder" => vec![path.to_string()],
+        _ => return Err("Unknown worktree target.".to_string()),
+    };
+    Ok(DesktopCommand::new("open", arguments))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_worktree_commands(path: &str, target: &str) -> Result<Vec<DesktopCommand>, String> {
+    match target {
+        "vscode" => Ok(vec![DesktopCommand::new("code", vec![path.to_string()])]),
+        "finder" => Ok(vec![DesktopCommand::new("xdg-open", vec![path.to_string()])]),
+        "terminal" => Ok([
+            DesktopCommand::new("xdg-terminal-exec", vec![format!("--dir={path}")]),
+            DesktopCommand::in_directory("x-terminal-emulator", path),
+            DesktopCommand::in_directory("gnome-terminal", path),
+            DesktopCommand::in_directory("kgx", path),
+            DesktopCommand::in_directory("konsole", path),
+            DesktopCommand::in_directory("xfce4-terminal", path),
+            DesktopCommand::in_directory("mate-terminal", path),
+            DesktopCommand::in_directory("tilix", path),
+            DesktopCommand::in_directory("alacritty", path),
+            DesktopCommand::in_directory("kitty", path),
+            DesktopCommand::in_directory("wezterm", path),
+        ]
+        .into()),
+        _ => Err("Unknown worktree target.".to_string()),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_url_command(url: String) -> DesktopCommand {
+    DesktopCommand::new("xdg-open", vec![url])
+}
+
+#[cfg(target_os = "linux")]
+fn start_desktop_command(command: &DesktopCommand) -> Result<(), std::io::Error> {
+    let mut process = external_command(command.program);
+    process.args(&command.arguments);
+    if let Some(path) = &command.current_dir {
+        process.current_dir(path);
+    }
+    process.spawn().map(|mut child| {
+        let _ = std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn run_desktop_command(command: &DesktopCommand) -> Result<(), String> {
+    let mut process = external_command(command.program);
+    process.args(&command.arguments);
+    if let Some(path) = &command.current_dir {
+        process.current_dir(path);
+    }
+    process
+        .status()
+        .map_err(|error| error.to_string())?
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("Could not run {}.", command.program))
+}
+
 /// Launches a worktree in another local application. In server mode this runs on the host machine.
 fn launch_worktree(path: &str, target: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let arguments = match target {
-            "vscode" => vec!["-a", "Visual Studio Code", path],
-            "terminal" => vec!["-a", "Terminal", path],
-            "finder" => vec![path],
-            _ => return Err("Unknown worktree target.".to_string()),
-        };
-        Command::new("open")
-            .args(arguments)
-            .status()
-            .map_err(|error| error.to_string())?
-            .success()
-            .then_some(())
-            .ok_or_else(|| format!("Could not open {target}."))
+        let command = macos_worktree_command(path, target)?;
+        run_desktop_command(&command).map_err(|_| format!("Could not open {target}."))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        let commands = linux_worktree_commands(path, target)?;
+        let mut errors = Vec::new();
+        for command in commands {
+            match start_desktop_command(&command) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => errors.push(command.program),
+                Err(error) => return Err(format!("Could not open {target}: {error}")),
+            }
+        }
+        Err(format!(
+            "Could not find an application to open {target}. Tried: {}.",
+            errors.join(", ")
+        ))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (path, target);
-        Err("Opening worktrees outside Git Nav is currently supported on macOS only.".to_string())
+        Err("Opening worktrees outside Git Nav is currently supported on macOS and Linux only.".to_string())
     }
 }
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
-    if !url.starts_with("https://") {
+    if !is_https_url(&url) {
         return Err("Only https links can be opened.".to_string());
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
-            .arg(&url)
-            .status()
-            .map_err(|error| error.to_string())?
-            .success()
-            .then_some(())
-            .ok_or_else(|| "Could not open the link.".to_string())
+        run_desktop_command(&DesktopCommand::new("open", vec![url]))
+            .map_err(|error| format!("Could not open the link: {error}"))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        Err("Opening links outside Git Nav is currently supported on macOS only.".to_string())
+        start_desktop_command(&linux_url_command(url))
+            .map_err(|error| format!("Could not open the link: {error}"))
     }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err("Opening links outside Git Nav is currently supported on macOS and Linux only.".to_string())
+    }
+}
+
+fn is_https_url(url: &str) -> bool {
+    url.starts_with("https://")
 }
 
 #[tauri::command]

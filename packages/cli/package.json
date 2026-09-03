@@ -33,6 +33,7 @@
     "build:package": "bun run --cwd ../../apps/desktop tauri build && bun scripts/package-platform.ts",
     "format": "prettier --no-config --write \"**/*.{js,ts}\"",
     "lint": "eslint bin",
+    "test": "bun test",
     "release": "bun scripts/publish.ts"
   },
   "devDependencies": {

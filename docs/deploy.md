@@ -11,10 +11,12 @@ Before the first CI release, configure npm trusted publishing for each published
 
 ```sh
 npm trust github @git-nav/darwin-arm64 --file publish.yml --repo sangonz193/git-nav --allow-publish
+npm trust github @git-nav/linux-x64 --file publish.yml --repo sangonz193/git-nav --allow-publish
+npm trust github @git-nav/linux-arm64 --file publish.yml --repo sangonz193/git-nav --allow-publish
 npm trust github git-nav --file publish.yml --repo sangonz193/git-nav --allow-publish
 ```
 
-The workflow builds and publishes `@git-nav/darwin-arm64` before `git-nav`. Add a platform package and trusted-publisher configuration before adding another platform to a release.
+The workflow builds, tests, packages, and publishes `@git-nav/darwin-arm64`, `@git-nav/linux-x64`, and `@git-nav/linux-arm64` before publishing `git-nav`. Linux platform packages contain a Tauri AppImage named `git-nav.AppImage`, which the `git-nav` launcher runs directly.
 
 Create a release tag after the version change is merged:
 

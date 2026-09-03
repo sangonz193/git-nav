@@ -1073,7 +1073,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                   </Item>,
                   <Item key={`${worktree.path}-finder`} onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "finder" })}>
                     <FolderOpen />
-                    {`Finder${suffix}`}
+                    {`File manager${suffix}`}
                   </Item>,
                 ]
               })}
@@ -1184,7 +1184,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </Item>
           <Item onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "finder" })}>
             <FolderOpen />
-            Finder
+            File manager
           </Item>
         </SubContent>
       </Sub>
