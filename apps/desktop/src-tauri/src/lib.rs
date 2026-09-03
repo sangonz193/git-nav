@@ -237,10 +237,8 @@ struct FileDiff {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BranchSelection {
-    base_sha: String,
-    head_sha: String,
-    base_label: String,
-    head_label: String,
+    base_ref: String,
+    head_ref: String,
 }
 
 #[derive(Serialize)]
@@ -1963,9 +1961,16 @@ fn branch_sync(repo_path: String) -> Result<Vec<BranchSync>, String> {
     Ok(parse_branch_sync(&output))
 }
 
-fn comparison(repo_path: &str, base_ref: &str, head_ref: &str) -> Result<Comparison, String> {
-    let base_sha = resolve_commit(repo_path, base_ref)?;
-    if head_ref == WORKTREE_REF {
+fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool) -> Result<Comparison, String> {
+    let is_worktree = head_ref == WORKTREE_REF;
+    // The working tree has no commit of its own, so the checkout it sits on stands in for it as the
+    // side the fork point is measured from.
+    let base_sha = if merge_base {
+        merge_base_sha(repo_path, base_ref, if is_worktree { "HEAD" } else { head_ref })?
+    } else {
+        resolve_commit(repo_path, base_ref)?
+    };
+    if is_worktree {
         return Ok(Comparison {
             files: worktree_changed_files(repo_path, &base_sha)?,
             base_sha,
@@ -1982,8 +1987,8 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str) -> Result<Compari
 
 #[git_nav_macros::http_command]
 #[tauri::command(async)]
-fn compare_refs(repo_path: String, base_ref: String, head_ref: String) -> Result<Comparison, String> {
-    comparison(&repo_path, &base_ref, &head_ref)
+fn compare_refs(repo_path: String, base_ref: String, head_ref: String, merge_base: bool) -> Result<Comparison, String> {
+    comparison(&repo_path, &base_ref, &head_ref, merge_base)
 }
 
 fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
@@ -2068,22 +2073,24 @@ fn resolve_revision(repo_path: String, revision: String) -> Result<ResolvedRevis
     Ok(ResolvedRevision { sha, subject: subject.trim().to_string() })
 }
 
-fn branch_range(repo_path: &str, reference: &str) -> Result<BranchSelection, String> {
-    let primary = primary_reference(repo_path)?;
-    let primary_sha = resolve_commit(repo_path, &primary)?;
-    let head_sha = resolve_commit(repo_path, reference)?;
-    let base_sha = git_output_allow_empty(repo_path, &["merge-base", &primary_sha, &head_sha])?
+fn merge_base_sha(repo_path: &str, base_ref: &str, head_ref: &str) -> Result<String, String> {
+    let base_sha = resolve_commit(repo_path, base_ref)?;
+    let head_sha = resolve_commit(repo_path, head_ref)?;
+    let sha = git_output_allow_empty(repo_path, &["merge-base", &base_sha, &head_sha])?
         .trim()
         .to_string();
-    if base_sha.is_empty() {
-        return Err(format!("Could not find a merge base for {reference}."));
+    if sha.is_empty() {
+        return Err(format!("Could not find a merge base for {base_ref} and {head_ref}."));
     }
-    Ok(BranchSelection {
-        base_sha,
-        head_sha,
-        base_label: format!("merge-base({primary}, {reference})"),
-        head_label: reference.to_string(),
-    })
+    Ok(sha)
+}
+
+// The range is named by its two refs rather than by where they point now, so the comparison follows
+// the branch as it moves instead of freezing at the moment it was opened.
+fn branch_range(repo_path: &str, reference: &str) -> Result<BranchSelection, String> {
+    let primary = primary_reference(repo_path)?;
+    merge_base_sha(repo_path, &primary, reference)?;
+    Ok(BranchSelection { base_ref: primary, head_ref: reference.to_string() })
 }
 
 #[git_nav_macros::http_command]
@@ -3979,6 +3986,62 @@ mod tests {
     }
 
     #[test]
+    fn compares_a_branch_against_where_it_forked_from_the_primary_branch() {
+        let path = env::temp_dir()
+            .join(format!("git-nav-branch-range-{}", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        write("shared.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+
+        run(&["checkout", "--quiet", "-b", "feature"]);
+        write("feature.txt", "one\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "feature"]);
+        run(&["checkout", "--quiet", "main"]);
+        write("primary.txt", "later\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "primary"]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+        let selection = branch_range(&path, "feature").unwrap();
+        let names = |comparison: &Comparison| {
+            let mut names: Vec<_> = comparison.files.iter().filter_map(|file| file.new_path.clone().or(file.old_path.clone())).collect();
+            names.sort();
+            names
+        };
+        let forked = comparison(&path, &selection.base_ref, &selection.head_ref, true).unwrap();
+        let direct = comparison(&path, &selection.base_ref, &selection.head_ref, false).unwrap();
+
+        run(&["checkout", "--quiet", "feature"]);
+        write("second.txt", "two\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "second"]);
+        let after_commit = comparison(&path, &selection.base_ref, &selection.head_ref, true).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert_eq!((selection.base_ref.as_str(), selection.head_ref.as_str()), ("origin/main", "feature"));
+        assert_eq!(names(&forked), ["feature.txt"]);
+        // Without the fork point the primary branch's own commit reads as a deletion on the branch.
+        assert_eq!(names(&direct), ["feature.txt", "primary.txt"]);
+        assert_eq!(names(&after_commit), ["feature.txt", "second.txt"]);
+    }
+
+    #[test]
     fn detects_a_squash_merge_that_has_not_been_pushed_yet() {
         let path = env::temp_dir()
             .join(format!("git-nav-unpushed-squash-{}", std::process::id()))
@@ -4051,7 +4114,7 @@ mod tests {
         fs::write(Path::new(&path).join(".gitignore"), "ignored.txt\n").unwrap();
         write("ignored.txt", "invisible\n");
 
-        let comparison = compare_refs(path.clone(), "HEAD".to_string(), WORKTREE_REF.to_string()).unwrap();
+        let comparison = compare_refs(path.clone(), "HEAD".to_string(), WORKTREE_REF.to_string(), false).unwrap();
         let untracked = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), None, Some("untracked.txt".to_string()));
         let modified = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), Some("kept.txt".to_string()), Some("kept.txt".to_string()));
         fs::remove_dir_all(&path).unwrap();

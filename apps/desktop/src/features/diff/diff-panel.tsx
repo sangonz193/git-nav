@@ -68,10 +68,8 @@ type Comparison = {
 }
 
 type BranchSelection = {
-  baseSha: string
-  headSha: string
-  baseLabel: string
-  headLabel: string
+  baseRef: string
+  headRef: string
 }
 
 type FileDiff = {
@@ -98,6 +96,8 @@ type SelectedRefs = {
   head: string
   baseLabel: string
   headLabel: string
+  /** Whether the base is where the two sides forked rather than the base ref itself. */
+  mergeBase: boolean
 }
 
 type FileTreeNode = {
@@ -119,7 +119,7 @@ function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
 }
 
 function refLabel(reference: string) {
-  return reference === WORKTREE_REF ? "Working tree" : reference
+  return reference === WORKTREE_REF ? "Working tree" : reference.replace(/^[0-9a-f]{40}\b/i, (sha) => sha.slice(0, 8))
 }
 
 function fileName(file: ChangedFile) {
@@ -347,6 +347,7 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
     head: params.headRef,
     baseLabel: refLabel(params.baseRef),
     headLabel: refLabel(params.headRef),
+    mergeBase: params.mergeBase ?? false,
   })
   const [comparison, setComparison] = useState<Comparison | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -382,7 +383,7 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
 
   useEffect(() => {
     let cancelled = false
-    invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head })
+    invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase })
       .then((nextComparison) => {
         if (!cancelled) {
           reset()
@@ -480,10 +481,11 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
   const selectAheadRange = useCallback((reference: string) => {
     invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
       .then((selection) => setRefs({
-        base: selection.baseSha,
-        head: selection.headSha,
-        baseLabel: selection.baseLabel,
-        headLabel: selection.headLabel,
+        base: selection.baseRef,
+        head: selection.headRef,
+        baseLabel: refLabel(selection.baseRef),
+        headLabel: refLabel(selection.headRef),
+        mergeBase: true,
       }))
       .catch((message: unknown) => setError(String(message)))
     setPicker(null)
@@ -537,7 +539,7 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
 
   function selectHit(hit: ReferenceHit) {
     setRefs((current) => picker === "base"
-      ? { ...current, base: hit.reference, baseLabel: hit.label }
+      ? { ...current, base: hit.reference, baseLabel: hit.label, mergeBase: false }
       : { ...current, head: hit.reference, headLabel: hit.label })
     setPicker(null)
   }
@@ -591,7 +593,9 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
           <span className="truncate">{refs.baseLabel}</span>
           <ChevronDown />
         </Button>
-        <span className="shrink-0 text-muted-foreground">…</span>
+        <Hinted hint={refs.mergeBase ? `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}` : `Changes between ${refs.baseLabel} and ${refs.headLabel}`}>
+          <span className="shrink-0 text-muted-foreground">{refs.mergeBase ? "..." : ".."}</span>
+        </Hinted>
         <Button aria-expanded={picker === "head"} className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} onClick={() => openPicker("head")} ref={(element) => { pickerButtons.current.head = element }} size="sm" type="button" variant="outline">
           <span className="truncate">{refs.headLabel}</span>
           <ChevronDown />

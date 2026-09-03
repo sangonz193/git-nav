@@ -35,7 +35,7 @@ const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TIMEOUT = 30_000
 const SEARCH_DEBOUNCE = 120
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
-type BranchSelection = { baseSha: string, headSha: string, baseLabel: string, headLabel: string }
+type BranchSelection = { baseRef: string, headRef: string }
 type CleanResult = { report: string } | { result: BranchCleanup }
 type CleanupCandidate = { branch: string, reasons: CleanupReason[] }
 type CleanupReason = "squashMergedPullRequest" | "mergedIntoDefaultBranch" | "squashedIntoDefaultBranch"
@@ -808,7 +808,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       containerApi.addPanel({
         component: "diff",
         id: panelId("diff"),
-        params: { ...params, baseRef: selection.baseSha, headRef: selection.headSha },
+        params: { ...params, baseRef: selection.baseRef, headRef: selection.headRef, mergeBase: true },
         position: { direction: "within", referencePanel },
         title: `Diff: ${reference}`,
       })
@@ -851,7 +851,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
     containerApi.addPanel({
       component: "diff",
       id: panelId("diff"),
-      params: { ...params, path: worktree.path, baseRef: worktree.head, headRef: WORKTREE_REF },
+      params: { ...params, path: worktree.path, baseRef: "HEAD", headRef: WORKTREE_REF },
       position: { direction: "within", referencePanel },
       title: `Uncommitted: ${worktree.name}`,
     })

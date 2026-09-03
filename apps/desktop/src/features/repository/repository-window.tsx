@@ -25,6 +25,7 @@ export type RepositoryPanelParams = {
 export type DiffPanelParams = RepositoryPanelParams & {
   baseRef: string
   headRef: string
+  mergeBase?: boolean
 }
 
 // Matches the sentinel the diff commands accept in place of a commit; not a legal ref name.
