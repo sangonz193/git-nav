@@ -543,13 +543,15 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   }, [comparison, rowVirtualizer])
 
   // A fold changes the heights the scroller was measured at, so they are dropped and taken again. Only a
-  // fold that moved what sits above the scroller asks to be put back where it was.
+  // fold that moved what sits above the scroller asks to be put back where it was, and marking a file
+  // viewed while viewed files are hidden takes that card out of the list before it can be aimed at.
   useEffect(() => {
     rowVirtualizer.measure()
     const key = pendingAnchor.current
-    if (key) {
-      pendingAnchor.current = null
-      rowVirtualizer.scrollToIndex(files.findIndex((file) => fileKey(file) === key), { align: "start" })
+    pendingAnchor.current = null
+    const index = key === null ? -1 : files.findIndex((file) => fileKey(file) === key)
+    if (index !== -1) {
+      rowVirtualizer.scrollToIndex(index, { align: "start" })
     }
   }, [collapsed, files, mode, rowVirtualizer, wrap])
 
