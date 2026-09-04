@@ -31,6 +31,10 @@ export function diffTitle(refs: SelectedRefs, defaultBranch: string | null, remo
     : `${refs.baseLabel}${rangeMarker(refs)}${refs.headLabel}`
 }
 
+export function selectedRefs(base: string, head: string, mergeBase: boolean): SelectedRefs {
+  return { base, head, baseLabel: refLabel(base), headLabel: refLabel(head), mergeBase }
+}
+
 export function refLabel(reference: string) {
   return reference === WORKTREE_REF ? "Working tree" : reference.replace(/^[0-9a-f]{40}\b/i, (sha) => sha.slice(0, 8))
 }

@@ -13,7 +13,7 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
-import { diffTitle, rangeMarker, refLabel, type SelectedRefs } from "./diff-title"
+import { diffTitle, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
 import type { DiffPanelParams } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
@@ -335,13 +335,7 @@ function FileDiffCard({ entry, expanded, file, mode, onExpand, theme, wrap }: { 
 
 export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>) {
   const theme = useTheme()
-  const [refs, setRefs] = useState<SelectedRefs>({
-    base: params.baseRef,
-    head: params.headRef,
-    baseLabel: refLabel(params.baseRef),
-    headLabel: refLabel(params.headRef),
-    mergeBase: params.mergeBase ?? false,
-  })
+  const [refs, setRefs] = useState<SelectedRefs>(selectedRefs(params.baseRef, params.headRef, params.mergeBase ?? false))
   const [comparison, setComparison] = useState<Comparison | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState(DiffModeEnum.Split)
@@ -481,13 +475,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   )
   const selectAheadRange = useCallback((reference: string) => {
     invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
-      .then((selection) => setRefs({
-        base: selection.baseRef,
-        head: selection.headRef,
-        baseLabel: refLabel(selection.baseRef),
-        headLabel: refLabel(selection.headRef),
-        mergeBase: true,
-      }))
+      .then((selection) => setRefs(selectedRefs(selection.baseRef, selection.headRef, true)))
       .catch((message: unknown) => setError(String(message)))
     setPicker(null)
   }, [params.path])

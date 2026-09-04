@@ -21,6 +21,7 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
+import { diffTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type { Project, Worktree as ProjectWorktree } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
@@ -810,7 +811,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         id: panelId("diff"),
         params: { ...params, baseRef: selection.baseRef, headRef: selection.headRef, mergeBase: true },
         position: { direction: "within", referencePanel },
-        title: `Diff: ${reference}`,
+        tabComponent: "compare",
+        title: diffTitle(selectedRefs(selection.baseRef, selection.headRef, true), repository?.defaultBranch ?? null, repository?.remotes ?? []),
       })
     } catch (message) {
       setError(String(message))
@@ -837,7 +839,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, baseRef, headRef: commit.hash },
       position: { direction: "within", referencePanel },
-      title: `Diff: ${commit.hash.slice(0, 8)}`,
+      tabComponent: "compare",
+      title: refLabel(commit.hash),
     })
   }
 
@@ -853,7 +856,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, path: worktree.path, baseRef: "HEAD", headRef: WORKTREE_REF },
       position: { direction: "within", referencePanel },
-      title: `Uncommitted: ${worktree.name}`,
+      tabComponent: "worktree",
+      title: worktree.name,
     })
   }
 
@@ -869,7 +873,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, baseRef: `${entry.sha}^`, headRef: entry.sha },
       position: { direction: "within", referencePanel },
-      title: `Stash: ${entry.name}`,
+      tabComponent: "stash",
+      title: entry.name,
     })
   }
 
@@ -884,7 +889,8 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, baseRef: base.hash, headRef: tip.hash },
       position: { direction: "within", referencePanel },
-      title: `Diff: ${base.hash.slice(0, 8)}..${tip.hash.slice(0, 8)}`,
+      tabComponent: "compare",
+      title: `${refLabel(base.hash)}..${refLabel(tip.hash)}`,
     })
   }
 
