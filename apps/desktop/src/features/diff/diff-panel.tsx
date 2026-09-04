@@ -268,7 +268,7 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
   return useMemo(() => ({ commits, references, stashes }), [commits, references, stashes])
 }
 
-function useDiffLoader(repoPath: string, comparison: Comparison | null) {
+function useDiffLoader(repoPath: string, comparison: Comparison | null, ignoreWhitespace: boolean) {
   const [entries, setEntries] = useState<Record<string, DiffEntry>>({})
   const loader = useRef({ queued: [] as ChangedFile[], started: new Set<string>(), inFlight: 0 })
 
@@ -294,6 +294,7 @@ function useDiffLoader(repoPath: string, comparison: Comparison | null) {
           headSha: comparison.headSha,
           oldPath: file.oldPath,
           newPath: file.newPath,
+          ignoreWhitespace,
         })
           .then((diff): DiffEntry => ({
             state: "loaded",
@@ -316,7 +317,7 @@ function useDiffLoader(repoPath: string, comparison: Comparison | null) {
         state.inFlight -= 1
       })
     }
-  }, [comparison, repoPath])
+  }, [comparison, ignoreWhitespace, repoPath])
 
   return { entries, request, reset }
 }
@@ -374,6 +375,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [viewed, setViewed] = useState<ReadonlyMap<string, string>>(new Map())
   const [hideViewed, setHideViewed] = useState(false)
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(params.userPreferences?.ignoreWhitespace ?? false)
   const [version, setVersion] = useState(0)
   const [picker, setPicker] = useState<PickerSide | null>(null)
   const [searchInput, setSearchInput] = useState("")
@@ -392,7 +394,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const pendingAnchor = useRef<string | null>(null)
   const userPreferencesRef = useRef(userPreferences)
   const pendingRestoredFilePath = useRef(params.selectedFilePath ?? null)
-  const { entries, request, reset } = useDiffLoader(params.path, comparison)
+  const { entries, request, reset } = useDiffLoader(params.path, comparison, ignoreWhitespace)
   const metadata = useRepositoryMetadata(params.path, version)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const shownFiles = useMemo(
@@ -427,6 +429,13 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     setWrap(wrap)
   }
 
+  function setPreferredIgnoreWhitespace(ignoreWhitespace: boolean) {
+    const next = { ...userPreferencesRef.current, ignoreWhitespace }
+    userPreferencesRef.current = next
+    setUserPreferences(next)
+    setIgnoreWhitespace(ignoreWhitespace)
+  }
+
   useEffect(() => {
     api.updateParameters(persistedDiffPanelParams({ name: params.name, path: params.path }, refs, selectedFilePath, userPreferences))
   }, [api, params.name, params.path, refs, selectedFilePath, userPreferences])
@@ -446,7 +455,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head })
       .then((marks) => !cancelled && setViewed(new Map(marks.map((mark) => [mark.path, mark.oid]))))
       .catch(() => undefined)
-    invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase })
+    invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, ignoreWhitespace })
       .then((nextComparison) => {
         if (!cancelled) {
           reset()
@@ -464,7 +473,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     return () => {
       cancelled = true
     }
-  }, [params.path, refs, reset, version])
+  }, [ignoreWhitespace, params.path, refs, reset, version])
 
   // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {
@@ -816,6 +825,9 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
               </DropdownMenuCheckboxItem>
               <DropdownMenuCheckboxItem checked={hideViewed} onCheckedChange={(checked) => setHideViewed(checked === true)} onSelect={(event) => event.preventDefault()}>
                 Hide viewed files
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem checked={ignoreWhitespace} onCheckedChange={(checked) => setPreferredIgnoreWhitespace(checked === true)} onSelect={(event) => event.preventDefault()}>
+                Ignore whitespace
               </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem disabled={files.length === 0} onSelect={() => collapseAll(true)}>
