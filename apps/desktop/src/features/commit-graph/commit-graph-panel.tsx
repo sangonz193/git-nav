@@ -16,7 +16,7 @@ import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboard
 
 import { drawCommitGraph } from "./commit-graph-canvas"
 import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
-import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit } from "./commit-graph-view"
+import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit, type ViewConfig, type ViewConfigChange } from "./commit-graph-view"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
@@ -69,13 +69,20 @@ const commitColumns = commitColumnHelper.columns([
   commitColumnHelper.accessor("hash", { header: "Commit", maxSize: 160, minSize: 68, size: 84 }),
 ])
 
-export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelProps<RepositoryPanelParams>) {
+export function CommitGraphPanel(props: IDockviewPanelProps<RepositoryPanelParams>) {
+  const [config, updateConfig] = useViewConfig()
+  if (!config) {
+    return <main className="relative flex h-full flex-col overflow-hidden bg-background" />
+  }
+  return <CommitGraphPanelContent {...props} config={config} updateConfig={updateConfig} />
+}
+
+function CommitGraphPanelContent({ api, containerApi, params, config, updateConfig }: IDockviewPanelProps<RepositoryPanelParams> & { config: ViewConfig, updateConfig: (change: ViewConfigChange) => void }) {
   const [commits, setCommits] = useState<Commit[]>([])
   const [squashMergeInferences, setSquashMergeInferences] = useState<SquashMergeInference[]>([])
   const [error, setError] = useState<string | null>(null)
   const [cleanupReport, setCleanupReport] = useState<string | null>(null)
   const [isCleanConfirmationOpen, setIsCleanConfirmationOpen] = useState(false)
-  const [config, updateConfig] = useViewConfig()
   const cleanOptions = config.cleanOptions
   const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(null)
   const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(null)
@@ -1356,7 +1363,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
                 <DropdownMenuCheckboxItem
                   checked={config.chipKinds[kind]}
                   key={kind}
-                  onCheckedChange={(checked) => updateConfig({ chipKinds: { ...config.chipKinds, [kind]: checked === true } })}
+                  onCheckedChange={(checked) => updateConfig({ chipKinds: { [kind]: checked === true } })}
                   onSelect={(event) => event.preventDefault()}
                 >
                   {CHIP_KIND_LABELS[kind]}
@@ -1698,15 +1705,15 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
           </AlertDialogHeader>
           <div className="grid gap-3 text-sm">
             <label className="flex items-start gap-2">
-              <input checked={cleanOptions.deleteMergedPullRequestBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { ...cleanOptions, deleteMergedPullRequestBranches: event.target.checked } })} type="checkbox" />
+              <input checked={cleanOptions.deleteMergedPullRequestBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { deleteMergedPullRequestBranches: event.target.checked } })} type="checkbox" />
               <span>Delete branches whose merged pull request head matches the local tip.</span>
             </label>
             <label className="flex items-start gap-2">
-              <input checked={cleanOptions.deleteMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { ...cleanOptions, deleteMergedBranches: event.target.checked } })} type="checkbox" />
+              <input checked={cleanOptions.deleteMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { deleteMergedBranches: event.target.checked } })} type="checkbox" />
               <span>Delete branches with no commits ahead of the default branch that are not checked out in any worktree.</span>
             </label>
             <label className="flex items-start gap-2">
-              <input checked={cleanOptions.deleteSquashMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { ...cleanOptions, deleteSquashMergedBranches: event.target.checked } })} type="checkbox" />
+              <input checked={cleanOptions.deleteSquashMergedBranches} className="mt-0.5 size-4 accent-primary" onChange={(event) => updateConfig({ cleanOptions: { deleteSquashMergedBranches: event.target.checked } })} type="checkbox" />
               <span>Delete branches whose changes already sit on the default branch as one squashed commit, matched by content rather than by a record of the merge.</span>
             </label>
           </div>

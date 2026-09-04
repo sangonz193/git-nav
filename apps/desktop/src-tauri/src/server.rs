@@ -159,6 +159,8 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::stash_changes => Exposure::Api(post(crate::__http_stash_changes)),
         IpcCommand::stash_action => Exposure::Api(post(crate::__http_stash_action)),
         IpcCommand::undo_ref_updates => Exposure::Api(post(crate::__http_undo_ref_updates)),
+        IpcCommand::settings => Exposure::Api(post(settings)),
+        IpcCommand::set_setting => Exposure::Api(post(set_setting)),
     }
 }
 
@@ -316,6 +318,21 @@ fn index_html() -> Response {
 
 async fn recent_projects(State(state): State<Arc<ServerState>>) -> CommandResult {
     ok(recent_project_list(&state.open_worktrees)?)
+}
+
+async fn settings() -> CommandResult {
+    ok(crate::load_settings()?)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingArgs {
+    key: String,
+    value: Value,
+}
+
+async fn set_setting(Json(args): Json<SettingArgs>) -> CommandResult {
+    ok(blocking(move || crate::save_setting(args.key, args.value)).await?)
 }
 
 async fn project_snapshot(
