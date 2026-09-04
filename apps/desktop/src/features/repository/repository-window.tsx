@@ -33,6 +33,7 @@ export type RepositoryPanelParams = {
 
 export type DiffPanelUserPreferences = {
   fileTreeOpen?: boolean
+  hideViewed?: boolean
   ignoreWhitespace?: boolean
   mode?: "split" | "unified"
   wrap?: boolean
