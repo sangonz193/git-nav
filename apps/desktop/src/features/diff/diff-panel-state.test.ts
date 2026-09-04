@@ -7,6 +7,8 @@ describe("initialDiffLayout", () => {
     expect(initialDiffLayout(500, { fileTreeOpen: true, mode: "split" })).toEqual({ fileTreeOpen: false, mode: "split", wrap: true })
     expect(initialDiffLayout(700, { fileTreeOpen: false, mode: "unified" })).toEqual({ fileTreeOpen: false, mode: "unified", wrap: false })
     expect(initialDiffLayout(700, { fileTreeOpen: true, mode: "unified" })).toEqual({ fileTreeOpen: true, mode: "unified", wrap: false })
+    expect(initialDiffLayout(1000, { wrap: true })).toEqual({ fileTreeOpen: true, mode: "split", wrap: true })
+    expect(initialDiffLayout(500, { wrap: false })).toEqual({ fileTreeOpen: false, mode: "unified", wrap: false })
   })
 
   test("derives every unpreferred layout value from the current width", () => {
