@@ -1,6 +1,7 @@
 {
   "name": "git-nav",
   "version": "0.0.5",
+  "description": "Read Git history, worktrees and diffs",
   "type": "module",
   "bin": {
     "git-nav": "./bin/git-nav.js"
@@ -11,6 +12,7 @@
     "url": "git+https://github.com/sangonz193/git-nav.git",
     "directory": "packages/cli"
   },
+  "homepage": "https://github.com/sangonz193/git-nav",
   "files": [
     "bin",
     "README.md"
