@@ -3,6 +3,7 @@ import {
   FolderOpen,
   Maximize,
   Rows3,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react"
@@ -31,6 +32,7 @@ import {
 
 type AppMenuButtonProps = {
   loadRecentProjects?: () => Promise<Project[]>
+  onCloseTab?: () => void
   onRecentProjectsChange?: (projects: Project[]) => void
 }
 
@@ -83,6 +85,7 @@ function Shortcut({ children }: { children: ReactNode }) {
 
 export function AppMenuButton({
   loadRecentProjects,
+  onCloseTab,
   onRecentProjectsChange,
 }: AppMenuButtonProps) {
   const [projects, setProjects] = useState<Project[]>([])
@@ -180,6 +183,16 @@ export function AppMenuButton({
               </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          {onCloseTab && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onCloseTab}>
+                <X />
+                Close Tab
+                {isDesktop && <Shortcut>{shortcutPrefix}W</Shortcut>}
+              </DropdownMenuItem>
+            </>
+          )}
           {isDesktop && (
             <>
               <DropdownMenuSeparator />

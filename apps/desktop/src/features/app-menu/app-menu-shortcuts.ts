@@ -12,6 +12,15 @@ export function usesNativeMenu(userAgent: string) {
   return isMacOS(userAgent)
 }
 
+// Closing a tab needs the window that owns the tabs, so it stays out of the commands the app runs
+// for itself. On macOS the native menu owns the key and sends the window an event instead.
+export function closesTab(event: ShortcutEvent, nativeMenu: boolean) {
+  if (nativeMenu || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+    return false
+  }
+  return event.key.toLowerCase() === "w"
+}
+
 export function desktopAppShortcut(
   event: ShortcutEvent,
   nativeMenu: boolean

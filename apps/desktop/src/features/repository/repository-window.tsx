@@ -8,7 +8,7 @@ import {
 } from "dockview-react"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { FileDiff, GitGraph, Plus } from "lucide-react"
-import { createContext, useContext, useEffect, useRef, useState, type ComponentType } from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ComponentType } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
 import { toast } from "@workspace/shadcn/components/sonner"
@@ -21,6 +21,7 @@ import {
 import { AppMenuButton } from "../app-menu/app-menu"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
+import { useCloseTab } from "../../lib/close-tab"
 import { panelId } from "../../lib/panel-id"
 import { invoke, isDesktop } from "../../lib/ipc"
 import { closeRepositoryWindowAfterSaving, listenForRepositoryLayoutPageHide, repositoryLayoutRestoreController, repositoryLayoutSaveScheduler, REPOSITORY_LAYOUT_VERSION, restoreRepositoryLayout, unresolvablePanelIds, usableRepositoryLayout } from "../../lib/repository-layout"
@@ -100,10 +101,11 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
 
 function RepositoryHeaderActions(props: IDockviewHeaderActionsProps) {
   const showAppMenu = props.isGroupActive && (!props.location || props.location.type === "grid")
+  const activePanel = props.activePanel
   return (
     <div className="flex items-center gap-0.5">
       <NewTabAction {...props} />
-      {showAppMenu && <AppMenuButton />}
+      {showAppMenu && <AppMenuButton onCloseTab={activePanel && (() => activePanel.api.close())} />}
     </div>
   )
 }
@@ -199,6 +201,13 @@ export function RepositoryWindow({ macOSWindowChrome, path }: { macOSWindowChrom
     disposeDockviewListeners.current()
     activeDockview.current = null
   }, [])
+
+  // A window with no tabs left has nothing else the shortcut could mean, so it closes itself.
+  useCloseTab(useCallback(() => {
+    const panel = activeDockview.current?.activePanel
+    if (panel) panel.api.close()
+    else void getCurrentWindow().close()
+  }, []))
 
   useEffect(() => {
     macOSWindowChromeRef.current = macOSWindowChrome
