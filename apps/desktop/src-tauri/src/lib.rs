@@ -2769,18 +2769,19 @@ fn read_viewed_files(
 
 // Marks are only worth keeping for the comparisons still being read, so the least recently marked ones
 // fall away rather than growing a store nothing empties.
-fn prune_viewed_comparisons(connection: &Connection) -> Result<(), String> {
+fn prune_viewed_comparisons(connection: &Connection, project: &str) -> Result<(), String> {
     connection
         .execute(
             "
-            DELETE FROM viewed_files WHERE (project_id, base_ref, head_ref) NOT IN (
-              SELECT project_id, base_ref, head_ref FROM viewed_files
-              GROUP BY project_id, base_ref, head_ref
+            DELETE FROM viewed_files WHERE project_id = ?1 AND (base_ref, head_ref) NOT IN (
+              SELECT base_ref, head_ref FROM viewed_files
+              WHERE project_id = ?1
+              GROUP BY base_ref, head_ref
               ORDER BY MAX(viewed_at) DESC
-              LIMIT ?1
+              LIMIT ?2
             )
             ",
-            params![VIEWED_COMPARISON_LIMIT],
+            params![project, VIEWED_COMPARISON_LIMIT],
         )
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2819,7 +2820,7 @@ fn write_viewed_file(
             params![project, base_ref, head_ref, path, oid, viewed_at],
         )
         .map_err(|error| error.to_string())?;
-    prune_viewed_comparisons(connection)
+    prune_viewed_comparisons(connection, project)
 }
 
 #[git_nav_macros::http_command]
@@ -4677,7 +4678,7 @@ mod tests {
     }
 
     #[test]
-    fn forgets_the_comparisons_left_behind_by_the_ones_still_being_read() {
+    fn keeps_recent_viewed_comparisons_per_project() {
         let mut connection = Connection::open_in_memory().unwrap();
         migrate_viewed_files_database(&mut connection).unwrap();
         for index in 0..VIEWED_COMPARISON_LIMIT + 5 {
@@ -4688,17 +4689,39 @@ mod tests {
                 )
                 .unwrap();
         }
+        connection
+            .execute(
+                "INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at) VALUES ('other-project', 'main', 'old', 'src/main.rs', 'abc', 0)",
+                [],
+            )
+            .unwrap();
 
-        prune_viewed_comparisons(&connection).unwrap();
+        prune_viewed_comparisons(&connection, "project").unwrap();
 
         let comparisons = connection
-            .query_row("SELECT COUNT(DISTINCT head_ref) FROM viewed_files", [], |row| row.get::<_, i64>(0))
+            .query_row(
+                "SELECT COUNT(DISTINCT head_ref) FROM viewed_files WHERE project_id = 'project'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
             .unwrap();
         assert_eq!(comparisons, VIEWED_COMPARISON_LIMIT);
         let oldest = connection
-            .query_row("SELECT MIN(viewed_at) FROM viewed_files", [], |row| row.get::<_, i64>(0))
+            .query_row(
+                "SELECT MIN(viewed_at) FROM viewed_files WHERE project_id = 'project'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
             .unwrap();
         assert_eq!(oldest, 5);
+        let other_project = connection
+            .query_row(
+                "SELECT COUNT(*) FROM viewed_files WHERE project_id = 'other-project'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(other_project, 1);
     }
 
     #[test]
