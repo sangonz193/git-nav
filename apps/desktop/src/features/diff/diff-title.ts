@@ -1,4 +1,4 @@
-import { WORKTREE_REF } from "../repository/repository-window"
+import { WORKTREE_REF } from "@/lib/repository-constants"
 
 export type SelectedRefs = {
   base: string
@@ -41,8 +41,8 @@ export function branchRangeTitle(range: SelectedRefs) {
   return diffTitle(range, range.base, [])
 }
 
-export function selectedRefs(base: string, head: string, mergeBase: boolean): SelectedRefs {
-  return { base, head, baseLabel: refLabel(base), headLabel: refLabel(head), mergeBase }
+export function selectedRefs(base: string, head: string, mergeBase: boolean, baseLabel = refLabel(base), headLabel = refLabel(head)): SelectedRefs {
+  return { base, head, baseLabel, headLabel, mergeBase }
 }
 
 export function refLabel(reference: string) {

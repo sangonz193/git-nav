@@ -1,6 +1,6 @@
 import type { Commit, StashEntry } from "../commit-graph/commit-graph"
 import { searchGraph } from "../commit-graph/commit-graph-view"
-import { WORKTREE_REF } from "../repository/repository-window"
+import { WORKTREE_REF } from "@/lib/repository-constants"
 
 const HIT_LIMIT = 50
 // Anything that reads as a revision expression rather than a name to complete: `HEAD~1`, `main^2`,

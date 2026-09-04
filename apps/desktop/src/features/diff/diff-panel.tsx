@@ -14,7 +14,8 @@ import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
 import { branchRangeTitle, diffTitle, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
-import type { DiffPanelParams } from "../repository/repository-window"
+import { initialDiffLayout, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree } from "./diff-panel-state"
+import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
 const LARGE_DIFF_LINES = 1200
@@ -26,8 +27,6 @@ const HUNK_ROW_HEIGHT = 30
 const FILE_HEADER_HEIGHT = 30
 const COLLAPSED_BODY_HEIGHT = 40
 const SEARCH_DEBOUNCE = 120
-const NARROW_PANEL_WIDTH = 620
-const SPLIT_PANEL_WIDTH = 900
 const PICKER_MENU_WIDTH = 320
 
 const HIT_ICONS: Record<HitKind, ComponentType<{ className?: string }>> = {
@@ -364,10 +363,10 @@ function FileDiffCard({ entry, expanded, file, mode, onExpand, theme, wrap }: { 
 
 export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>) {
   const theme = useTheme()
-  const [refs, setRefs] = useState<SelectedRefs>(selectedRefs(params.baseRef, params.headRef, params.mergeBase ?? false))
+  const [refs, setRefs] = useState<SelectedRefs>(selectedRefs(params.baseRef, params.headRef, params.mergeBase ?? false, params.baseLabel, params.headLabel))
   const [comparison, setComparison] = useState<Comparison | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [mode, setMode] = useState(DiffModeEnum.Split)
+  const [mode, setMode] = useState(params.userPreferences?.mode === "unified" ? DiffModeEnum.Unified : DiffModeEnum.Split)
   const [wrap, setWrap] = useState(false)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [version, setVersion] = useState(0)
@@ -376,19 +375,43 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const [searchQuery, setSearchQuery] = useState("")
   const [hitIndex, setHitIndex] = useState(0)
   const [revision, setRevision] = useState<ResolvedRevision | null>(null)
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(params.userPreferences?.fileTreeOpen ?? true)
+  const [userPreferences, setUserPreferences] = useState<DiffPanelUserPreferences>(() => params.userPreferences ?? {})
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(params.selectedFilePath ?? null)
   const [isNarrow, setIsNarrow] = useState(false)
   const [panelWidth, setPanelWidth] = useState(0)
   const panel = useRef<HTMLElement>(null)
   const pickerButtons = useRef<Record<PickerSide, HTMLButtonElement | null>>({ base: null, head: null })
   const scrollElement = useRef<HTMLDivElement>(null)
   const pendingScroll = useRef<string | null>(null)
+  const userPreferencesRef = useRef(userPreferences)
+  const pendingRestoredFilePath = useRef(params.selectedFilePath ?? null)
   const { entries, request, reset } = useDiffLoader(params.path, comparison)
   const metadata = useRepositoryMetadata(params.path, version)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const tree = useMemo(() => fileTree(comparison?.files ?? []), [comparison])
   const files = useMemo(() => flattenTree(tree), [tree])
   const total = useMemo(() => changedLines(files), [files])
+
+  function toggleFileTree() {
+    const next = toggledDiffFileTree(isSidebarOpen, isNarrow, userPreferencesRef.current)
+    if (next.preferences !== userPreferencesRef.current) {
+      userPreferencesRef.current = next.preferences
+      setUserPreferences(next.preferences)
+    }
+    setIsSidebarOpen(next.fileTreeOpen)
+  }
+
+  function setPreferredMode(mode: "split" | "unified") {
+    const next = { ...userPreferencesRef.current, mode }
+    userPreferencesRef.current = next
+    setUserPreferences(next)
+    setMode(mode === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified)
+  }
+
+  useEffect(() => {
+    api.updateParameters(persistedDiffPanelParams({ name: params.name, path: params.path }, refs, selectedFilePath, userPreferences))
+  }, [api, params.name, params.path, refs, selectedFilePath, userPreferences])
 
   const rowVirtualizer = useVirtualizer({
     count: files.length,
@@ -420,10 +443,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     }
   }, [params.path, refs, reset, version])
 
-  // A drawer laid over the diff is not somewhere to leave the tree parked, so the layout it belongs to
-  // decides whether it is open. The side-by-side columns only get a starting say, so resizing never
-  // undoes a layout that was picked deliberately. The panel is measured before it is painted, so the
-  // toolbar is never laid out for a width the panel does not have.
+  // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {
     const element = panel.current
     if (!element) {
@@ -438,14 +458,18 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
       }
       setPanelWidth(width)
       if (narrow === null) {
-        setMode(width < SPLIT_PANEL_WIDTH ? DiffModeEnum.Unified : DiffModeEnum.Split)
-        setWrap(width < NARROW_PANEL_WIDTH)
+        const layout = initialDiffLayout(width, userPreferencesRef.current)
+        setMode(layout.mode === "unified" ? DiffModeEnum.Unified : DiffModeEnum.Split)
+        setIsSidebarOpen(layout.fileTreeOpen)
+        setWrap(layout.wrap)
       }
-      const next = width < NARROW_PANEL_WIDTH
+      const next = width < NARROW_DIFF_PANEL_WIDTH
       if (narrow !== next) {
+        if (narrow !== null) {
+          setIsSidebarOpen(initialDiffLayout(width, userPreferencesRef.current).fileTreeOpen)
+        }
         narrow = next
         setIsNarrow(next)
-        setIsSidebarOpen(!next)
       }
     }
     layOut(element.getBoundingClientRect().width)
@@ -500,6 +524,9 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
       .then((selection) => {
         const range = selectedRefs(selection.baseRef, selection.headRef, true)
+        pendingRestoredFilePath.current = null
+        pendingScroll.current = null
+        setSelectedFilePath(null)
         setRefs(range)
         api.setTitle(branchRangeTitle(range))
       })
@@ -539,11 +566,25 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   }, [entries, files, rowVirtualizer])
 
   const selectFile = useCallback((file: ChangedFile) => {
+    pendingRestoredFilePath.current = null
     scrollToFile(file)
+    setSelectedFilePath(fileName(file))
     if (isNarrow) {
       setIsSidebarOpen(false)
     }
   }, [isNarrow, scrollToFile])
+
+  useEffect(() => {
+    const path = pendingRestoredFilePath.current
+    if (!comparison || !path) {
+      return
+    }
+    pendingRestoredFilePath.current = null
+    const file = files.find((candidate) => fileName(candidate) === path)
+    if (file) {
+      scrollToFile(file)
+    }
+  }, [comparison, files, scrollToFile])
   const fileList = useMemo(() => <FileTree activeKey={activeKey} files={tree} onSelect={selectFile} />, [activeKey, selectFile, tree])
 
   function openPicker(side: PickerSide) {
@@ -559,6 +600,9 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     const moved = picker === "base"
       ? { ...refs, base: hit.reference, baseLabel: hit.label, mergeBase: false }
       : { ...refs, head: hit.reference, headLabel: hit.label }
+    pendingRestoredFilePath.current = null
+    pendingScroll.current = null
+    setSelectedFilePath(null)
     setRefs(moved)
     api.setTitle(diffTitle(moved, metadata.defaultBranch, metadata.remotes ?? []))
     setPicker(null)
@@ -611,7 +655,9 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     <section className="diff-panel" ref={panel}>
       <div className="diff-toolbar">
         <Hinted hint={isSidebarOpen ? "Hide changed files" : "Show changed files"}>
-          <Button aria-expanded={isSidebarOpen} aria-label="Toggle changed files" onClick={() => setIsSidebarOpen((current) => !current)} size="icon-sm" type="button" variant="outline">
+          <Button aria-expanded={isSidebarOpen} aria-label="Toggle changed files" onClick={() => {
+            toggleFileTree()
+          }} size="icon-sm" type="button" variant="outline">
             <PanelLeft />
           </Button>
         </Hinted>
@@ -641,11 +687,15 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
             </Tooltip>
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Layout</DropdownMenuLabel>
-              <DropdownMenuCheckboxItem checked={isSplit} onCheckedChange={() => setMode(DiffModeEnum.Split)} onSelect={(event) => event.preventDefault()}>
+              <DropdownMenuCheckboxItem checked={isSplit} onCheckedChange={() => {
+                setPreferredMode("split")
+              }} onSelect={(event) => event.preventDefault()}>
                 <Columns2 />
                 Split
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={!isSplit} onCheckedChange={() => setMode(DiffModeEnum.Unified)} onSelect={(event) => event.preventDefault()}>
+              <DropdownMenuCheckboxItem checked={!isSplit} onCheckedChange={() => {
+                setPreferredMode("unified")
+              }} onSelect={(event) => event.preventDefault()}>
                 <Rows3 />
                 Unified
               </DropdownMenuCheckboxItem>

@@ -99,6 +99,8 @@ commands![
     undo_ref_updates,
     settings,
     set_setting,
+    repository_layout,
+    save_repository_layout,
 ];
 
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
@@ -455,6 +457,10 @@ fn settings_path() -> Result<PathBuf, String> {
     data_dir().map(|dir| dir.join("settings.json"))
 }
 
+fn repository_layouts_path() -> Result<PathBuf, String> {
+    data_dir().map(|dir| dir.join("repository-layouts.json"))
+}
+
 fn pull_request_database_path() -> Result<PathBuf, String> {
     data_dir().map(|dir| dir.join("pull-requests.sqlite3"))
 }
@@ -515,6 +521,28 @@ fn save_setting_at_then(
     value: serde_json::Value,
     after_save: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
+    with_locked_file(path, || {
+        let mut settings = match read_settings(path)? {
+            StoredSettings::Valid(settings) => settings,
+            StoredSettings::Malformed => {
+                fs::rename(path, malformed_settings_path(path))
+                    .map_err(|error| error.to_string())?;
+                BTreeMap::new()
+            }
+        };
+        settings.insert(key, value);
+        write_json_atomically(path, &settings)?;
+        if let Err(error) = after_save() {
+            log::warn!("Could not broadcast saved setting: {error}");
+        }
+        Ok(())
+    })
+}
+
+fn with_locked_file<T>(
+    path: &Path,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     use fs2::FileExt;
 
     let lock_path = path.with_extension("lock");
@@ -524,21 +552,15 @@ fn save_setting_at_then(
         .open(lock_path)
         .map_err(|error| error.to_string())?;
     lock.lock_exclusive().map_err(|error| error.to_string())?;
-    let mut settings = match read_settings(path)? {
-        StoredSettings::Valid(settings) => settings,
-        StoredSettings::Malformed => {
-            fs::rename(path, malformed_settings_path(path)).map_err(|error| error.to_string())?;
-            BTreeMap::new()
-        }
-    };
-    settings.insert(key, value);
-    let contents = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
+    operation()
+}
+
+fn write_json_atomically(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    let contents = serde_json::to_string(value).map_err(|error| error.to_string())?;
     let temporary_path = path.with_extension("json.tmp");
     fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
+    // std::fs::rename replaces an existing destination on every platform, including Windows via MoveFileExW.
     fs::rename(temporary_path, path).map_err(|error| error.to_string())?;
-    if let Err(error) = after_save() {
-        log::warn!("Could not broadcast saved setting: {error}");
-    }
     Ok(())
 }
 
@@ -548,6 +570,68 @@ fn save_setting_at(path: &Path, key: String, value: serde_json::Value) -> Result
 
 fn save_setting(key: String, value: serde_json::Value) -> Result<(), String> {
     save_setting_at(&settings_path()?, key, value)
+}
+
+type RepositoryLayouts = BTreeMap<String, BTreeMap<String, serde_json::Value>>;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryLayout {
+    path: String,
+    layout: Option<serde_json::Value>,
+}
+
+fn load_repository_layout(path: String, client_id: String) -> Result<RepositoryLayout, String> {
+    let path = worktree_path(&path)?;
+    let contents = match fs::read_to_string(repository_layouts_path()?) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RepositoryLayout { path, layout: None })
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let layouts: RepositoryLayouts = serde_json::from_str(&contents).unwrap_or_default();
+    Ok(RepositoryLayout {
+        layout: layouts
+            .get(&client_id)
+            .and_then(|layouts| layouts.get(&path))
+            .cloned(),
+        path,
+    })
+}
+
+fn write_repository_layout_at(
+    storage_path: &Path,
+    path: String,
+    client_id: String,
+    layout: serde_json::Value,
+) -> Result<(), String> {
+    with_locked_file(storage_path, || {
+        let layouts = match fs::read_to_string(storage_path) {
+            Ok(contents) => match serde_json::from_str(&contents) {
+                Ok(layouts) => layouts,
+                Err(_) => {
+                    fs::rename(storage_path, malformed_settings_path(storage_path))
+                        .map_err(|error| error.to_string())?;
+                    RepositoryLayouts::new()
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => RepositoryLayouts::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let mut layouts: RepositoryLayouts = layouts;
+        layouts.entry(client_id).or_default().insert(path, layout);
+        write_json_atomically(storage_path, &layouts)
+    })
+}
+
+fn save_repository_layout_at(
+    storage_path: &Path,
+    path: String,
+    client_id: String,
+    layout: serde_json::Value,
+) -> Result<(), String> {
+    write_repository_layout_at(storage_path, worktree_path(&path)?, client_id, layout)
 }
 
 fn load_recent_paths() -> Result<Vec<String>, String> {
@@ -1805,6 +1889,20 @@ fn set_setting(app: AppHandle, key: String, value: serde_json::Value) -> Result<
         app.emit(SETTING_CHANGED_EVENT, SettingChanged { key, value })
             .map_err(|error| error.to_string())
     })
+}
+
+#[tauri::command]
+fn repository_layout(path: String, client_id: String) -> Result<RepositoryLayout, String> {
+    load_repository_layout(path, client_id)
+}
+
+#[tauri::command]
+fn save_repository_layout(
+    path: String,
+    client_id: String,
+    layout: serde_json::Value,
+) -> Result<(), String> {
+    save_repository_layout_at(&repository_layouts_path()?, path, client_id, layout)
 }
 
 #[tauri::command]
@@ -3905,6 +4003,124 @@ mod tests {
             StoredSettings::Malformed => panic!("new settings store is malformed"),
         };
         assert_eq!(settings.get("new-key"), Some(&serde_json::json!(true)));
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn stores_repository_layouts_by_client_and_worktree() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            env::temp_dir().join(format!("git-nav-layouts-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("repository-layouts.json");
+        let desktop_layout = serde_json::json!({ "version": 1, "layout": {} });
+        let browser_layout = serde_json::json!({ "version": 2 });
+
+        write_repository_layout_at(
+            &path,
+            "/repositories/one".to_string(),
+            "desktop".to_string(),
+            desktop_layout.clone(),
+        )
+        .unwrap();
+        write_repository_layout_at(
+            &path,
+            "/repositories/one".to_string(),
+            "browser".to_string(),
+            browser_layout.clone(),
+        )
+        .unwrap();
+
+        let layouts: RepositoryLayouts = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            layouts.get("desktop").and_then(|entries| entries.get("/repositories/one")),
+            Some(&desktop_layout)
+        );
+        assert_eq!(
+            layouts.get("browser").and_then(|entries| entries.get("/repositories/one")),
+            Some(&browser_layout)
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn normalizes_repository_layout_paths_before_saving() {
+        let (repository, _) = scratch_repository("layout-path");
+        let directory = PathBuf::from(&repository);
+        let storage_path = directory.join("repository-layouts.json");
+        let subdirectory = directory.join("src");
+        fs::create_dir_all(&subdirectory).unwrap();
+        let layout = serde_json::json!({ "version": 1 });
+
+        save_repository_layout_at(
+            &storage_path,
+            subdirectory.to_string_lossy().into_owned(),
+            "browser".to_string(),
+            layout.clone(),
+        )
+        .unwrap();
+
+        let layouts: RepositoryLayouts =
+            serde_json::from_str(&fs::read_to_string(storage_path).unwrap()).unwrap();
+        let worktree = worktree_path(&repository).unwrap();
+        assert_eq!(
+            layouts
+                .get("browser")
+                .and_then(|entries| entries.get(&worktree)),
+            Some(&layout)
+        );
+
+        remove_scratch_repository(&repository);
+    }
+
+    #[test]
+    fn preserves_malformed_repository_layouts_before_starting_a_new_store() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = env::temp_dir().join(format!(
+            "git-nav-layouts-malformed-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("repository-layouts.json");
+        fs::write(&path, "{malformed").unwrap();
+        let layout = serde_json::json!({ "version": 1 });
+
+        write_repository_layout_at(
+            &path,
+            "/repositories/one".to_string(),
+            "desktop".to_string(),
+            layout.clone(),
+        )
+        .unwrap();
+
+        let layouts: RepositoryLayouts =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            layouts
+                .get("desktop")
+                .and_then(|entries| entries.get("/repositories/one")),
+            Some(&layout)
+        );
+        let backups = fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("repository-layouts.invalid-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), "{malformed");
 
         fs::remove_dir_all(directory).unwrap();
     }

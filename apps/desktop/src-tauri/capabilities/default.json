@@ -6,5 +6,8 @@
     "main",
     "repository-*"
   ],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-destroy"
+  ]
 }
