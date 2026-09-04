@@ -1,0 +1,64 @@
+import { describe, expect, test } from "bun:test"
+
+import { initialDiffLayout, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree } from "./diff-panel-state"
+
+describe("initialDiffLayout", () => {
+  test("uses explicit preferences without treating responsive state as one", () => {
+    expect(initialDiffLayout(500, { fileTreeOpen: true, mode: "split" })).toEqual({ fileTreeOpen: false, mode: "split", wrap: true })
+    expect(initialDiffLayout(700, { fileTreeOpen: false, mode: "unified" })).toEqual({ fileTreeOpen: false, mode: "unified", wrap: false })
+    expect(initialDiffLayout(700, { fileTreeOpen: true, mode: "unified" })).toEqual({ fileTreeOpen: true, mode: "unified", wrap: false })
+  })
+
+  test("derives every unpreferred layout value from the current width", () => {
+    expect(initialDiffLayout(NARROW_DIFF_PANEL_WIDTH - 1, {})).toEqual({ fileTreeOpen: false, mode: "unified", wrap: true })
+    expect(initialDiffLayout(NARROW_DIFF_PANEL_WIDTH, {})).toEqual({ fileTreeOpen: true, mode: "unified", wrap: false })
+    expect(initialDiffLayout(1000, {})).toEqual({ fileTreeOpen: true, mode: "split", wrap: false })
+  })
+})
+
+describe("toggledDiffFileTree", () => {
+  test("does not turn a transient narrow drawer state into a preference", () => {
+    const preferences = { fileTreeOpen: true, mode: "unified" as const }
+
+    expect(toggledDiffFileTree(true, true, preferences)).toEqual({ fileTreeOpen: false, preferences })
+    expect(toggledDiffFileTree(false, true, {})).toEqual({ fileTreeOpen: true, preferences: {} })
+  })
+
+  test("persists an explicit file tree toggle on a wide panel", () => {
+    expect(toggledDiffFileTree(true, false, { mode: "split" })).toEqual({
+      fileTreeOpen: false,
+      preferences: { fileTreeOpen: false, mode: "split" },
+    })
+  })
+})
+
+describe("persistedDiffPanelParams", () => {
+  const repository = { name: "git-nav", path: "/projects/git-nav" }
+  const refs = { base: "a".repeat(40), baseLabel: "Base subject", head: "b".repeat(40), headLabel: "Stash changes", mergeBase: false }
+
+  test("keeps labels and only explicit user preferences", () => {
+    expect(persistedDiffPanelParams(repository, refs, "src/index.ts", { fileTreeOpen: true, mode: "split" })).toEqual({
+      ...repository,
+      baseRef: refs.base,
+      baseLabel: "Base subject",
+      headRef: refs.head,
+      headLabel: "Stash changes",
+      mergeBase: false,
+      selectedFilePath: "src/index.ts",
+      userPreferences: { fileTreeOpen: true, mode: "split" },
+    })
+  })
+
+  test("cannot promote a width-derived layout into a preference", () => {
+    expect(persistedDiffPanelParams(repository, refs, null, {})).toEqual({
+      ...repository,
+      baseRef: refs.base,
+      baseLabel: "Base subject",
+      headRef: refs.head,
+      headLabel: "Stash changes",
+      mergeBase: false,
+      selectedFilePath: null,
+      userPreferences: undefined,
+    })
+  })
+})

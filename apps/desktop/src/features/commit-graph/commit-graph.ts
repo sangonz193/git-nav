@@ -275,6 +275,40 @@ export function commitSelection(commits: Commit[], indexA: number, indexB: numbe
   }
 }
 
+export function persistedSelectionRange(commits: Commit[], hashes: string[], isLoading: boolean) {
+  if (hashes.length === 0) {
+    return null
+  }
+  const selected = hashes.map((hash) => commits.find((commit) => commit.hash === hash)).filter((commit): commit is Commit => Boolean(commit))
+  if (selected.length === hashes.length) {
+    return { anchorHash: selected[0].hash, focusHash: selected.at(-1)!.hash }
+  }
+  return isLoading ? undefined : null
+}
+
+export function persistedSelectionHashes(range: { anchorHash: string, focusHash: string } | null) {
+  if (!range) {
+    return []
+  }
+  return range.anchorHash === range.focusHash
+    ? [range.anchorHash]
+    : [range.anchorHash, range.focusHash]
+}
+
+export function persistedSelectionRestore(commits: Commit[], hashes: string[], isLoading: boolean) {
+  const range = persistedSelectionRange(commits, hashes, isLoading)
+  return range === undefined ? undefined : { range, selectedCommitHashes: persistedSelectionHashes(range) }
+}
+
+export function persistedGraphPanelParams(name: string, path: string, selectedCommitHashes: string[], columnWidths: Record<string, number>) {
+  return {
+    name,
+    path,
+    selectedCommitHashes,
+    userPreferences: Object.keys(columnWidths).length > 0 ? { columnWidths } : undefined,
+  }
+}
+
 export function refSelection(ref: DisplayRef, sha: string): RefSelection {
   return { kind: ref.kind, ref, sha }
 }

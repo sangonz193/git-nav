@@ -165,6 +165,8 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::undo_ref_updates => Exposure::Api(post(crate::__http_undo_ref_updates)),
         IpcCommand::settings => Exposure::Api(post(settings)),
         IpcCommand::set_setting => Exposure::Api(post(set_setting)),
+        IpcCommand::repository_layout => Exposure::Api(post(repository_layout)),
+        IpcCommand::save_repository_layout => Exposure::Api(post(save_repository_layout)),
     }
 }
 
@@ -341,6 +343,32 @@ struct SettingArgs {
 
 async fn set_setting(Json(args): Json<SettingArgs>) -> CommandResult {
     ok(blocking(move || crate::save_setting(args.key, args.value)).await?)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryLayoutArgs {
+    path: String,
+    client_id: String,
+}
+
+async fn repository_layout(Json(args): Json<RepositoryLayoutArgs>) -> CommandResult {
+    ok(blocking(move || crate::load_repository_layout(args.path, args.client_id)).await?)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveRepositoryLayoutArgs {
+    path: String,
+    client_id: String,
+    layout: Value,
+}
+
+async fn save_repository_layout(Json(args): Json<SaveRepositoryLayoutArgs>) -> CommandResult {
+    ok(
+        blocking(move || crate::save_repository_layout(args.path, args.client_id, args.layout))
+            .await?,
+    )
 }
 
 async fn project_snapshot(

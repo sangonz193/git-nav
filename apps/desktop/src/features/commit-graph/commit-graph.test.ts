@@ -17,6 +17,10 @@ import {
   isCurrentCheckout,
   laneColor,
   parentEdgeColor,
+  persistedGraphPanelParams,
+  persistedSelectionHashes,
+  persistedSelectionRange,
+  persistedSelectionRestore,
   pullRequestDescription,
   pullRequestLabel,
   refSelection,
@@ -519,6 +523,46 @@ describe("graphCanvasHeight", () => {
 
   test("stays at zero for a viewport shorter than the header", () => {
     expect(graphCanvasHeight(0)).toBe(0)
+  })
+})
+
+describe("persistedSelectionRange", () => {
+  test("treats an empty persisted selection as restored without indexing it", () => {
+    expect(persistedSelectionRange([], [], true)).toBeNull()
+  })
+
+  test("waits for streaming commits before abandoning unavailable hashes", () => {
+    expect(persistedSelectionRange([commit("a")], ["missing"], true)).toBeUndefined()
+    expect(persistedSelectionRange([commit("a")], ["missing"], false)).toBeNull()
+  })
+
+  test("restores both endpoints after every selected commit arrives", () => {
+    expect(persistedSelectionRange(linear, ["a", "c"], true)).toEqual({ anchorHash: "a", focusHash: "c" })
+  })
+
+  test("completes an unresolved selection with hashes ready to clear", () => {
+    expect(persistedSelectionRestore([commit("a")], ["missing"], false)).toEqual({ range: null, selectedCommitHashes: [] })
+  })
+})
+
+describe("persistedSelectionHashes", () => {
+  test("stores only the endpoints of a commit range", () => {
+    expect(persistedSelectionHashes({ anchorHash: "a", focusHash: "z" })).toEqual(["a", "z"])
+    expect(persistedSelectionHashes({ anchorHash: "a", focusHash: "a" })).toEqual(["a"])
+    expect(persistedSelectionHashes(null)).toEqual([])
+  })
+})
+
+describe("persistedGraphPanelParams", () => {
+  test("stores only explicit column sizing as a user preference", () => {
+    expect(persistedGraphPanelParams("git-nav", "/projects/git-nav", [], {})).toEqual({
+      name: "git-nav",
+      path: "/projects/git-nav",
+      selectedCommitHashes: [],
+      userPreferences: undefined,
+    })
+    expect(persistedGraphPanelParams("git-nav", "/projects/git-nav", ["a"], { subject: 300 }).userPreferences)
+      .toEqual({ columnWidths: { subject: 300 } })
   })
 })
 

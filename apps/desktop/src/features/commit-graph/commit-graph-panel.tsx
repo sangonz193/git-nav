@@ -3,6 +3,8 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
 import { invoke, isDesktop, stream } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
+import { createUserWinningRestore } from "@/lib/pending-restore"
+import { WORKTREE_REF } from "@/lib/repository-constants"
 import { openPullRequest, openWorktree, type WorktreeTarget } from "@/lib/navigation"
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
@@ -15,12 +17,12 @@ import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDow
 import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
+import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, persistedGraphPanelParams, persistedSelectionHashes, persistedSelectionRestore, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
 import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit, type ViewConfig, type ViewConfigChange } from "./commit-graph-view"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
-import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
+import type { GraphPanelParams } from "../repository/repository-window"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type { Project, Worktree as ProjectWorktree } from "../repository/project"
 
@@ -138,7 +140,7 @@ function RowContextMenuBody({ canSelectRange, chipMenuEntry, chips, commit, copy
   )
 }
 
-export function CommitGraphPanel(props: IDockviewPanelProps<RepositoryPanelParams>) {
+export function CommitGraphPanel(props: IDockviewPanelProps<GraphPanelParams>) {
   const [config, updateConfig] = useViewConfig()
   if (!config) {
     return <main className="relative flex h-full flex-col overflow-hidden bg-background" />
@@ -146,7 +148,8 @@ export function CommitGraphPanel(props: IDockviewPanelProps<RepositoryPanelParam
   return <CommitGraphPanelContent {...props} config={config} updateConfig={updateConfig} />
 }
 
-function CommitGraphPanelContent({ api, containerApi, params, config, updateConfig }: IDockviewPanelProps<RepositoryPanelParams> & { config: ViewConfig, updateConfig: (change: ViewConfigChange) => void }) {
+function CommitGraphPanelContent({ api, containerApi, params, config, updateConfig }: IDockviewPanelProps<GraphPanelParams> & { config: ViewConfig, updateConfig: (change: ViewConfigChange) => void }) {
+  const repositoryPanelParams = { name: params.name, path: params.path }
   const [commits, setCommits] = useState<Commit[]>([])
   const [squashMergeInferences, setSquashMergeInferences] = useState<SquashMergeInference[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -160,7 +163,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   const [graphVersion, setGraphVersion] = useState(0)
   const [graphOffset, setGraphOffset] = useState(0)
   const [hasOlderCommits, setHasOlderCommits] = useState(false)
-  const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(false)
+  const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(true)
   const [projectWorktrees, setProjectWorktrees] = useState<ProjectWorktree[]>([])
   const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(new Map())
   const [pullRequests, setPullRequests] = useState<Map<string, BranchPullRequest>>(new Map())
@@ -173,6 +176,17 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
   const [rowHeight, setRowHeight] = useState(ROW_HEIGHT)
+  const [columnSizing, setColumnSizing] = useState<Record<string, number>>(() => params.userPreferences?.columnWidths ?? {})
+  const selectionRestore = useRef(createUserWinningRestore(params.selectedCommitHashes !== undefined)).current
+  const [selectionRestored, setSelectionRestored] = useState(!selectionRestore.pending)
+  const beginUserSelection = useCallback(() => {
+    selectionRestore.userAction(() => setSelectionRestored(true))
+  }, [selectionRestore])
+  const clearSelection = useCallback(() => {
+    beginUserSelection()
+    setSelectionRange(null)
+    setSelectedRef(null)
+  }, [beginUserSelection])
   // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
   const [isSearchOpen, setIsSearchOpen] = useState(false)
@@ -221,9 +235,11 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   }, [params.path])
   const table = useTable({
     columnResizeMode: "onChange",
+    onColumnSizingChange: setColumnSizing,
     data: EMPTY_COMMITS,
     features: commitTableFeatures,
     columns: commitColumns,
+    state: { columnSizing },
   })
   const columnTemplate = table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ")
   // Refs share the commit column with the subject, which keeps whatever they do not take.
@@ -283,6 +299,29 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
   }, [branchSync, commits, commitsSelection, pullRequests, remotes, selectedRef, worktreesByHead])
   const selectedHashes = useMemo(() => new Set(commitsSelection?.commits.map((commit) => commit.hash)), [commitsSelection])
+  const selectedCommitHashes = useMemo(() => persistedSelectionHashes(selectionRange), [selectionRange])
+
+  useEffect(() => {
+    if (!selectionRestore.pending || params.selectedCommitHashes === undefined) {
+      return
+    }
+    const restored = persistedSelectionRestore(commits, params.selectedCommitHashes, isGraphWindowLoading)
+    if (restored === undefined) {
+      return
+    }
+    selectionRestore.restore(() => {
+      api.updateParameters(persistedGraphPanelParams(params.name, params.path, restored.selectedCommitHashes, columnSizing))
+      setSelectionRange(restored.range)
+      setSelectionRestored(true)
+    })
+  }, [api, columnSizing, commits, isGraphWindowLoading, params.name, params.path, params.selectedCommitHashes, selectionRestore])
+
+  useEffect(() => {
+    if (!selectionRestored) {
+      return
+    }
+    api.updateParameters(persistedGraphPanelParams(params.name, params.path, selectedCommitHashes, columnSizing))
+  }, [api, columnSizing, params.name, params.path, selectedCommitHashes, selectionRestored])
   const selectionEndpointIndexes = useMemo(() => selectionRange
     ? { anchor: commits.findIndex((commit) => commit.hash === selectionRange.anchorHash), focus: commits.findIndex((commit) => commit.hash === selectionRange.focusHash) }
     : null, [commits, selectionRange])
@@ -764,7 +803,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [selection])
+  }, [clearSelection, selection])
 
   useEffect(() => {
     if (canvas.current) {
@@ -852,6 +891,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     if (!commit) {
       return
     }
+    beginUserSelection()
     if (hit.kind === "commit" || hit.kind === "stash") {
       setSelectedRef(null)
       setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
@@ -866,6 +906,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   }
 
   function showGraphWindow(offset: number) {
+    beginUserSelection()
     setSelectedRef(null)
     setSelectionRange(null)
     setGraphOffset(offset)
@@ -889,7 +930,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       containerApi.addPanel({
         component: "diff",
         id: panelId("diff"),
-        params: { ...params, baseRef: selection.baseRef, headRef: selection.headRef, mergeBase: true },
+        params: { ...repositoryPanelParams, baseRef: selection.baseRef, headRef: selection.headRef, mergeBase: true },
         position: { direction: "within", referencePanel },
         tabComponent: "diff",
         title: branchRangeTitle(selectedRefs(selection.baseRef, selection.headRef, true)),
@@ -917,7 +958,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     containerApi.addPanel({
       component: "diff",
       id: panelId("diff"),
-      params: { ...params, baseRef, headRef: commit.hash },
+      params: { ...repositoryPanelParams, baseRef, headRef: commit.hash, headLabel: commit.subject },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
       title: refLabel(commit.hash),
@@ -934,7 +975,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     containerApi.addPanel({
       component: "diff",
       id: panelId("diff"),
-      params: { ...params, path: worktree.path, baseRef: "HEAD", headRef: WORKTREE_REF },
+      params: { ...repositoryPanelParams, path: worktree.path, baseRef: "HEAD", headRef: WORKTREE_REF },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
       title: worktree.name,
@@ -951,7 +992,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     containerApi.addPanel({
       component: "diff",
       id: panelId("diff"),
-      params: { ...params, baseRef: `${entry.sha}^`, headRef: entry.sha },
+      params: { ...repositoryPanelParams, baseRef: `${entry.sha}^`, headRef: entry.sha, headLabel: entry.name },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
       title: entry.name,
@@ -967,7 +1008,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     containerApi.addPanel({
       component: "diff",
       id: panelId("diff"),
-      params: { ...params, baseRef: base.hash, headRef: tip.hash },
+      params: { ...repositoryPanelParams, baseRef: base.hash, headRef: tip.hash },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
       title: `${refLabel(base.hash)}..${refLabel(tip.hash)}`,
@@ -980,12 +1021,8 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       : `${SELECTION_LABELS[selection.kind]} · ${refName(selection.ref)}`
   }
 
-  function clearSelection() {
-    setSelectionRange(null)
-    setSelectedRef(null)
-  }
-
   function selectRef(ref: DisplayRef, sha: string) {
+    beginUserSelection()
     setSelectionRange(null)
     setSelectedRef((current) => current && refName(current.ref) === refName(ref) && current.sha === sha ? null : { ref, sha })
   }
@@ -1008,6 +1045,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   }
 
   function selectCommit(commit: Commit) {
+    beginUserSelection()
     setSelectedRef(null)
     setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
   }
@@ -1016,6 +1054,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     if (!selectionEndpointIndexes) {
       return
     }
+    beginUserSelection()
     setSelectedRef(null)
     setSelectionRange({ anchorHash: commits[selectionEndpointIndexes.anchor].hash, focusHash: commit.hash })
   }
@@ -1034,6 +1073,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     if (anchorIndex === undefined && event.pointerType !== "mouse") {
       return
     }
+    beginUserSelection()
     setSelectedRef(null)
     const selectionAnchorIndex = anchorIndex ?? (event.shiftKey && selectionRange
       ? commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
@@ -1129,6 +1169,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       : index
     const rangeAnchorIndex = anchorIndex === -1 ? index : anchorIndex
     if (ancestryPath(commits, rangeAnchorIndex, index).length > 0) {
+      beginUserSelection()
       setSelectedRef(null)
       setSelectionRange({ anchorHash: commits[rangeAnchorIndex].hash, focusHash: commits[index].hash })
     }

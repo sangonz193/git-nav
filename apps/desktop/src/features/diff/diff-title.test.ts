@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
-import { WORKTREE_REF } from "../repository/repository-window"
-import { branchRangeTitle, diffTitle, refLabel, type SelectedRefs } from "./diff-title"
+import { WORKTREE_REF } from "@/lib/repository-constants"
+import { branchRangeTitle, diffTitle, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
 
 const REMOTES = ["origin", "upstream"]
 
@@ -58,5 +58,17 @@ describe("branchRangeTitle", () => {
 
   test("titles a selection the way the repository's own default branch would", () => {
     expect(branchRangeTitle(refs("origin/main", "feature"))).toBe(diffTitle(refs("origin/main", "feature"), "main", REMOTES))
+  })
+})
+
+describe("selectedRefs", () => {
+  test("restores labels separately from revision identifiers", () => {
+    expect(selectedRefs("a".repeat(40), "b".repeat(40), false, "Base subject", "Head subject")).toEqual({
+      base: "a".repeat(40),
+      baseLabel: "Base subject",
+      head: "b".repeat(40),
+      headLabel: "Head subject",
+      mergeBase: false,
+    })
   })
 })

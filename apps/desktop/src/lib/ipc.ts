@@ -3,16 +3,18 @@ import { Channel, invoke as invokeTauri } from "@tauri-apps/api/core"
 export const isDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 type Args = Record<string, unknown>
+type InvokeOptions = { keepalive?: boolean }
 
 const UNREACHABLE = "Could not reach the Git Nav server. Check that `git-nav serve` is running."
 
-async function invokeHttp<T>(command: string, args: Args): Promise<T> {
+async function invokeHttp<T>(command: string, args: Args, options: InvokeOptions): Promise<T> {
   let response: Response
   try {
     response = await fetch(`/api/${command}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args),
+      keepalive: options.keepalive,
     })
   } catch {
     // fetch only rejects when the request never completed, so the server is down or unreachable.
@@ -28,8 +30,8 @@ async function invokeHttp<T>(command: string, args: Args): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export function invoke<T>(command: string, args: Args = {}): Promise<T> {
-  return isDesktop ? invokeTauri<T>(command, args) : invokeHttp<T>(command, args)
+export function invoke<T>(command: string, args: Args = {}, options: InvokeOptions = {}): Promise<T> {
+  return isDesktop ? invokeTauri<T>(command, args) : invokeHttp<T>(command, args, options)
 }
 
 /**
