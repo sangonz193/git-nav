@@ -3,9 +3,11 @@ import { describe, expect, test } from "bun:test"
 import {
   defaultSharingSettings,
   displayedSharingSettings,
+  repairedSharingPort,
   sharingPort,
   sharingPublicUrl,
   sharingSettings,
+  storedPortNeedsRepair,
 } from "./sharing-state"
 
 describe("sharing settings", () => {
@@ -13,10 +15,10 @@ describe("sharing settings", () => {
     expect(sharingSettings({})).toEqual(defaultSharingSettings)
   })
 
-  test("surfaces an invalid stored port", () => {
-    expect(() =>
+  test("falls back from an invalid stored port so it can be repaired", () => {
+    expect(
       sharingSettings({ "serve.host": "localhost", "serve.port": 80 })
-    ).toThrow("The saved port must be a number between 1024 and 65535.")
+    ).toEqual(defaultSharingSettings)
   })
 
   test("reads the stored network sharing configuration", () => {
@@ -33,6 +35,42 @@ describe("sharing settings", () => {
       publicUrl: "https://git-nav.example/path",
       startSharing: true,
     })
+  })
+})
+
+describe("stored port repair", () => {
+  test("only asks for a repair when a stored port is invalid", () => {
+    expect(storedPortNeedsRepair({ "serve.port": 80 })).toBe(true)
+    expect(storedPortNeedsRepair({ "serve.port": "4300" })).toBe(true)
+    expect(storedPortNeedsRepair({ "serve.port": 4310 })).toBe(false)
+    expect(storedPortNeedsRepair({ "serve.host": "0.0.0.0" })).toBe(false)
+    expect(storedPortNeedsRepair({})).toBe(false)
+  })
+
+  test("repairs an invalid port with the running port", () => {
+    expect(repairedSharingPort({ "serve.port": 80 }, null)).toBe(4300)
+    expect(
+      repairedSharingPort(
+        { "serve.port": 80 },
+        { entryUrls: [], host: "0.0.0.0", port: 4310, sharing: true }
+      )
+    ).toBe(4310)
+    expect(repairedSharingPort({ "serve.port": 4310 }, null)).toBeNull()
+  })
+
+  test("repairs with the default when the running port cannot be stored", () => {
+    expect(
+      repairedSharingPort(
+        { "serve.port": 80 },
+        { entryUrls: [], host: "0.0.0.0", port: 80, sharing: true }
+      )
+    ).toBe(4300)
+    expect(
+      repairedSharingPort(
+        { "serve.port": 80 },
+        { entryUrls: [], host: null, port: 4310, sharing: false }
+      )
+    ).toBe(4300)
   })
 })
 

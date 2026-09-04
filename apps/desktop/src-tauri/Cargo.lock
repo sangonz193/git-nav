@@ -1504,6 +1504,7 @@ name = "git-nav"
 version = "0.0.17"
 dependencies = [
  "axum",
+ "dbus",
  "dirs",
  "fs2",
  "futures-util",
@@ -1530,6 +1531,7 @@ dependencies = [
  "url",
  "webview2-com",
  "windows",
+ "windows-registry",
 ]
 
 [[package]]

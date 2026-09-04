@@ -32,6 +32,7 @@ import { loadSettings, saveSetting } from "@/lib/settings"
 import {
   defaultSharingSettings,
   displayedSharingSettings,
+  repairedSharingPort,
   sharingPort,
   sharingPublicUrl,
   sharingSettings,
@@ -91,11 +92,12 @@ function SharingSettingsDialog({
   )
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [startsAtLogin, setStartsAtLogin] = useState(false)
 
   useEffect(() => {
     if (!open || !isDesktop) return
     void loadSettings()
-      .then((stored) => {
+      .then(async (stored) => {
         const displayed = displayedSharingSettings(
           sharingSettings(stored),
           state
@@ -103,9 +105,34 @@ function SharingSettingsDialog({
         setSettings(displayed)
         setSavedSettings(displayed)
         setPortInput(String(displayed.port))
+        const repairedPort = repairedSharingPort(stored, state)
+        if (repairedPort !== null) {
+          setIsSaving(true)
+          try {
+            await saveSetting("serve.port", repairedPort)
+          } finally {
+            setIsSaving(false)
+          }
+        }
       })
       .catch((message: unknown) => setError(String(message)))
+    void invoke<boolean>("autostart_enabled")
+      .then(setStartsAtLogin)
+      .catch((message: unknown) => setError(String(message)))
   }, [open, state])
+
+  async function updateAutostart(checked: boolean) {
+    setError(null)
+    setIsSaving(true)
+    try {
+      await invoke("set_autostart", { enabled: checked })
+      setStartsAtLogin(checked)
+    } catch (message) {
+      setError(String(message))
+    } finally {
+      setIsSaving(false)
+    }
+  }
 
   async function updateSetting<Key extends keyof SharingSettings>(
     key: Key,
@@ -203,6 +230,21 @@ function SharingSettingsDialog({
                 Start sharing when Git Nav opens
               </span>
               <span className="text-muted-foreground">Off by default.</span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2">
+            <Checkbox
+              checked={startsAtLogin}
+              disabled={isSaving}
+              onCheckedChange={(checked) =>
+                void updateAutostart(checked === true)
+              }
+            />
+            <span className="grid gap-0.5">
+              <span className="font-medium">Start Git Nav at login</span>
+              <span className="text-muted-foreground">
+                Launches Git Nav at login. Enable sharing on open separately.
+              </span>
             </span>
           </label>
           <label className="grid gap-1.5">
