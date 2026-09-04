@@ -1,6 +1,8 @@
 import "dockview-react/dist/styles/dockview.css"
 import "./App.css"
 
+import { useEffect } from "react"
+
 import { Toaster } from "@workspace/shadcn/components/sonner"
 import { TooltipProvider } from "@workspace/shadcn/components/tooltip"
 import { useTheme } from "./components/theme-provider"
@@ -18,6 +20,12 @@ export function App() {
   const path = repositoryPath()
   const theme = useTheme()
   const macOSWindowChrome = useMacOSWindowChrome()
+
+  // Effects run between the commit and the paint, so the splash leaves in the same frame the window it
+  // stood in for arrives.
+  useEffect(() => {
+    document.getElementById("splash")?.remove()
+  }, [])
 
   return (
     // A tooltip opens on hover after a beat, and again without one while the pointer stays among neighbours.
