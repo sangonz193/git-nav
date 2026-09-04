@@ -385,7 +385,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [foldExceptions, setFoldExceptions] = useState<ReadonlySet<string>>(new Set())
   const [viewed, setViewed] = useState<ReadonlyMap<string, string>>(new Map())
-  const [hideViewed, setHideViewed] = useState(false)
+  const [hideViewed, setHideViewed] = useState(params.userPreferences?.hideViewed ?? false)
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(params.userPreferences?.ignoreWhitespace ?? false)
   const [version, setVersion] = useState(0)
   const [picker, setPicker] = useState<PickerSide | null>(null)
@@ -444,6 +444,13 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     userPreferencesRef.current = next
     setUserPreferences(next)
     setWrap(wrap)
+  }
+
+  function setPreferredHideViewed(hidden: boolean) {
+    const next = { ...userPreferencesRef.current, hideViewed: hidden }
+    userPreferencesRef.current = next
+    setUserPreferences(next)
+    setHideViewed(hidden)
   }
 
   function setPreferredIgnoreWhitespace(ignoreWhitespace: boolean) {
@@ -875,7 +882,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
               <DropdownMenuCheckboxItem checked={wrap} onCheckedChange={(checked) => setPreferredWrap(checked === true)} onSelect={(event) => event.preventDefault()}>
                 Wrap long lines
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={hideViewed} onCheckedChange={(checked) => setHideViewed(checked === true)} onSelect={(event) => event.preventDefault()}>
+              <DropdownMenuCheckboxItem checked={hideViewed} onCheckedChange={(checked) => setPreferredHideViewed(checked === true)} onSelect={(event) => event.preventDefault()}>
                 Hide viewed files
               </DropdownMenuCheckboxItem>
               <DropdownMenuCheckboxItem checked={ignoreWhitespace} onCheckedChange={(checked) => setPreferredIgnoreWhitespace(checked === true)} onSelect={(event) => event.preventDefault()}>
