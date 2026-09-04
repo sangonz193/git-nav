@@ -832,6 +832,10 @@ button.commit-ref-selected:hover {
   width: 100%;
 }
 
+.diff-file.is-viewed {
+  opacity: 0.55;
+}
+
 .diff-file:hover {
   background: var(--muted);
 }

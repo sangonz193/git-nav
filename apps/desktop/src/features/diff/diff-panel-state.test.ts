@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { initialDiffLayout, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree } from "./diff-panel-state"
+import { initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, type ChangedFile } from "./diff-panel-state"
 
 describe("initialDiffLayout", () => {
   test("uses explicit preferences without treating responsive state as one", () => {
@@ -31,6 +31,38 @@ describe("toggledDiffFileTree", () => {
       fileTreeOpen: false,
       preferences: { fileTreeOpen: false, mode: "split" },
     })
+  })
+})
+
+describe("isViewedFile", () => {
+  const file = (overrides: Partial<ChangedFile> = {}): ChangedFile => ({
+    status: "modified",
+    oldPath: "src/index.ts",
+    newPath: "src/index.ts",
+    oldOid: "a".repeat(40),
+    newOid: "b".repeat(40),
+    additions: 1,
+    deletions: 1,
+    isBinary: false,
+    splitRows: 2,
+    unifiedRows: 2,
+    hunkRows: 1,
+    ...overrides,
+  })
+
+  test("holds a mark only while the file is still the blob it was read at", () => {
+    const viewed = new Map([["src/index.ts", "b".repeat(40)]])
+    expect(isViewedFile(file(), viewed)).toBe(true)
+    expect(isViewedFile(file({ newOid: "c".repeat(40) }), viewed)).toBe(false)
+    expect(isViewedFile(file({ newPath: "src/other.ts" }), viewed)).toBe(false)
+  })
+
+  test("reads a deleted file at the blob it was deleted from", () => {
+    expect(isViewedFile(file({ newPath: null, newOid: null }), new Map([["src/index.ts", "a".repeat(40)]]))).toBe(true)
+  })
+
+  test("never carries a mark for a file with no blob behind it", () => {
+    expect(isViewedFile(file({ oldOid: null, newOid: null }), new Map())).toBe(false)
   })
 })
 

@@ -136,6 +136,8 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::delete_squashed_branches => Exposure::Api(post(crate::__http_delete_squashed_branches)),
         IpcCommand::delete_branch => Exposure::Api(post(crate::__http_delete_branch)),
         IpcCommand::compare_refs => Exposure::Api(post(crate::__http_compare_refs)),
+        IpcCommand::viewed_files => Exposure::Api(post(crate::__http_viewed_files)),
+        IpcCommand::set_file_viewed => Exposure::Api(post(crate::__http_set_file_viewed)),
         IpcCommand::reference_picker_commits => Exposure::Api(post(crate::__http_reference_picker_commits)),
         IpcCommand::repository_references => Exposure::Api(post(crate::__http_repository_references)),
         IpcCommand::resolve_revision => Exposure::Api(post(crate::__http_resolve_revision)),
