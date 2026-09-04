@@ -13,8 +13,10 @@
     "windows": [
       {
         "title": "Git Nav",
-        "width": 800,
-        "height": 600,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 500,
+        "minHeight": 400,
         "resizable": true,
         "fullscreen": false,
         "visible": false
