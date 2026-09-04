@@ -1,5 +1,6 @@
 import { DiffModeEnum, DiffView } from "@git-diff-view/react"
 import { invoke } from "@/lib/ipc"
+import { WORKTREE_REF } from "@/lib/repository-constants"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { IDockviewPanelProps } from "dockview-react"
 import { Archive, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cloud, Columns2, FilePen, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, PanelLeft, RefreshCw, Rows3, SlidersHorizontal, Tag } from "lucide-react"
@@ -459,12 +460,27 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
 
+  // Moving either end of the comparison leaves behind marks that were made against a different one.
   useEffect(() => {
-    let cancelled = false
     setViewed(new Map())
+  }, [params.path, refs.base, refs.head])
+
+  // The working tree's marks are only ever held here, so a reload has nothing to read them back from.
+  useEffect(() => {
+    if (refs.head === WORKTREE_REF) {
+      return
+    }
+    let cancelled = false
     invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head })
       .then((marks) => !cancelled && setViewed(new Map(marks.map((mark) => [mark.path, mark.oid]))))
       .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [params.path, refs.base, refs.head, version])
+
+  useEffect(() => {
+    let cancelled = false
     invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, ignoreWhitespace })
       .then((nextComparison) => {
         if (!cancelled) {
