@@ -8,7 +8,7 @@ import {
 } from "dockview-react"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { FileDiff, GitGraph, Plus } from "lucide-react"
-import { createContext, useContext, useEffect, useRef, useState, type ComponentType } from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ComponentType } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
 import { toast } from "@workspace/shadcn/components/sonner"
@@ -21,7 +21,9 @@ import {
 import { AppMenuButton } from "../app-menu/app-menu"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
+import { closedTabHistory, reopenedPanel } from "../../lib/closed-tabs"
 import { panelId } from "../../lib/panel-id"
+import { useTabShortcuts } from "../../lib/tab-shortcuts"
 import { invoke, isDesktop } from "../../lib/ipc"
 import { closeRepositoryWindowAfterSaving, listenForRepositoryLayoutPageHide, repositoryLayoutRestoreController, repositoryLayoutSaveScheduler, REPOSITORY_LAYOUT_VERSION, restoreRepositoryLayout, unresolvablePanelIds, usableRepositoryLayout } from "../../lib/repository-layout"
 import { settingsClientId } from "../../lib/settings"
@@ -47,6 +49,9 @@ const repositoryTabs = {
 }
 
 const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
+// The header and the watermark are rendered by dockview, so the actions they offer reach them the same
+// way their parameters do.
+const ReopenTabContext = createContext<(() => void) | undefined>(undefined)
 
 function addGraphPanel(containerApi: IWatermarkPanelProps["containerApi"] | IDockviewHeaderActionsProps["containerApi"], params: RepositoryPanelParams, referencePanel?: IDockviewHeaderActionsProps["activePanel"]) {
   containerApi.addPanel({
@@ -100,10 +105,12 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
 
 function RepositoryHeaderActions(props: IDockviewHeaderActionsProps) {
   const showAppMenu = props.isGroupActive && (!props.location || props.location.type === "grid")
+  const reopenTab = useContext(ReopenTabContext)
+  const activePanel = props.activePanel
   return (
     <div className="flex items-center gap-0.5">
       <NewTabAction {...props} />
-      {showAppMenu && <AppMenuButton />}
+      {showAppMenu && <AppMenuButton onCloseTab={activePanel && (() => activePanel.api.close())} onReopenTab={reopenTab} />}
     </div>
   )
 }
@@ -114,6 +121,7 @@ function RepositoryTitleBarSpacer() {
 
 function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
   const params = useContext(RepositoryContext)
+  const reopenTab = useContext(ReopenTabContext)
   if (!params) {
     return null
   }
@@ -126,7 +134,7 @@ function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
           <Plus />
           New tab
         </Button>
-        <AppMenuButton />
+        <AppMenuButton onReopenTab={reopenTab} />
       </div>
     </div>
   )
@@ -190,6 +198,8 @@ export function RepositoryWindow({ macOSWindowChrome, path }: { macOSWindowChrom
   const activeDockview = useRef<DockviewApi | null>(null)
   const dockviewElement = useRef<HTMLDivElement | null>(null)
   const disposeDockviewListeners = useRef<() => void>(() => undefined)
+  const closedTabs = useRef<ReturnType<typeof closedTabHistory> | null>(null)
+  const [canReopenTab, setCanReopenTab] = useState(false)
   const macOSWindowChromeRef = useRef(macOSWindowChrome)
   const macOSWindowChromeApplied = useRef(false)
   const name = repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath
@@ -198,7 +208,28 @@ export function RepositoryWindow({ macOSWindowChrome, path }: { macOSWindowChrom
   useEffect(() => () => {
     disposeDockviewListeners.current()
     activeDockview.current = null
+    closedTabs.current = null
   }, [])
+
+  const reopenTab = useCallback(() => {
+    const api = activeDockview.current
+    const history = closedTabs.current
+    if (!api || !history) return
+    const tab = history.reopenPanel()
+    setCanReopenTab(history.size > 0)
+    const panel = tab && reopenedPanel(tab, (groupId) => Boolean(api.getGroup(groupId)))
+    if (panel) api.addPanel(panel)
+  }, [])
+
+  // A window with no tabs left has nothing else the shortcut could mean, so it closes itself.
+  useTabShortcuts({
+    closeTab: useCallback(() => {
+      const panel = activeDockview.current?.activePanel
+      if (panel) panel.api.close()
+      else void getCurrentWindow().close()
+    }, []),
+    reopenTab,
+  })
 
   useEffect(() => {
     macOSWindowChromeRef.current = macOSWindowChrome
@@ -210,122 +241,139 @@ export function RepositoryWindow({ macOSWindowChrome, path }: { macOSWindowChrom
   return (
     <main className={macOSWindowChrome ? "macos-window-chrome h-svh" : "h-svh"}>
       <RepositoryContext.Provider value={params}>
-        <DockviewReact
-          components={repositoryPanels}
-          disableDnd={false}
-          disableTabsOverflowList
-          dndStrategy="pointer"
-          onReady={(event) => {
-            disposeDockviewListeners.current()
-            activeDockview.current = event.api
-            let chromeFrame: number | undefined
-            const applyWindowChrome = () => {
-              if (activeDockview.current === event.api && dockviewElement.current) {
-                macOSWindowChromeApplied.current = updateDockviewWindowChrome(event.api, dockviewElement.current, macOSWindowChromeRef.current, macOSWindowChromeApplied.current)
+        <ReopenTabContext.Provider value={canReopenTab ? reopenTab : undefined}>
+          <DockviewReact
+            components={repositoryPanels}
+            disableDnd={false}
+            disableTabsOverflowList
+            dndStrategy="pointer"
+            onReady={(event) => {
+              disposeDockviewListeners.current()
+              activeDockview.current = event.api
+              let chromeFrame: number | undefined
+              const applyWindowChrome = () => {
+                if (activeDockview.current === event.api && dockviewElement.current) {
+                  macOSWindowChromeApplied.current = updateDockviewWindowChrome(event.api, dockviewElement.current, macOSWindowChromeRef.current, macOSWindowChromeApplied.current)
+                }
               }
-            }
-            const updateWindowChrome = () => {
-              if (!macOSWindowChromeRef.current && !macOSWindowChromeApplied.current) return
-              applyWindowChrome()
-              if (!macOSWindowChromeRef.current) return
-              if (chromeFrame !== undefined) cancelAnimationFrame(chromeFrame)
-              chromeFrame = requestAnimationFrame(() => {
-                chromeFrame = undefined
+              const updateWindowChrome = () => {
+                if (!macOSWindowChromeRef.current && !macOSWindowChromeApplied.current) return
                 applyWindowChrome()
-              })
-            }
-            updateWindowChrome()
-            const clientId = settingsClientId(isDesktop, localStorage)
-            let repositoryParams = params
-            const isCurrent = () => activeDockview.current === event.api
-            const layoutSave = repositoryLayoutSaveScheduler(
-              (keepalive) => invoke<void>("save_repository_layout", {
-                clientId,
-                layout: { version: REPOSITORY_LAYOUT_VERSION, layout: event.api.toJSON() },
-                path: repositoryParams.path,
-              }, { keepalive }),
-              (error) => {
-                toast.error("Could not save repository layout", { description: String(error) })
-              },
-              isCurrent,
-            )
-            const layoutRestore = repositoryLayoutRestoreController(() => {
-              if (isCurrent()) {
-                layoutSave.schedule()
+                if (!macOSWindowChromeRef.current) return
+                if (chromeFrame !== undefined) cancelAnimationFrame(chromeFrame)
+                chromeFrame = requestAnimationFrame(() => {
+                  chromeFrame = undefined
+                  applyWindowChrome()
+                })
               }
-            })
-            const save = () => {
-              if (isCurrent()) {
-                layoutRestore.changed()
-              }
-            }
-            const layoutSubscription = event.api.onDidLayoutChange(() => {
-              save()
               updateWindowChrome()
-            })
-            const panelAddedSubscription = event.api.onDidAddPanel(() => layoutRestore.userAction())
-            let closeUnlisten: (() => void) | undefined
-            const pageHideUnlisten = listenForRepositoryLayoutPageHide(window, layoutSave.flushOnPageHide)
-            let listenersDisposed = false
-            if (isDesktop) {
-              const repositoryWindow = getCurrentWindow()
-              void repositoryWindow.onCloseRequested((event) => closeRepositoryWindowAfterSaving(event, layoutSave.flush, () => repositoryWindow.destroy())).then((unlisten) => {
-                if (listenersDisposed) {
-                  unlisten()
-                } else {
-                  closeUnlisten = unlisten
+              const clientId = settingsClientId(isDesktop, localStorage)
+              let repositoryParams = params
+              const isCurrent = () => activeDockview.current === event.api
+              const layoutSave = repositoryLayoutSaveScheduler(
+                (keepalive) => invoke<void>("save_repository_layout", {
+                  clientId,
+                  layout: { version: REPOSITORY_LAYOUT_VERSION, layout: event.api.toJSON() },
+                  path: repositoryParams.path,
+                }, { keepalive }),
+                (error) => {
+                  toast.error("Could not save repository layout", { description: String(error) })
+                },
+                isCurrent,
+              )
+              const layoutRestore = repositoryLayoutRestoreController(() => {
+                if (isCurrent()) {
+                  layoutSave.schedule()
                 }
               })
-            }
-            disposeDockviewListeners.current = () => {
-              listenersDisposed = true
-              if (chromeFrame !== undefined) cancelAnimationFrame(chromeFrame)
-              closeUnlisten?.()
-              pageHideUnlisten()
-              layoutSubscription.dispose()
-              panelAddedSubscription.dispose()
-              layoutSave.dispose()
-            }
-            const addFallbackPanel = () => {
-              event.api.addPanel({ component: "graph", id: "repository-graph", params: repositoryParams, tabComponent: "graph", title: "Graph" })
-            }
-            void (async () => {
-              try {
-                const stored = await invoke<{ path: string, layout: unknown }>("repository_layout", { clientId, path: repositoryParams.path })
-                if (!isCurrent() || !layoutRestore.pending) {
-                  return
+              const save = () => {
+                if (isCurrent()) {
+                  layoutRestore.changed()
                 }
-                repositoryParams = { name: stored.path.split("/").filter(Boolean).at(-1) ?? stored.path, path: stored.path }
-                setRepositoryPath(stored.path)
-                const layout = usableRepositoryLayout(stored.layout, stored.path)
-                if (layout) {
-                  const invalidPanelIds = await unresolvablePanelIds(layout, (panelPath, revision) => invoke("resolve_revision", { repoPath: panelPath, revision }))
-                  if (!isCurrent()) {
+              }
+              const layoutSubscription = event.api.onDidLayoutChange(() => {
+                save()
+                updateWindowChrome()
+              })
+              const panelAddedSubscription = event.api.onDidAddPanel(() => layoutRestore.userAction())
+              const history = closedTabHistory()
+              closedTabs.current = history
+              const syncReopenTab = () => setCanReopenTab(history.size > 0)
+              const willMutateSubscription = event.api.onWillMutateLayout((mutation) => history.beginMutation(mutation.kind, event.api.panels))
+              const didMutateSubscription = event.api.onDidMutateLayout(() => {
+                history.endMutation()
+                syncReopenTab()
+              })
+              const panelRemovedSubscription = event.api.onDidRemovePanel((panel) => history.closePanel(panel))
+              let closeUnlisten: (() => void) | undefined
+              const pageHideUnlisten = listenForRepositoryLayoutPageHide(window, layoutSave.flushOnPageHide)
+              let listenersDisposed = false
+              if (isDesktop) {
+                const repositoryWindow = getCurrentWindow()
+                void repositoryWindow.onCloseRequested((event) => closeRepositoryWindowAfterSaving(event, layoutSave.flush, () => repositoryWindow.destroy())).then((unlisten) => {
+                  if (listenersDisposed) {
+                    unlisten()
+                  } else {
+                    closeUnlisten = unlisten
+                  }
+                })
+              }
+              disposeDockviewListeners.current = () => {
+                listenersDisposed = true
+                if (chromeFrame !== undefined) cancelAnimationFrame(chromeFrame)
+                closeUnlisten?.()
+                pageHideUnlisten()
+                layoutSubscription.dispose()
+                panelAddedSubscription.dispose()
+                willMutateSubscription.dispose()
+                didMutateSubscription.dispose()
+                panelRemovedSubscription.dispose()
+                layoutSave.dispose()
+              }
+              const addFallbackPanel = () => {
+                event.api.addPanel({ component: "graph", id: "repository-graph", params: repositoryParams, tabComponent: "graph", title: "Graph" })
+              }
+              void (async () => {
+                try {
+                  const stored = await invoke<{ path: string, layout: unknown }>("repository_layout", { clientId, path: repositoryParams.path })
+                  if (!isCurrent() || !layoutRestore.pending) {
                     return
                   }
-                  layoutRestore.restored(() => {
-                    if (!restoreRepositoryLayout(event.api, layout, invalidPanelIds)) {
-                      addFallbackPanel()
+                  repositoryParams = { name: stored.path.split("/").filter(Boolean).at(-1) ?? stored.path, path: stored.path }
+                  setRepositoryPath(stored.path)
+                  const layout = usableRepositoryLayout(stored.layout, stored.path)
+                  if (layout) {
+                    const invalidPanelIds = await unresolvablePanelIds(layout, (panelPath, revision) => invoke("resolve_revision", { repoPath: panelPath, revision }))
+                    if (!isCurrent()) {
+                      return
                     }
-                  })
-                  return
+                    layoutRestore.restored(() => {
+                      if (!restoreRepositoryLayout(event.api, layout, invalidPanelIds)) {
+                        addFallbackPanel()
+                      }
+                      // A tab the restore drops points at a revision that is gone, and nobody closed it.
+                      history.clear()
+                      syncReopenTab()
+                    })
+                    return
+                  }
+                  layoutRestore.restored(addFallbackPanel)
+                } catch (error) {
+                  if (!isCurrent() || !layoutRestore.failed(addFallbackPanel)) {
+                    return
+                  }
+                  toast.error("Could not load repository layout", { description: String(error) })
                 }
-                layoutRestore.restored(addFallbackPanel)
-              } catch (error) {
-                if (!isCurrent() || !layoutRestore.failed(addFallbackPanel)) {
-                  return
-                }
-                toast.error("Could not load repository layout", { description: String(error) })
-              }
-            })()
-          }}
-          prefixHeaderActionsComponent={macOSWindowChrome ? RepositoryTitleBarSpacer : undefined}
-          ref={dockviewElement}
-          rightHeaderActionsComponent={RepositoryHeaderActions}
-          tabComponents={repositoryTabs}
-          theme={repositoryDockviewTheme}
-          watermarkComponent={EmptyRepository}
-        />
+              })()
+            }}
+            prefixHeaderActionsComponent={macOSWindowChrome ? RepositoryTitleBarSpacer : undefined}
+            ref={dockviewElement}
+            rightHeaderActionsComponent={RepositoryHeaderActions}
+            tabComponents={repositoryTabs}
+            theme={repositoryDockviewTheme}
+            watermarkComponent={EmptyRepository}
+          />
+        </ReopenTabContext.Provider>
       </RepositoryContext.Provider>
     </main>
   )

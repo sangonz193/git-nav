@@ -110,6 +110,10 @@ commands![
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
 const SETTING_CHANGED_EVENT: &str = "setting-changed";
 const RECENT_PROJECTS_CLEARED_EVENT: &str = "recent-projects-cleared";
+#[cfg(target_os = "macos")]
+const CLOSE_TAB_EVENT: &str = "close-tab";
+#[cfg(target_os = "macos")]
+const REOPEN_TAB_EVENT: &str = "reopen-tab";
 const ZOOM_FACTOR_SETTING: &str = "app.zoomFactor";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MINIMUM_ZOOM_FACTOR: f64 = 0.5;
@@ -1880,7 +1884,16 @@ const MENU_ZOOM_OUT: &str = "zoom-out";
 #[cfg(target_os = "macos")]
 const MENU_ACTUAL_SIZE: &str = "actual-size";
 #[cfg(target_os = "macos")]
+const MENU_CLOSE_TAB: &str = "close-tab";
+#[cfg(target_os = "macos")]
+const MENU_CLOSE_WINDOW: &str = "close-window";
+#[cfg(target_os = "macos")]
+const MENU_REOPEN_TAB: &str = "reopen-tab";
+#[cfg(target_os = "macos")]
 const MENU_RECENT_PREFIX: &str = "open-recent-";
+// The text the default menu gives its close item, which is the only handle on it once it is built.
+#[cfg(target_os = "macos")]
+const PREDEFINED_CLOSE_WINDOW_TEXT: &str = "Close Window";
 
 #[cfg(target_os = "macos")]
 fn recent_menu_id(path: &str) -> String {
@@ -1911,6 +1924,41 @@ fn menu_submenu(menu: &Menu<tauri::Wry>, title: &str) -> Result<Submenu<tauri::W
             _ => None,
         })
         .ok_or_else(|| format!("Could not find the {title} menu."))
+}
+
+// The default menu binds its close item to CmdOrCtrl+W in both the File and the Window menus, and a
+// predefined item carries that accelerator with it. Taking the key back for tabs means dropping the
+// item itself, not rebinding it.
+#[cfg(target_os = "macos")]
+fn replace_close_window_item(
+    submenu: &Submenu<tauri::Wry>,
+    items: &[&dyn IsMenuItem<tauri::Wry>],
+) -> Result<(), String> {
+    let position = submenu
+        .items()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .position(|item| match item {
+            MenuItemKind::Predefined(item) => {
+                item.text().ok().as_deref() == Some(PREDEFINED_CLOSE_WINDOW_TEXT)
+            }
+            _ => false,
+        })
+        .ok_or_else(|| format!("Could not find the {PREDEFINED_CLOSE_WINDOW_TEXT} menu item."))?;
+    submenu
+        .remove_at(position)
+        .map_err(|error| error.to_string())?;
+    submenu
+        .insert_items(items, position)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn focused_window(app: &AppHandle) -> Option<WebviewWindow> {
+    app.webview_windows()
+        .into_values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .or_else(|| app.get_webview_window("main"))
 }
 
 #[cfg(target_os = "macos")]
@@ -2264,9 +2312,30 @@ fn install_app_menu(app: &AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     let open = MenuItem::with_id(app, MENU_OPEN, "Open…", true, Some("CmdOrCtrl+O"))
         .map_err(|error| error.to_string())?;
+    let reopen_tab = MenuItem::with_id(
+        app,
+        MENU_REOPEN_TAB,
+        "Reopen Closed Tab",
+        true,
+        Some("Shift+CmdOrCtrl+T"),
+    )
+    .map_err(|error| error.to_string())?;
     let file_separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
-    file.prepend_items(&[&new_window, &open, &recent, &file_separator])
+    file.prepend_items(&[&new_window, &open, &recent, &reopen_tab, &file_separator])
         .map_err(|error| error.to_string())?;
+
+    let close_tab = MenuItem::with_id(app, MENU_CLOSE_TAB, "Close Tab", true, Some("CmdOrCtrl+W"))
+        .map_err(|error| error.to_string())?;
+    let close_window = MenuItem::with_id(
+        app,
+        MENU_CLOSE_WINDOW,
+        "Close Window",
+        true,
+        Some("Shift+CmdOrCtrl+W"),
+    )
+    .map_err(|error| error.to_string())?;
+    replace_close_window_item(&file, &[&close_tab, &close_window])?;
+    replace_close_window_item(&window, &[&close_window])?;
 
     let zoom_in = MenuItem::with_id(app, MENU_ZOOM_IN, "Zoom In", true, Some("CmdOrCtrl+="))
         .map_err(|error| error.to_string())?;
@@ -2306,13 +2375,35 @@ fn install_app_menu(app: &AppHandle) -> Result<(), String> {
             MENU_ZOOM_IN => set_app_zoom(app, ZoomDirection::In),
             MENU_ZOOM_OUT => set_app_zoom(app, ZoomDirection::Out),
             MENU_ACTUAL_SIZE => set_app_zoom(app, ZoomDirection::ActualSize),
+            // Which tab is active, which ones closed, and whether there are any at all, is only
+            // known to the window.
+            MENU_CLOSE_TAB => match app
+                .webview_windows()
+                .into_values()
+                .find(|window| window.is_focused().unwrap_or(false))
+            {
+                Some(window) => app
+                    .emit_to(window.label(), CLOSE_TAB_EVENT, ())
+                    .map_err(|error| error.to_string()),
+                None => Ok(()),
+            },
+            MENU_REOPEN_TAB => match focused_window(app) {
+                Some(window) => app
+                    .emit_to(window.label(), REOPEN_TAB_EVENT, ())
+                    .map_err(|error| error.to_string()),
+                None => Ok(()),
+            },
+            MENU_CLOSE_WINDOW => match app
+                .webview_windows()
+                .into_values()
+                .find(|window| window.is_focused().unwrap_or(false))
+            {
+                Some(window) => window.close().map_err(|error| error.to_string()),
+                None => Ok(()),
+            },
             MENU_OPEN => {
                 let app = app.clone();
-                let window = app
-                    .webview_windows()
-                    .into_values()
-                    .find(|window| window.is_focused().unwrap_or(false))
-                    .or_else(|| app.get_webview_window("main"));
+                let window = focused_window(&app);
                 match window {
                     Some(window) => {
                         tauri::async_runtime::spawn(async move {

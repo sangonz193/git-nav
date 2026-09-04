@@ -1,8 +1,10 @@
 import { ChevronDown, ChevronRight, FolderGit2, FolderOpen, GitBranch, Plus } from "lucide-react"
 import { listen } from "@tauri-apps/api/event"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
+import { useTabShortcuts } from "@/lib/tab-shortcuts"
 import { invoke, isDesktop } from "@/lib/ipc"
 import { openRepository } from "@/lib/navigation"
 import { AppMenuButton } from "../app-menu/app-menu"
@@ -16,6 +18,13 @@ export function LauncherWindow({ macOSWindowChrome }: { macOSWindowChrome: boole
   const [isChoosing, setIsChoosing] = useState(false)
   const [isPickerOpen, setIsPickerOpen] = useState(false)
   const clearVersion = useRef(0)
+
+  // The launcher has no tabs, so the shortcut falls through to the window it would have closed anyway.
+  useTabShortcuts({
+    closeTab: useCallback(() => {
+      void getCurrentWindow().close()
+    }, []),
+  })
 
   const loadProjects = useCallback(async () => {
     const loadVersion = clearVersion.current
