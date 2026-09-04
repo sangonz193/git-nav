@@ -1429,6 +1429,13 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     <main className="relative flex h-full flex-col overflow-hidden bg-background" onKeyDown={onPanelKeyDown}>
       <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
         <div className="flex items-center gap-1">
+          <Hinted hint="Find a branch, tag or commit">
+            <Button aria-label="Search the graph" onClick={openSearch} size="icon-sm" type="button" variant="outline">
+              <Search />
+            </Button>
+          </Hinted>
+        </div>
+        <div className="flex items-center gap-1">
           <DropdownMenu>
             <Tooltip>
               <DropdownMenuTrigger asChild>
@@ -1441,7 +1448,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
               </DropdownMenuTrigger>
               <TooltipContent>Choose what the graph shows</TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="end">
               <DropdownMenuLabel>Show</DropdownMenuLabel>
               {CHIP_KINDS.map((kind) => (
                 <DropdownMenuCheckboxItem
@@ -1463,13 +1470,6 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Hinted hint="Find a branch, tag or commit">
-            <Button aria-label="Search the graph" onClick={openSearch} size="icon-sm" type="button" variant="outline">
-              <Search />
-            </Button>
-          </Hinted>
-        </div>
-        <div className="flex items-center gap-1">
           {!isDesktop && graphOffset > 0 && (
             <Hinted hint="Show newer commits">
               <Button disabled={isGraphWindowLoading} onClick={() => showGraphWindow(Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE))} size="sm" type="button" variant="outline">
@@ -1536,7 +1536,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
         </div>
       </div>
       {isSearchOpen && (
-        <div className="absolute top-11 right-2 z-10 w-80">
+        <div className="absolute top-11 left-2 z-10 w-80">
           <SearchMenu
             activeIndex={searchHitIndex}
             inputLabel="Search refs and commits"
