@@ -809,7 +809,7 @@ fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
 const RAW_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--raw", "--abbrev=40", "-z"];
 const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
 
-const NUMSTAT_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z", "--ignore-all-space"];
+const NUMSTAT_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z"];
 
 fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
     if ignore_whitespace {
@@ -822,7 +822,7 @@ fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
 // Only the patch answers to --ignore-all-space; --raw lists a file whenever its two blobs differ, however
 // they differ. Numstat is the patch's own machinery, so the files it names are the ones the patch carries.
 fn files_changed_beyond_whitespace(path: &str, revisions: &[&str]) -> Result<HashSet<String>, String> {
-    let output = git_output_bytes(path, &[&NUMSTAT_ARGUMENTS[..], revisions].concat())
+    let output = git_output_bytes(path, &[&NUMSTAT_ARGUMENTS[..], whitespace_arguments(true), revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
     let mut fields = output
         .split(|byte| *byte == 0)
