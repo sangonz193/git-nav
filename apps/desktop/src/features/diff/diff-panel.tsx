@@ -403,6 +403,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const scrollElement = useRef<HTMLDivElement>(null)
   const pendingScroll = useRef<string | null>(null)
   const pendingAnchor = useRef<string | null>(null)
+  const marksDuringLoad = useRef<Map<string, string | null> | null>(null)
   const userPreferencesRef = useRef(userPreferences)
   const pendingRestoredFilePath = useRef(params.selectedFilePath ?? null)
   const { entries, request, reset } = useDiffLoader(params.path, comparison, ignoreWhitespace)
@@ -471,9 +472,30 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
       return
     }
     let cancelled = false
+    const marked = new Map<string, string | null>()
+    marksDuringLoad.current = marked
     invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase })
-      .then((marks) => !cancelled && setViewed(new Map(marks.map((mark) => [mark.path, mark.identity]))))
+      .then((marks) => {
+        if (cancelled) {
+          return
+        }
+        const stored = new Map(marks.map((mark) => [mark.path, mark.identity]))
+        // A file marked while the store was being read is the newer answer of the two.
+        for (const [path, identity] of marked) {
+          if (identity === null) {
+            stored.delete(path)
+          } else {
+            stored.set(path, identity)
+          }
+        }
+        setViewed(stored)
+      })
       .catch(() => undefined)
+      .finally(() => {
+        if (marksDuringLoad.current === marked) {
+          marksDuringLoad.current = null
+        }
+      })
     return () => {
       cancelled = true
     }
@@ -669,6 +691,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     } else {
       nextViewed.set(path, identity)
     }
+    marksDuringLoad.current?.set(path, wasViewed ? null : identity)
     setViewed(nextViewed)
     const key = fileKey(file)
     const nextCollapsed = new Set(collapsed)
