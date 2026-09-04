@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { WORKTREE_REF } from "@/lib/repository-constants"
-import { branchRangeTitle, diffTitle, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
+import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
 
 const REMOTES = ["origin", "upstream"]
 
@@ -19,6 +19,24 @@ describe("refLabel", () => {
   test("keeps a ref name whole", () => {
     expect(refLabel("origin/main")).toBe("origin/main")
     expect(refLabel(WORKTREE_REF)).toBe("Working tree")
+  })
+})
+
+describe("defaultBranchName", () => {
+  test("names the branch rather than the remote holding it", () => {
+    expect(defaultBranchName("origin/main", REMOTES)).toBe("main")
+    expect(defaultBranchName("upstream/trunk", REMOTES)).toBe("trunk")
+    expect(defaultBranchName("main", REMOTES)).toBe("main")
+    expect(defaultBranchName(null, REMOTES)).toBe("")
+  })
+})
+
+describe("isDefaultBranch", () => {
+  test("knows the default branch by whichever remote names it", () => {
+    expect(isDefaultBranch("main", "origin/main", REMOTES)).toBe(true)
+    expect(isDefaultBranch("upstream/main", "origin/main", REMOTES)).toBe(true)
+    expect(isDefaultBranch("feature", "origin/main", REMOTES)).toBe(false)
+    expect(isDefaultBranch("main", null, REMOTES)).toBe(false)
   })
 })
 

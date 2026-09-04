@@ -15,8 +15,12 @@ export function rangeMarker({ mergeBase }: SelectedRefs) {
 
 // The default branch is named after whichever remote holds it, but the branch it names is the same one
 // locally and on every other remote.
-function isDefaultBranch(reference: string, defaultBranch: string | null, remotes: string[]) {
-  const name = remotes.reduce((value, remote) => value.startsWith(`${remote}/`) ? value.slice(remote.length + 1) : value, defaultBranch ?? "")
+export function defaultBranchName(defaultBranch: string | null, remotes: string[]) {
+  return remotes.reduce((value, remote) => value.startsWith(`${remote}/`) ? value.slice(remote.length + 1) : value, defaultBranch ?? "")
+}
+
+export function isDefaultBranch(reference: string, defaultBranch: string | null, remotes: string[]) {
+  const name = defaultBranchName(defaultBranch, remotes)
   return name !== "" && (reference === name || remotes.some((remote) => reference === `${remote}/${name}`))
 }
 
