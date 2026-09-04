@@ -1,3 +1,5 @@
+import { isMacOS } from "../../lib/platform"
+
 type ShortcutEvent = Pick<
   KeyboardEvent,
   "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey"
@@ -7,7 +9,7 @@ export type DesktopAppCommand =
   "show-launcher" | "choose-repository" | "zoom-in" | "zoom-out" | "actual-size"
 
 export function usesNativeMenu(userAgent: string) {
-  return userAgent.includes("Macintosh")
+  return isMacOS(userAgent)
 }
 
 export function desktopAppShortcut(
