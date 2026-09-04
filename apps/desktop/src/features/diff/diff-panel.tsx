@@ -17,7 +17,7 @@ import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
 import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, rangeMarker, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
-import { fileIdentity, fileName, initialDiffLayout, isFoldedFile, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
+import { changedFilesLabel, fileIdentity, fileName, initialDiffLayout, isFoldedFile, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
 import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
@@ -415,8 +415,9 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   )
   const tree = useMemo(() => fileTree(shownFiles), [shownFiles])
   const files = useMemo(() => flattenTree(tree), [tree])
-  const total = useMemo(() => changedLines(files), [files])
+  const total = useMemo(() => changedLines(comparison?.files ?? []), [comparison])
   const viewedCount = useMemo(() => (comparison?.files ?? []).filter((file) => isViewedFile(file, refs.head, viewed)).length, [comparison, refs.head, viewed])
+  const changedCount = comparison?.files.length ?? 0
 
   const isFolded = useCallback(
     (file: ChangedFile) => isFoldedFile(file, refs.head, viewed, foldExceptions, fileKey(file)),
@@ -771,16 +772,26 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     ? 8
     : Math.max(8, Math.min(pickerAnchor.offsetLeft, panelWidth - PICKER_MENU_WIDTH - 8))
 
+  const emptyNotice = comparison && files.length === 0 && (
+    changedCount === 0
+      ? <p className="diff-empty">No changed files</p>
+      : (
+        <p className="diff-empty flex items-center gap-3">
+          {changedCount === 1 ? "The only changed file has been viewed" : `All ${changedCount.toLocaleString()} changed files have been viewed`}
+          <Button onClick={() => setPreferredHideViewed(false)} size="xs" type="button" variant="outline">Show viewed files</Button>
+        </p>
+      )
+  )
   const sidebar = (
     <nav aria-label="Changed files" className="diff-file-list">
       <header className="diff-file-total">
-        <span>{files.length === 1 ? "1 file" : `${files.length.toLocaleString()} files`}</span>
+        <span>{changedFilesLabel(files.length, changedCount)}</span>
         {viewedCount > 0 && <span>{`${viewedCount.toLocaleString()} viewed`}</span>}
         <FileStat additions={total.additions} deletions={total.deletions} />
       </header>
       <div className="diff-file-tree">
         {fileList}
-        {comparison?.files.length === 0 && <p className="diff-empty">No changed files</p>}
+        {emptyNotice}
       </div>
     </nav>
   )
@@ -788,6 +799,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     <div className="diff-view-container" ref={scrollElement}>
       {error && <p className="diff-empty text-destructive">{error}</p>}
       {!comparison && !error && <p className="diff-empty">Loading comparison…</p>}
+      {!error && emptyNotice}
       <div className="diff-file-space" style={{ height: rowVirtualizer.getTotalSize() }}>
         {virtualRows.map((row) => {
           const file = files[row.index]

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { WORKTREE_REF } from "@/lib/repository-constants"
-import { fileIdentity, initialDiffLayout, isFoldedFile, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, type ChangedFile } from "./diff-panel-state"
+import { changedFilesLabel, fileIdentity, initialDiffLayout, isFoldedFile, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, type ChangedFile } from "./diff-panel-state"
 
 describe("initialDiffLayout", () => {
   test("uses explicit preferences without treating responsive state as one", () => {
@@ -111,6 +111,16 @@ describe("isFoldedFile", () => {
     const read = new Map([["src/index.ts", fileIdentity(file(), "feature")]])
     expect(isFoldedFile(file(), "feature", read, new Set(["key"]), "key")).toBe(false)
     expect(isFoldedFile(file(), "feature", new Map(), new Set(["key"]), "key")).toBe(true)
+  })
+})
+
+describe("changedFilesLabel", () => {
+  test("names the comparison, and what is shown of it only when they differ", () => {
+    expect(changedFilesLabel(8, 8)).toBe("8 files")
+    expect(changedFilesLabel(1, 1)).toBe("1 file")
+    expect(changedFilesLabel(0, 0)).toBe("0 files")
+    expect(changedFilesLabel(3, 8)).toBe("3 of 8 files")
+    expect(changedFilesLabel(0, 8)).toBe("0 of 8 files")
   })
 })
 

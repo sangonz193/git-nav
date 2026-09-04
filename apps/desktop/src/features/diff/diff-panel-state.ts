@@ -44,6 +44,15 @@ export function isFoldedFile(file: ChangedFile, headRef: string, viewed: Readonl
   return isViewedFile(file, headRef, viewed) !== exceptions.has(key)
 }
 
+// The counts describe the comparison, whatever the filter is showing of it, so two numbers beside each
+// other never read as a contradiction.
+export function changedFilesLabel(shown: number, changed: number) {
+  if (shown !== changed) {
+    return `${shown.toLocaleString()} of ${changed.toLocaleString()} files`
+  }
+  return changed === 1 ? "1 file" : `${changed.toLocaleString()} files`
+}
+
 export function initialDiffLayout(width: number, preferences: DiffPanelUserPreferences) {
   return {
     fileTreeOpen: width >= NARROW_DIFF_PANEL_WIDTH && (preferences.fileTreeOpen ?? true),
