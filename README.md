@@ -17,7 +17,9 @@ The `git-nav` executable is distributed through the `git-nav` npm package, with 
 git-nav serve --host 0.0.0.0
 ```
 
-It prints a URL containing a generated token; open that once and the token is stored as a cookie. Pass `--token` to pin a known value, `--port` to change the port (default 4300), or `--no-token` to disable authentication.
+It prints a URL containing a token; open that once and the token is stored as a cookie. Git Nav generates and saves a token in its application data `settings.json` the first time you run `git-nav serve`, then reuses it. Pass `--token` to use a known value for that run, `--port` to change the port (default 4300), or `--no-token` to disable authentication.
+
+`settings.json` also accepts `serve.host`, `serve.port`, and `serve.publicUrl`. `serve.host` accepts `127.0.0.1` (the default) or `0.0.0.0`; `serve.port` sets the listening port; and `serve.publicUrl` replaces the printed entry URL, for example when serving through a proxy. The proxy must serve Git Nav at its root because path prefixes are not supported. Editing `settings.json` is currently the only way to configure these values.
 
 Repositories, worktrees and recently opened projects are read from the machine running the server, and the recent list is shared with the desktop app. Branch deletion and rebasing are exposed over the network, so leave authentication on unless the port is already protected.
 
