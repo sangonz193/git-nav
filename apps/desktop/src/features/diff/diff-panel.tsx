@@ -6,6 +6,7 @@ import { Archive, ChevronDown, ChevronRight, Cloud, Columns2, FilePen, Folder, F
 import { type ComponentType, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
+import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@workspace/shadcn/components/resizable"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
@@ -14,7 +15,7 @@ import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
 import { branchRangeTitle, diffTitle, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
-import { initialDiffLayout, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree } from "./diff-panel-state"
+import { initialDiffLayout, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH } from "./diff-panel-state"
 import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
@@ -409,6 +410,13 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     setMode(mode === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified)
   }
 
+  function setPreferredWrap(wrap: boolean) {
+    const next = { ...userPreferencesRef.current, wrap }
+    userPreferencesRef.current = next
+    setUserPreferences(next)
+    setWrap(wrap)
+  }
+
   useEffect(() => {
     api.updateParameters(persistedDiffPanelParams({ name: params.name, path: params.path }, refs, selectedFilePath, userPreferences))
   }, [api, params.name, params.path, refs, selectedFilePath, userPreferences])
@@ -520,19 +528,22 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     () => picker === null ? [] : searchReferences(searchQuery, { ...sources, ...metadata, allowWorktree: picker === "head", revision }),
     [metadata, picker, revision, searchQuery, sources]
   )
+  const clearFileSelection = useCallback(() => {
+    pendingRestoredFilePath.current = null
+    pendingScroll.current = null
+    setSelectedFilePath(null)
+  }, [])
   const selectAheadRange = useCallback((reference: string) => {
     invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
       .then((selection) => {
         const range = selectedRefs(selection.baseRef, selection.headRef, true)
-        pendingRestoredFilePath.current = null
-        pendingScroll.current = null
-        setSelectedFilePath(null)
+        clearFileSelection()
         setRefs(range)
         api.setTitle(branchRangeTitle(range))
       })
       .catch((message: unknown) => setError(String(message)))
     setPicker(null)
-  }, [api, params.path])
+  }, [api, clearFileSelection, params.path])
   const menuItems = useMemo(
     () => hits.map((hit, index): SearchMenuItem => ({
       action: hit.branch === null ? undefined : {
@@ -596,15 +607,16 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
 
   // Where the ends sit cannot say whether a tab still carries the name it opened with, since a
   // comparison can be pointed back at the ends it opened from. Moving an end is what retitles the tab.
+  function moveRefs(next: SelectedRefs) {
+    clearFileSelection()
+    setRefs(next)
+    api.setTitle(diffTitle(next, metadata.defaultBranch, metadata.remotes ?? []))
+  }
+
   function selectHit(hit: ReferenceHit) {
-    const moved = picker === "base"
-      ? { ...refs, base: hit.reference, baseLabel: hit.label, mergeBase: false }
-      : { ...refs, head: hit.reference, headLabel: hit.label }
-    pendingRestoredFilePath.current = null
-    pendingScroll.current = null
-    setSelectedFilePath(null)
-    setRefs(moved)
-    api.setTitle(diffTitle(moved, metadata.defaultBranch, metadata.remotes ?? []))
+    moveRefs(picker === "base"
+      ? { ...refs, base: hit.reference, baseLabel: hit.label }
+      : { ...refs, head: hit.reference, headLabel: hit.label })
     setPicker(null)
   }
 
@@ -666,13 +678,30 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
           <ChevronDown />
         </Button>
         <Hinted hint={refs.mergeBase ? `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}` : `Changes between ${refs.baseLabel} and ${refs.headLabel}`}>
-          <span className="shrink-0 text-muted-foreground">{rangeMarker(refs)}</span>
+          <Button aria-label="Compare since the two sides forked" aria-pressed={refs.mergeBase} className={refs.mergeBase ? "bg-muted" : undefined} onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })} size="sm" type="button" variant="ghost">
+            <span className="text-muted-foreground">{rangeMarker(refs)}</span>
+            {panelWidth >= WIDE_DIFF_PANEL_WIDTH && (refs.mergeBase ? "Since fork" : "Direct")}
+          </Button>
         </Hinted>
         <Button aria-expanded={picker === "head"} className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} onClick={() => openPicker("head")} ref={(element) => { pickerButtons.current.head = element }} size="sm" type="button" variant="outline">
           <span className="truncate">{refs.headLabel}</span>
           <ChevronDown />
         </Button>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {!isNarrow && (
+            <ButtonGroup>
+              <Hinted hint="Show both sides">
+                <Button aria-label="Split layout" aria-pressed={isSplit} className={isSplit ? "bg-muted" : undefined} onClick={() => setPreferredMode("split")} size="icon-sm" type="button" variant="outline">
+                  <Columns2 />
+                </Button>
+              </Hinted>
+              <Hinted hint="Show one column">
+                <Button aria-label="Unified layout" aria-pressed={!isSplit} className={isSplit ? undefined : "bg-muted"} onClick={() => setPreferredMode("unified")} size="icon-sm" type="button" variant="outline">
+                  <Rows3 />
+                </Button>
+              </Hinted>
+            </ButtonGroup>
+          )}
           <DropdownMenu>
             <Tooltip>
               <DropdownMenuTrigger asChild>
@@ -686,21 +715,21 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
               <TooltipContent>Choose how the diff is laid out</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Layout</DropdownMenuLabel>
-              <DropdownMenuCheckboxItem checked={isSplit} onCheckedChange={() => {
-                setPreferredMode("split")
-              }} onSelect={(event) => event.preventDefault()}>
-                <Columns2 />
-                Split
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={!isSplit} onCheckedChange={() => {
-                setPreferredMode("unified")
-              }} onSelect={(event) => event.preventDefault()}>
-                <Rows3 />
-                Unified
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem checked={wrap} onCheckedChange={(checked) => setWrap(checked === true)} onSelect={(event) => event.preventDefault()}>
+              {isNarrow && (
+                <>
+                  <DropdownMenuLabel>Layout</DropdownMenuLabel>
+                  <DropdownMenuCheckboxItem checked={isSplit} onCheckedChange={() => setPreferredMode("split")} onSelect={(event) => event.preventDefault()}>
+                    <Columns2 />
+                    Split
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem checked={!isSplit} onCheckedChange={() => setPreferredMode("unified")} onSelect={(event) => event.preventDefault()}>
+                    <Rows3 />
+                    Unified
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuCheckboxItem checked={wrap} onCheckedChange={(checked) => setPreferredWrap(checked === true)} onSelect={(event) => event.preventDefault()}>
                 Wrap long lines
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>

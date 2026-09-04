@@ -2,12 +2,13 @@ import type { DiffPanelParams, DiffPanelUserPreferences, RepositoryPanelParams }
 import type { SelectedRefs } from "./diff-title"
 
 export const NARROW_DIFF_PANEL_WIDTH = 620
+export const WIDE_DIFF_PANEL_WIDTH = 900
 
 export function initialDiffLayout(width: number, preferences: DiffPanelUserPreferences) {
   return {
     fileTreeOpen: width >= NARROW_DIFF_PANEL_WIDTH && (preferences.fileTreeOpen ?? true),
-    mode: preferences.mode ?? (width < 900 ? "unified" as const : "split" as const),
-    wrap: width < NARROW_DIFF_PANEL_WIDTH,
+    mode: preferences.mode ?? (width < WIDE_DIFF_PANEL_WIDTH ? "unified" as const : "split" as const),
+    wrap: preferences.wrap ?? width < NARROW_DIFF_PANEL_WIDTH,
   }
 }
 
