@@ -1550,7 +1550,8 @@ fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
         let url = format!("/?{query}");
         let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
             .title(format!("{} · Git Nav", worktree_name(&worktree_path)))
-            .inner_size(800.0, 600.0)
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(500.0, 400.0)
             .visible(false)
             .build()
             .map_err(|error| error.to_string())?;
@@ -4956,6 +4957,16 @@ pub fn run() {
                 let _ = open_repository_window(app, &path);
             }
         }));
+        builder = builder.plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+                )
+                .build(),
+        );
     }
 
     builder
