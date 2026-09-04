@@ -688,6 +688,17 @@ describe("branchesContaining", () => {
 
     expect(branchesContaining(forked, 0).map((entry) => entry.branch)).toEqual(["topic"])
   })
+
+  test("finds a branch whose merge tip reaches the selection through its second parent", () => {
+    const mergedTip = [
+      commit("merge", ["side", "selected"], ["topic"]),
+      commit("side", ["base"]),
+      commit("selected", ["base"]),
+      commit("base"),
+    ]
+
+    expect(branchesContaining(mergedTip, 2).map((entry) => entry.branch)).toEqual(["topic"])
+  })
 })
 
 describe("ref kinds", () => {
