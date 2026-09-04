@@ -412,8 +412,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
   const virtualScrollTop = rowVirtualizer.scrollOffset ?? 0
-  const graphVirtualRows = useMemo(() => virtualRows.map((row) => ({ ...row, start: row.start - GRAPH_HEADER_HEIGHT })), [virtualRows])
-  const graphCanvasScrollTop = virtualScrollTop - GRAPH_HEADER_HEIGHT - GRAPH_CANVAS_OVERSCAN
+  const graphScrollTop = virtualScrollTop - GRAPH_CANVAS_OVERSCAN
   const currentCheckoutRow = currentCheckoutIndex === -1 ? -1 : rowOfCommit(currentCheckoutIndex)
   // The brackets are drawn on rows while the drag they adjust is anchored on commits, so an endpoint carries both.
   const selectionRowEdges = selectionEdges && {
@@ -808,9 +807,9 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: graphVirtualRows, scrollTop: graphCanvasScrollTop, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
+      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: graphScrollTop, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
     }
-  }, [commits, graphCanvasScrollTop, graphVirtualRows, graphWidth, rowHeight, rows, scroll.height, squashMergeEdges, unpushed, unpushedLaneMasks])
+  }, [commits, graphScrollTop, graphWidth, rowHeight, rows, scroll.height, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
 
   function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
     const originX = "touches" in event ? event.touches[0].clientX : event.clientX
