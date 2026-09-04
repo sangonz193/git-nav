@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 
-import { closesTab, desktopAppShortcut, usesNativeMenu } from "./app-menu-shortcuts"
+import {
+  closesTab,
+  desktopAppShortcut,
+  reopensTab,
+  usesNativeMenu,
+} from "./app-menu-shortcuts"
 
 function shortcut(key: string, overrides: Partial<KeyboardEvent> = {}) {
   return desktopAppShortcut(
@@ -68,6 +73,24 @@ describe("desktop app shortcuts", () => {
     expect(closesTab({ ...event, metaKey: true }, false)).toBeFalse()
     expect(closesTab({ ...event, key: "q" }, false)).toBeFalse()
     expect(shortcut("w")).toBeNull()
+  })
+
+  test("reopens a tab only where the native menu does not", () => {
+    const event = {
+      altKey: false,
+      ctrlKey: true,
+      key: "t",
+      metaKey: false,
+      shiftKey: true,
+    }
+    expect(reopensTab(event, false)).toBeTrue()
+    expect(reopensTab({ ...event, key: "T" }, false)).toBeTrue()
+    expect(reopensTab(event, true)).toBeFalse()
+    expect(reopensTab({ ...event, shiftKey: false }, false)).toBeFalse()
+    expect(reopensTab({ ...event, ctrlKey: false }, false)).toBeFalse()
+    expect(reopensTab({ ...event, metaKey: true }, false)).toBeFalse()
+    expect(reopensTab({ ...event, key: "w" }, false)).toBeFalse()
+    expect(closesTab(event, false)).toBeFalse()
   })
 
   test("ignores unmodified and alternate shortcuts", () => {

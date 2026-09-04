@@ -110,7 +110,10 @@ commands![
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
 const SETTING_CHANGED_EVENT: &str = "setting-changed";
 const RECENT_PROJECTS_CLEARED_EVENT: &str = "recent-projects-cleared";
+#[cfg(target_os = "macos")]
 const CLOSE_TAB_EVENT: &str = "close-tab";
+#[cfg(target_os = "macos")]
+const REOPEN_TAB_EVENT: &str = "reopen-tab";
 const ZOOM_FACTOR_SETTING: &str = "app.zoomFactor";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MINIMUM_ZOOM_FACTOR: f64 = 0.5;
@@ -1885,6 +1888,8 @@ const MENU_CLOSE_TAB: &str = "close-tab";
 #[cfg(target_os = "macos")]
 const MENU_CLOSE_WINDOW: &str = "close-window";
 #[cfg(target_os = "macos")]
+const MENU_REOPEN_TAB: &str = "reopen-tab";
+#[cfg(target_os = "macos")]
 const MENU_RECENT_PREFIX: &str = "open-recent-";
 // The text the default menu gives its close item, which is the only handle on it once it is built.
 #[cfg(target_os = "macos")]
@@ -2307,8 +2312,16 @@ fn install_app_menu(app: &AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     let open = MenuItem::with_id(app, MENU_OPEN, "Open…", true, Some("CmdOrCtrl+O"))
         .map_err(|error| error.to_string())?;
+    let reopen_tab = MenuItem::with_id(
+        app,
+        MENU_REOPEN_TAB,
+        "Reopen Closed Tab",
+        true,
+        Some("Shift+CmdOrCtrl+T"),
+    )
+    .map_err(|error| error.to_string())?;
     let file_separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
-    file.prepend_items(&[&new_window, &open, &recent, &file_separator])
+    file.prepend_items(&[&new_window, &open, &recent, &reopen_tab, &file_separator])
         .map_err(|error| error.to_string())?;
 
     let close_tab = MenuItem::with_id(app, MENU_CLOSE_TAB, "Close Tab", true, Some("CmdOrCtrl+W"))
@@ -2362,14 +2375,29 @@ fn install_app_menu(app: &AppHandle) -> Result<(), String> {
             MENU_ZOOM_IN => set_app_zoom(app, ZoomDirection::In),
             MENU_ZOOM_OUT => set_app_zoom(app, ZoomDirection::Out),
             MENU_ACTUAL_SIZE => set_app_zoom(app, ZoomDirection::ActualSize),
-            // Which tab is active, and whether there is one at all, is only known to the window.
-            MENU_CLOSE_TAB => match focused_window(app) {
+            // Which tab is active, which ones closed, and whether there are any at all, is only
+            // known to the window.
+            MENU_CLOSE_TAB => match app
+                .webview_windows()
+                .into_values()
+                .find(|window| window.is_focused().unwrap_or(false))
+            {
                 Some(window) => app
                     .emit_to(window.label(), CLOSE_TAB_EVENT, ())
                     .map_err(|error| error.to_string()),
                 None => Ok(()),
             },
-            MENU_CLOSE_WINDOW => match focused_window(app) {
+            MENU_REOPEN_TAB => match focused_window(app) {
+                Some(window) => app
+                    .emit_to(window.label(), REOPEN_TAB_EVENT, ())
+                    .map_err(|error| error.to_string()),
+                None => Ok(()),
+            },
+            MENU_CLOSE_WINDOW => match app
+                .webview_windows()
+                .into_values()
+                .find(|window| window.is_focused().unwrap_or(false))
+            {
                 Some(window) => window.close().map_err(|error| error.to_string()),
                 None => Ok(()),
             },

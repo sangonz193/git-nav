@@ -21,6 +21,13 @@ export function closesTab(event: ShortcutEvent, nativeMenu: boolean) {
   return event.key.toLowerCase() === "w"
 }
 
+export function reopensTab(event: ShortcutEvent, nativeMenu: boolean) {
+  if (nativeMenu || !event.ctrlKey || event.altKey || event.metaKey || !event.shiftKey) {
+    return false
+  }
+  return event.key.toLowerCase() === "t"
+}
+
 export function desktopAppShortcut(
   event: ShortcutEvent,
   nativeMenu: boolean

@@ -2,6 +2,7 @@ import {
   Ellipsis,
   FolderOpen,
   Maximize,
+  RotateCcw,
   Rows3,
   X,
   ZoomIn,
@@ -33,6 +34,7 @@ import {
 type AppMenuButtonProps = {
   loadRecentProjects?: () => Promise<Project[]>
   onCloseTab?: () => void
+  onReopenTab?: () => void
   onRecentProjectsChange?: (projects: Project[]) => void
 }
 
@@ -86,12 +88,14 @@ function Shortcut({ children }: { children: ReactNode }) {
 export function AppMenuButton({
   loadRecentProjects,
   onCloseTab,
+  onReopenTab,
   onRecentProjectsChange,
 }: AppMenuButtonProps) {
   const [projects, setProjects] = useState<Project[]>([])
   const [isPickerOpen, setIsPickerOpen] = useState(false)
   const shortcutPrefix =
     isDesktop && usesNativeMenu(navigator.userAgent) ? "⌘" : "Ctrl+"
+  const shiftShortcutPrefix = shortcutPrefix === "⌘" ? "⇧⌘" : "Ctrl+Shift+"
 
   async function refreshProjects() {
     try {
@@ -183,14 +187,23 @@ export function AppMenuButton({
               </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-          {onCloseTab && (
+          {(onCloseTab || onReopenTab) && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={onCloseTab}>
-                <X />
-                Close Tab
-                {isDesktop && <Shortcut>{shortcutPrefix}W</Shortcut>}
-              </DropdownMenuItem>
+              {onCloseTab && (
+                <DropdownMenuItem onSelect={onCloseTab}>
+                  <X />
+                  Close Tab
+                  {isDesktop && <Shortcut>{shortcutPrefix}W</Shortcut>}
+                </DropdownMenuItem>
+              )}
+              {onReopenTab && (
+                <DropdownMenuItem onSelect={onReopenTab}>
+                  <RotateCcw />
+                  Reopen Closed Tab
+                  {isDesktop && <Shortcut>{shiftShortcutPrefix}T</Shortcut>}
+                </DropdownMenuItem>
+              )}
             </>
           )}
           {isDesktop && (
