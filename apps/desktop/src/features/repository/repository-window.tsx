@@ -15,6 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
+import { AppMenuButton } from "../app-menu/app-menu"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
 import { panelId } from "../../lib/panel-id"
@@ -103,6 +104,16 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
   )
 }
 
+function RepositoryHeaderActions(props: IDockviewHeaderActionsProps) {
+  const showAppMenu = props.isGroupActive && (!props.location || props.location.type === "grid")
+  return (
+    <div className="flex items-center gap-0.5">
+      <NewTabAction {...props} />
+      {showAppMenu && <AppMenuButton />}
+    </div>
+  )
+}
+
 function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
   const params = useContext(RepositoryContext)
   if (!params) {
@@ -110,11 +121,12 @@ function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
   }
 
   return (
-    <div className="flex h-full items-center justify-center">
+    <div className="flex h-full items-center justify-center gap-1">
       <Button onClick={() => addGraphPanel(containerApi, params)}>
         <Plus />
         New tab
       </Button>
+      <AppMenuButton />
     </div>
   )
 }
@@ -154,7 +166,7 @@ export function RepositoryWindow({ path }: { path: string }) {
               title: "Graph",
             })
           }}
-          rightHeaderActionsComponent={NewTabAction}
+          rightHeaderActionsComponent={RepositoryHeaderActions}
           tabComponents={repositoryTabs}
           theme={repositoryDockviewTheme}
           watermarkComponent={EmptyRepository}

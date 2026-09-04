@@ -115,7 +115,11 @@ enum Exposure {
 fn exposure(command: &IpcCommand) -> Exposure {
     match command {
         IpcCommand::recent_projects => Exposure::Api(post(recent_projects)),
+        IpcCommand::clear_recent_projects => Exposure::Api(post(clear_recent_projects)),
         IpcCommand::open_repository => Exposure::Api(post(open_repository)),
+        IpcCommand::show_launcher | IpcCommand::choose_repository | IpcCommand::zoom => {
+            Exposure::DesktopOnly
+        }
         IpcCommand::update_command => Exposure::DesktopOnly,
         IpcCommand::open_worktree => Exposure::Api(post(open_worktree)),
         IpcCommand::open_url => Exposure::DesktopOnly,
@@ -320,6 +324,10 @@ async fn recent_projects(State(state): State<Arc<ServerState>>) -> CommandResult
     ok(recent_project_list(&state.open_worktrees)?)
 }
 
+async fn clear_recent_projects() -> CommandResult {
+    ok(blocking(|| crate::clear_recent_paths(None)).await?)
+}
+
 async fn settings() -> CommandResult {
     ok(crate::load_settings()?)
 }
@@ -349,7 +357,7 @@ async fn open_repository(
     Json(args): Json<PathArg>,
 ) -> CommandResult {
     let path = args.path.unwrap_or_default();
-    let project = remember_repository(&path, &state.open_worktrees)?;
+    let project = remember_repository(&path, &state.open_worktrees, None)?;
     ok(json!({ "path": project.path }))
 }
 
@@ -358,7 +366,7 @@ async fn open_worktree(
     Json(args): Json<WorktreeArgs>,
 ) -> CommandResult {
     if args.target == "git-nav" {
-        let project = remember_repository(&args.path, &state.open_worktrees)?;
+        let project = remember_repository(&args.path, &state.open_worktrees, None)?;
         return ok(json!({ "path": project.path }));
     }
     launch_worktree(&args.path, &args.target)?;
