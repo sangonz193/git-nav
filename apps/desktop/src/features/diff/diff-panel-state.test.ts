@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { WORKTREE_REF } from "@/lib/repository-constants"
-import { initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, type ChangedFile } from "./diff-panel-state"
+import { fileIdentity, initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, type ChangedFile } from "./diff-panel-state"
 
 describe("initialDiffLayout", () => {
   test("uses explicit preferences without treating responsive state as one", () => {
@@ -51,15 +51,28 @@ describe("isViewedFile", () => {
     ...overrides,
   })
 
-  test("holds a mark only while the file is still the blob it was read at", () => {
-    const viewed = new Map([["src/index.ts", "b".repeat(40)]])
+  test("holds a mark only while the file is still the patch it was read at", () => {
+    const viewed = new Map([["src/index.ts", fileIdentity(file(), "feature")]])
     expect(isViewedFile(file(), "feature", viewed)).toBe(true)
     expect(isViewedFile(file({ newOid: "c".repeat(40) }), "feature", viewed)).toBe(false)
     expect(isViewedFile(file({ newPath: "src/other.ts" }), "feature", viewed)).toBe(false)
   })
 
+  test("drops a mark when the base moves under a head that has not", () => {
+    const viewed = new Map([["src/index.ts", fileIdentity(file(), "feature")]])
+    expect(isViewedFile(file({ oldOid: "c".repeat(40) }), "feature", viewed)).toBe(false)
+  })
+
+  test("drops a mark when the same blobs stop being the entry that was read", () => {
+    const renamed = file({ status: "renamed", oldPath: "src/old.ts" })
+    const viewed = new Map([["src/index.ts", fileIdentity(renamed, "feature")]])
+    expect(isViewedFile(renamed, "feature", viewed)).toBe(true)
+    expect(isViewedFile(file(), "feature", viewed)).toBe(false)
+  })
+
   test("reads a deleted file at the blob it was deleted from", () => {
-    expect(isViewedFile(file({ newPath: null, newOid: null }), "feature", new Map([["src/index.ts", "a".repeat(40)]]))).toBe(true)
+    const deleted = file({ newPath: null, newOid: null })
+    expect(isViewedFile(deleted, "feature", new Map([["src/index.ts", fileIdentity(deleted, "feature")]]))).toBe(true)
   })
 
   test("keeps a working tree mark only in memory", () => {

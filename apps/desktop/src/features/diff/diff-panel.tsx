@@ -17,7 +17,7 @@ import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
 import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, rangeMarker, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
-import { fileName, fileOid, initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
+import { fileIdentity, fileName, initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
 import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
@@ -54,7 +54,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 type ViewedFile = {
   path: string
-  oid: string
+  identity: string
 }
 
 type Comparison = {
@@ -472,7 +472,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     }
     let cancelled = false
     invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase })
-      .then((marks) => !cancelled && setViewed(new Map(marks.map((mark) => [mark.path, mark.oid]))))
+      .then((marks) => !cancelled && setViewed(new Map(marks.map((mark) => [mark.path, mark.identity]))))
       .catch(() => undefined)
     return () => {
       cancelled = true
@@ -661,13 +661,13 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   // behind it can be remembered, which leaves the working tree marked for as long as the tab is open.
   function toggleViewed(file: ChangedFile) {
     const path = fileName(file)
-    const oid = fileOid(file, refs.head)
+    const identity = fileIdentity(file, refs.head)
     const wasViewed = isViewedFile(file, refs.head, viewed)
     const nextViewed = new Map(viewed)
     if (wasViewed) {
       nextViewed.delete(path)
     } else {
-      nextViewed.set(path, oid)
+      nextViewed.set(path, identity)
     }
     setViewed(nextViewed)
     const key = fileKey(file)
@@ -679,8 +679,8 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     }
     anchorFold(file)
     setCollapsed(nextCollapsed)
-    if (oid) {
-      invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, path, oid, viewed: !wasViewed })
+    if (identity) {
+      invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, path, identity, viewed: !wasViewed })
         .catch((message: unknown) => toast.error("Could not save which files were viewed.", { description: String(message) }))
     }
   }

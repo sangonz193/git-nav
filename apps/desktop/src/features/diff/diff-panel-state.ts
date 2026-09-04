@@ -23,17 +23,19 @@ export function fileName(file: ChangedFile) {
   return file.newPath ?? file.oldPath ?? "Unknown file"
 }
 
-// What the file is at, rather than where it sits, so a mark falls away the moment its contents move on.
-// A working tree file has no blob to be read at, which is why its mark is never written down.
-export function fileOid(file: ChangedFile, headRef: string) {
-  if (headRef === WORKTREE_REF) {
+// A mark stands for the patch a file was read at, so everything the card shows belongs to it: both blobs,
+// since a base moving under a branch rewrites the diff while the head blob sits still, and the status and
+// source path the header names, since a rename that stops being one is not the entry that was read. A
+// working tree file has no blob to be read at, which is why its mark is never written down.
+export function fileIdentity(file: ChangedFile, headRef: string) {
+  if (headRef === WORKTREE_REF || (!file.oldOid && !file.newOid)) {
     return ""
   }
-  return file.newOid ?? file.oldOid ?? ""
+  return JSON.stringify([file.status, file.oldPath, file.oldOid, file.newOid])
 }
 
 export function isViewedFile(file: ChangedFile, headRef: string, viewed: ReadonlyMap<string, string>) {
-  return viewed.get(fileName(file)) === fileOid(file, headRef)
+  return viewed.get(fileName(file)) === fileIdentity(file, headRef)
 }
 
 export function initialDiffLayout(width: number, preferences: DiffPanelUserPreferences) {
