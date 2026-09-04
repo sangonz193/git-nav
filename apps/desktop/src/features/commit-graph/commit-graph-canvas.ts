@@ -1,4 +1,4 @@
-import { GRAPH_GUTTER, GRAPH_WIDTH, LANE_WIDTH, laneColor, parentEdgeColor, ROW_HEIGHT, startsLane, type Commit } from "./commit-graph"
+import { GRAPH_GUTTER, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, LANE_WIDTH, laneColor, parentEdgeColor, ROW_HEIGHT, startsLane, type Commit } from "./commit-graph"
 import type { GraphRow } from "./commit-graph-view"
 
 // Unpushed work keeps the colour of the branch it belongs to and gives up some of its weight instead.
@@ -55,7 +55,7 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
   }
   // Sticky would hold the canvas still while the columns scroll out from under it, so the row it belongs to
   // carries it sideways and the scroll offset it was drawn for places it down the page.
-  canvas.style.transform = `translateY(${scrollTop}px)`
+  canvas.style.transform = `translateY(${scrollTop - GRAPH_HEADER_HEIGHT}px)`
 
   const context = canvas.getContext("2d")
   if (!context) {
@@ -80,8 +80,8 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
     layer.setLineDash([3, 4])
   }
   for (const { branchLane, branchRow, isLocal, targetLane, targetRow } of squashMergeEdges) {
-    const branchY = branchRow * rowHeight - scrollTop + rowHeight / 2
-    const targetY = targetRow * rowHeight - scrollTop + rowHeight / 2
+    const branchY = GRAPH_HEADER_HEIGHT + branchRow * rowHeight - scrollTop + rowHeight / 2
+    const targetY = GRAPH_HEADER_HEIGHT + targetRow * rowHeight - scrollTop + rowHeight / 2
     if (Math.max(branchY, targetY) < 0 || Math.min(branchY, targetY) > height) {
       continue
     }
