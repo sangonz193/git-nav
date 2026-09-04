@@ -13,7 +13,8 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
-import { WORKTREE_REF, type DiffPanelParams } from "../repository/repository-window"
+import { diffTitle, rangeMarker, refLabel, type SelectedRefs } from "./diff-title"
+import type { DiffPanelParams } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
 const LARGE_DIFF_LINES = 1200
@@ -91,15 +92,6 @@ type DiffEntry =
   | { state: "loaded"; data: DiffData }
   | { state: "error"; message: string }
 
-type SelectedRefs = {
-  base: string
-  head: string
-  baseLabel: string
-  headLabel: string
-  /** Whether the base is where the two sides forked rather than the base ref itself. */
-  mergeBase: boolean
-}
-
 type FileTreeNode = {
   name: string
   path: string
@@ -116,14 +108,6 @@ function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
       <TooltipContent>{hint}</TooltipContent>
     </Tooltip>
   )
-}
-
-function rangeMarker({ mergeBase }: SelectedRefs) {
-  return mergeBase ? "..." : ".."
-}
-
-function refLabel(reference: string) {
-  return reference === WORKTREE_REF ? "Working tree" : reference.replace(/^[0-9a-f]{40}\b/i, (sha) => sha.slice(0, 8))
 }
 
 function fileName(file: ChangedFile) {
@@ -224,6 +208,7 @@ function FileTreeNode({ level, node, onSelect, activeKey }: { level: number; nod
  */
 function useReferenceSources(path: string, enabled: boolean, version: number) {
   const [commits, setCommits] = useState<Commit[]>([])
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null)
   const [headDetail, setHeadDetail] = useState<string | null>(null)
   const [references, setReferences] = useState<Reference[]>([])
   const [remotes, setRemotes] = useState<string[]>()
@@ -240,8 +225,9 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
     invoke<CommitBatch>("reference_picker_commits", { repoPath: path })
       .then((batch) => settle(batch.map(commitFromTuple), setCommits))
       .catch(() => undefined)
-    invoke<{ currentBranch: string | null; remotes: string[] }>("repository_state", { repoPath: path })
+    invoke<{ currentBranch: string | null; defaultBranch: string | null; remotes: string[] }>("repository_state", { repoPath: path })
       .then((state) => {
+        settle(state.defaultBranch, setDefaultBranch)
         settle(state.remotes, setRemotes)
         settle(state.currentBranch ?? "Detached head", setHeadDetail)
       })
@@ -251,7 +237,10 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
     }
   }, [enabled, path, version])
 
-  return useMemo(() => ({ commits, headDetail, references, remotes, stashes }), [commits, headDetail, references, remotes, stashes])
+  return useMemo(
+    () => ({ commits, defaultBranch, headDetail, references, remotes, stashes }),
+    [commits, defaultBranch, headDetail, references, remotes, stashes]
+  )
 }
 
 function useDiffLoader(repoPath: string, comparison: Comparison | null) {
@@ -444,9 +433,9 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   // end has been pointed somewhere else.
   useEffect(() => {
     if (refs.base !== params.baseRef || refs.head !== params.headRef) {
-      api.setTitle(`${refs.baseLabel}${rangeMarker(refs)}${refs.headLabel}`)
+      api.setTitle(diffTitle(refs, sources.defaultBranch, sources.remotes ?? []))
     }
-  }, [api, params.baseRef, params.headRef, refs])
+  }, [api, params.baseRef, params.headRef, refs, sources.defaultBranch, sources.remotes])
 
   // Measured heights belong to the previous comparison or layout, so drop them and start over.
   useEffect(() => {
