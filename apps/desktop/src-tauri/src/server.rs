@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
@@ -50,6 +50,7 @@ pub struct Options {
     pub host: IpAddr,
     pub port: u16,
     pub token: Option<String>,
+    pub public_url: Option<String>,
 }
 
 struct ServerState {
@@ -209,7 +210,9 @@ pub async fn serve(options: Options) -> Result<(), String> {
         .map_err(|error| format!("Could not bind {address}: {error}"))?;
     let address = listener.local_addr().map_err(|error| error.to_string())?;
 
-    println!("Git Nav is serving at {}", entry_url(&address, options.token.as_deref()));
+    for url in entry_urls(&address, options.token.as_deref(), options.public_url.as_deref()) {
+        println!("Git Nav is serving at {url}");
+    }
     if options.host == IpAddr::V4(Ipv4Addr::LOCALHOST) {
         println!("Pass --host 0.0.0.0 to reach it from other devices on your network.");
     }
@@ -219,27 +222,108 @@ pub async fn serve(options: Options) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn entry_url(address: &SocketAddr, token: Option<&str>) -> String {
-    let host = match address.ip() {
-        IpAddr::V4(ip) if ip.is_unspecified() => local_address(),
-        ip => ip.to_string(),
+fn entry_urls(
+    address: &SocketAddr,
+    token: Option<&str>,
+    public_url: Option<&str>,
+) -> Vec<String> {
+    if let Some(public_url) = public_url {
+        if let Some(public_url) = public_entry_url(public_url) {
+            return vec![append_token(public_url, token)];
+        }
+        eprintln!("Ignoring invalid serve.publicUrl: {public_url}");
+    }
+
+    let addresses = match address.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => local_addresses()
+            .into_iter()
+            .map(IpAddr::V4)
+            .collect(),
+        ip => vec![ip],
     };
-    let base = format!("http://{host}:{}", address.port());
-    match token {
-        Some(token) => format!("{base}/?token={token}"),
-        None => base,
+    let addresses = if addresses.is_empty() {
+        vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]
+    } else {
+        addresses
+    };
+    addresses
+        .into_iter()
+        .map(|ip| append_token(format!("http://{}", SocketAddr::new(ip, address.port())), token))
+        .collect()
+}
+
+fn public_entry_url(value: &str) -> Option<String> {
+    let mut url = url::Url::parse(value).ok()?;
+    if url.host_str().is_none() || !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.set_path("/");
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn append_token(base: String, token: Option<&str>) -> String {
+    if let Some(token) = token {
+        match url::Url::parse(&base) {
+            Ok(mut url) => {
+                url.query_pairs_mut().append_pair("token", token);
+                url.to_string()
+            }
+            Err(error) => {
+                eprintln!("Could not add the token to server entry URL {base}: {error}");
+                base
+            }
+        }
+    } else {
+        base
     }
 }
 
-/// Reports the address a LAN client should use when the listener is bound to every interface.
-fn local_address() -> String {
+pub(crate) fn local_addresses() -> Vec<Ipv4Addr> {
+    let addresses = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|interface| interface.ip());
+    non_loopback_ipv4_addresses(addresses, primary_local_address())
+}
+
+fn non_loopback_ipv4_addresses(
+    addresses: impl IntoIterator<Item = IpAddr>,
+    primary: Option<Ipv4Addr>,
+) -> Vec<Ipv4Addr> {
+    let mut addresses = addresses
+        .into_iter()
+        .filter_map(|address| match address {
+            IpAddr::V4(address) if !address.is_loopback() && !address.is_unspecified() => Some(address),
+            _ => None,
+        })
+        .collect();
+    order_local_addresses(&mut addresses, primary);
+    addresses
+}
+
+fn order_local_addresses(addresses: &mut Vec<Ipv4Addr>, primary: Option<Ipv4Addr>) {
+    addresses.sort_unstable();
+    addresses.dedup();
+    if let Some(primary) = primary {
+        if let Some(index) = addresses.iter().position(|address| *address == primary) {
+            addresses.swap(0, index);
+        }
+    }
+}
+
+fn primary_local_address() -> Option<Ipv4Addr> {
     std::net::UdpSocket::bind("0.0.0.0:0")
         .and_then(|socket| {
             socket.connect("192.168.0.1:80")?;
             socket.local_addr()
         })
-        .map(|address| address.ip().to_string())
-        .unwrap_or_else(|_| "localhost".to_string())
+        .ok()
+        .and_then(|address| match address.ip() {
+            IpAddr::V4(address) if !address.is_loopback() => Some(address),
+            _ => None,
+        })
 }
 
 fn cookie_token(request: &Request) -> Option<String> {
@@ -276,16 +360,29 @@ async fn authenticate(
     }
 
     if query_token(&request).as_deref() == Some(expected.as_str()) {
+        let secure = request_is_https(&request);
         let mut response = next.run(request).await;
-        if let Ok(cookie) = HeaderValue::from_str(&format!(
-            "{TOKEN_COOKIE}={expected}; Path=/; SameSite=Lax; Max-Age=31536000"
-        )) {
+        if let Ok(cookie) = HeaderValue::from_str(&auth_cookie(&expected, secure)) {
             response.headers_mut().insert(header::SET_COOKIE, cookie);
         }
         return response;
     }
 
     (StatusCode::UNAUTHORIZED, "Add ?token=… to the URL to open Git Nav.").into_response()
+}
+
+fn request_is_https(request: &Request) -> bool {
+    // TLS-terminating proxies set this header, so it is trusted to mark the auth cookie Secure.
+    request
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|value| value.trim().eq_ignore_ascii_case("https")))
+}
+
+fn auth_cookie(token: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{TOKEN_COOKIE}={token}; Path=/; SameSite=Lax; HttpOnly; Max-Age=31536000{secure}")
 }
 
 async fn static_asset(uri: Uri) -> Response {
@@ -333,7 +430,13 @@ async fn clear_recent_projects() -> CommandResult {
 }
 
 async fn settings() -> CommandResult {
-    ok(crate::load_settings()?)
+    let mut settings = crate::load_settings()?;
+    redact_network_sharing_settings(&mut settings);
+    ok(settings)
+}
+
+fn redact_network_sharing_settings(settings: &mut BTreeMap<String, Value>) {
+    settings.retain(|key, _| !key.starts_with("serve."));
 }
 
 #[derive(Deserialize)]
@@ -343,8 +446,18 @@ struct SettingArgs {
     value: Value,
 }
 
-async fn set_setting(Json(args): Json<SettingArgs>) -> CommandResult {
-    ok(blocking(move || crate::save_setting(args.key, args.value)).await?)
+async fn set_setting(Json(args): Json<SettingArgs>) -> Response {
+    if args.key.starts_with("serve.") {
+        return (
+            StatusCode::FORBIDDEN,
+            "Network sharing settings cannot be changed over HTTP. Change them on the machine running the server.",
+        )
+            .into_response();
+    }
+    match blocking(move || crate::save_setting(args.key, args.value)).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -488,4 +601,117 @@ async fn stream_commit_graph(Query(args): Query<HashMap<String, String>>) -> Res
         Body::from_stream(stream),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_addresses_are_deduplicated_and_put_the_primary_first() {
+        let primary = Ipv4Addr::new(10, 0, 0, 4);
+        let mut addresses = vec![
+            Ipv4Addr::new(192, 168, 1, 3),
+            primary,
+            Ipv4Addr::new(192, 168, 1, 3),
+        ];
+
+        order_local_addresses(&mut addresses, Some(primary));
+
+        assert_eq!(
+            addresses,
+            vec![primary, Ipv4Addr::new(192, 168, 1, 3)]
+        );
+    }
+
+    #[test]
+    fn address_enumeration_excludes_loopback_and_ipv6() {
+        let addresses = non_loopback_ipv4_addresses(
+            [
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V6("::1".parse().unwrap()),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3)),
+            ],
+            None,
+        );
+
+        assert_eq!(addresses, vec![Ipv4Addr::new(192, 168, 1, 3)]);
+    }
+
+    #[test]
+    fn public_url_replaces_the_listener_url() {
+        let urls = entry_urls(
+            &SocketAddr::from(([0, 0, 0, 0], 4300)),
+            Some("secret"),
+            Some("https://git-nav.example"),
+        );
+
+        assert_eq!(urls, vec!["https://git-nav.example/?token=secret"]);
+    }
+
+    #[test]
+    fn entry_url_encodes_the_token() {
+        let urls = entry_urls(
+            &SocketAddr::from(([127, 0, 0, 1], 4300)),
+            Some("a&b#c=d"),
+            None,
+        );
+        let url = url::Url::parse(&urls[0]).unwrap();
+
+        assert_eq!(
+            url.query_pairs().find(|(key, _)| key == "token").unwrap().1,
+            "a&b#c=d"
+        );
+    }
+
+    #[test]
+    fn ipv6_entry_url_is_bracketed() {
+        let urls = entry_urls(
+            &SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 4300)),
+            Some("secret"),
+            None,
+        );
+
+        assert_eq!(urls, vec!["http://[::1]:4300/?token=secret"]);
+    }
+
+    #[test]
+    fn authentication_cookie_is_secure_for_forwarded_https() {
+        let request = Request::builder()
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
+            .unwrap();
+
+        assert!(request_is_https(&request));
+        assert!(auth_cookie("secret", request_is_https(&request)).ends_with("; Secure"));
+        assert!(!auth_cookie("secret", false).ends_with("; Secure"));
+        assert!(auth_cookie("secret", false).contains("; HttpOnly"));
+    }
+
+    #[tokio::test]
+    async fn remote_clients_cannot_change_network_sharing_settings() {
+        let response = set_setting(Json(SettingArgs {
+            key: "serve.token".to_string(),
+            value: json!("replacement"),
+        }))
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn remote_clients_cannot_read_network_sharing_settings() {
+        let mut settings = BTreeMap::from([
+            ("graph.layout".to_string(), json!("vertical")),
+            ("serve.host".to_string(), json!("0.0.0.0")),
+            ("serve.token".to_string(), json!("secret")),
+        ]);
+
+        redact_network_sharing_settings(&mut settings);
+
+        assert_eq!(
+            settings,
+            BTreeMap::from([("graph.layout".to_string(), json!("vertical"))])
+        );
+    }
 }

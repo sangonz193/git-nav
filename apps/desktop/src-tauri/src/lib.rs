@@ -6,7 +6,7 @@ use std::{
     collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet},
     env, fs,
     hash::{Hash, Hasher},
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::Mutex,
@@ -115,6 +115,10 @@ const CLOSE_TAB_EVENT: &str = "close-tab";
 #[cfg(target_os = "macos")]
 const REOPEN_TAB_EVENT: &str = "reopen-tab";
 const ZOOM_FACTOR_SETTING: &str = "app.zoomFactor";
+const SERVE_HOST_SETTING: &str = "serve.host";
+const SERVE_PORT_SETTING: &str = "serve.port";
+const SERVE_TOKEN_SETTING: &str = "serve.token";
+const SERVE_PUBLIC_URL_SETTING: &str = "serve.publicUrl";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MINIMUM_ZOOM_FACTOR: f64 = 0.5;
 const MAXIMUM_ZOOM_FACTOR: f64 = 2.0;
@@ -578,7 +582,10 @@ struct SettingChanged {
 
 fn read_settings(path: &Path) -> Result<StoredSettings, String> {
     let contents = match fs::read_to_string(path) {
-        Ok(contents) => contents,
+        Ok(contents) => {
+            restrict_to_owner(path)?;
+            contents
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(StoredSettings::Valid(BTreeMap::new()))
         }
@@ -658,9 +665,49 @@ fn with_locked_file<T>(
 fn write_json_atomically(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let contents = serde_json::to_string(value).map_err(|error| error.to_string())?;
     let temporary_path = path.with_extension("json.tmp");
-    fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
+    let mut temporary = open_owner_only_file(&temporary_path)?;
+    temporary
+        .write_all(contents.as_bytes())
+        .map_err(|error| error.to_string())?;
     // std::fs::rename replaces an existing destination on every platform, including Windows via MoveFileExW.
     fs::rename(temporary_path, path).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_owner_only_file(path: &Path) -> Result<fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    restrict_to_owner(path)?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_owner_only_file(path: &Path) -> Result<fs::File, String> {
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| error.to_string())
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_: &Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -4450,6 +4497,100 @@ mod tests {
         assert_eq!(next_zoom_factor(f64::NAN, ZoomDirection::In), 1.1);
     }
 
+    #[test]
+    fn serve_flags_override_stored_values() {
+        let settings = BTreeMap::from([
+            (SERVE_HOST_SETTING.to_string(), serde_json::json!("0.0.0.0")),
+            (SERVE_PORT_SETTING.to_string(), serde_json::json!(4301)),
+            (SERVE_TOKEN_SETTING.to_string(), serde_json::json!("stored-token")),
+        ]);
+        let arguments = vec![
+            "--host".to_string(),
+            "127.0.0.1".to_string(),
+            "--port".to_string(),
+            "5000".to_string(),
+            "--token".to_string(),
+            "cli-token".to_string(),
+        ];
+
+        let parsed = parse_serve_arguments(&arguments, &settings).unwrap();
+
+        assert_eq!(parsed.host, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        assert_eq!(parsed.port, 5000);
+        assert_eq!(parsed.token.as_deref(), Some("cli-token"));
+        assert!(!parsed.persist_token);
+    }
+
+    #[test]
+    fn serve_uses_stored_values_before_built_in_defaults() {
+        let settings = BTreeMap::from([
+            (SERVE_HOST_SETTING.to_string(), serde_json::json!("0.0.0.0")),
+            (SERVE_PORT_SETTING.to_string(), serde_json::json!(4301)),
+            (SERVE_TOKEN_SETTING.to_string(), serde_json::json!("stored-token")),
+            (
+                SERVE_PUBLIC_URL_SETTING.to_string(),
+                serde_json::json!("https://git-nav.example"),
+            ),
+        ]);
+
+        let parsed = parse_serve_arguments(&[], &settings).unwrap();
+
+        assert_eq!(parsed.host, std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        assert_eq!(parsed.port, 4301);
+        assert_eq!(parsed.token.as_deref(), Some("stored-token"));
+        assert_eq!(parsed.public_url.as_deref(), Some("https://git-nav.example"));
+        assert!(!parsed.persist_token);
+    }
+
+    #[test]
+    fn serve_ignores_invalid_stored_host_and_port() {
+        let settings = BTreeMap::from([
+            (SERVE_HOST_SETTING.to_string(), serde_json::json!("localhost")),
+            (SERVE_PORT_SETTING.to_string(), serde_json::json!("4301")),
+        ]);
+
+        let parsed = parse_serve_arguments(&[], &settings).unwrap();
+
+        assert_eq!(parsed.host, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        assert_eq!(parsed.port, 4300);
+    }
+
+    #[test]
+    fn serve_generates_a_token_only_when_no_stored_token_exists() {
+        let parsed = parse_serve_arguments(&[], &BTreeMap::new()).unwrap();
+
+        assert_eq!(parsed.host, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        assert_eq!(parsed.port, 4300);
+        assert_eq!(parsed.token.as_ref().map(String::len), Some(32));
+        assert!(parsed.persist_token);
+    }
+
+    #[test]
+    fn serve_replaces_an_empty_stored_token() {
+        let settings = BTreeMap::from([(
+            SERVE_TOKEN_SETTING.to_string(),
+            serde_json::json!(""),
+        )]);
+
+        let parsed = parse_serve_arguments(&[], &settings).unwrap();
+
+        assert_eq!(parsed.token.as_ref().map(String::len), Some(32));
+        assert!(parsed.persist_token);
+    }
+
+    #[test]
+    fn serve_no_token_does_not_use_or_persist_the_stored_token() {
+        let settings = BTreeMap::from([(
+            SERVE_TOKEN_SETTING.to_string(),
+            serde_json::json!("stored-token"),
+        )]);
+
+        let parsed = parse_serve_arguments(&["--no-token".to_string()], &settings).unwrap();
+
+        assert_eq!(parsed.token, None);
+        assert!(!parsed.persist_token);
+    }
+
     fn joined_paths<const N: usize>(paths: [&str; N]) -> OsString {
         env::join_paths(paths).unwrap()
     }
@@ -4486,6 +4627,52 @@ mod tests {
         assert_eq!(backups.len(), 1);
         assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), "{malformed");
 
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_settings_uses_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = env::temp_dir().join(format!(
+            "git-nav-settings-permissions-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+
+        save_setting_at(&path, "key".to_string(), serde_json::json!(true)).unwrap();
+
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reading_settings_restricts_an_existing_file_to_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = env::temp_dir().join(format!(
+            "git-nav-settings-permissions-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        read_settings(&path).unwrap();
+
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -6485,7 +6672,7 @@ Usage: git-nav serve [options]
 Options:
       --host <address>  Interface to bind (default 127.0.0.1; use 0.0.0.0 for other devices)
       --port <number>   Port to listen on (default 4300)
-      --token <value>   Shared secret required to open the app (default: randomly generated)
+      --token <value>   Shared secret required to open the app (default: saved in application data settings.json or generated)
       --no-token        Serve without authentication
 ";
 
@@ -6493,11 +6680,16 @@ struct ServeArguments {
     host: std::net::IpAddr,
     port: u16,
     token: Option<String>,
+    public_url: Option<String>,
+    persist_token: bool,
 }
 
-fn parse_serve_arguments(args: &[String]) -> Result<ServeArguments, String> {
-    let mut host = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
-    let mut port = 4300;
+fn parse_serve_arguments(
+    args: &[String],
+    settings: &BTreeMap<String, serde_json::Value>,
+) -> Result<ServeArguments, String> {
+    let mut host = stored_serve_host(settings);
+    let mut port = stored_serve_port(settings);
     let mut token = None;
     let mut generate_token = true;
     let mut index = 0;
@@ -6523,11 +6715,70 @@ fn parse_serve_arguments(args: &[String]) -> Result<ServeArguments, String> {
         }
     }
 
+    let mut persist_token = false;
     if generate_token {
-        token = Some(generated_token());
+        token = settings
+            .get(SERVE_TOKEN_SETTING)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        if token.is_none() {
+            token = Some(generated_token());
+            persist_token = true;
+        }
     }
 
-    Ok(ServeArguments { host, port, token })
+    Ok(ServeArguments {
+        host,
+        port,
+        token,
+        public_url: settings
+            .get(SERVE_PUBLIC_URL_SETTING)
+            .and_then(|value| match value.as_str().filter(|value| !value.is_empty()) {
+                Some(value) => Some(value.to_owned()),
+                None => {
+                    eprintln!("Ignoring invalid {SERVE_PUBLIC_URL_SETTING}: {value}");
+                    None
+                }
+            }),
+        persist_token,
+    })
+}
+
+fn stored_serve_host(settings: &BTreeMap<String, serde_json::Value>) -> std::net::IpAddr {
+    let Some(value) = settings.get(SERVE_HOST_SETTING) else {
+        return std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    };
+    let host = value
+        .as_str()
+        .and_then(|host| host.parse().ok())
+        .filter(|host| {
+            matches!(
+                host,
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+                    | std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+            )
+        });
+    match host {
+        Some(host) => host,
+        None => {
+            eprintln!("Ignoring invalid {SERVE_HOST_SETTING}: {value}");
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        }
+    }
+}
+
+fn stored_serve_port(settings: &BTreeMap<String, serde_json::Value>) -> u16 {
+    let Some(value) = settings.get(SERVE_PORT_SETTING) else {
+        return 4300;
+    };
+    match value.as_u64().and_then(|port| port.try_into().ok()) {
+        Some(port) => port,
+        None => {
+            eprintln!("Ignoring invalid {SERVE_PORT_SETTING}: {value}");
+            4300
+        }
+    }
 }
 
 fn generated_token() -> String {
@@ -6537,7 +6788,14 @@ fn generated_token() -> String {
 }
 
 fn serve(args: &[String]) {
-    let arguments = match parse_serve_arguments(args) {
+    let settings = match load_settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("Could not load settings: {error}");
+            std::process::exit(1);
+        }
+    };
+    let arguments = match parse_serve_arguments(args, &settings) {
         Ok(arguments) => arguments,
         Err(message) => {
             eprintln!("{message}");
@@ -6545,11 +6803,22 @@ fn serve(args: &[String]) {
         }
     };
 
+    if arguments.persist_token {
+        if let Err(error) = save_setting(
+            SERVE_TOKEN_SETTING.to_string(),
+            serde_json::Value::String(arguments.token.clone().expect("generated token missing")),
+        ) {
+            eprintln!("Could not save the generated token: {error}");
+            std::process::exit(1);
+        }
+    }
+
     let runtime = tokio::runtime::Runtime::new().expect("could not start the async runtime");
     if let Err(error) = runtime.block_on(server::serve(server::Options {
         host: arguments.host,
         port: arguments.port,
         token: arguments.token,
+        public_url: arguments.public_url,
     })) {
         eprintln!("{error}");
         std::process::exit(1);
