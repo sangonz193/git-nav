@@ -6,6 +6,7 @@
     "build": "bun --filter=desktop run build",
     "bump": "bun scripts/bump.ts",
     "build:package": "bun --filter=git-nav run build:package",
+    "bootstrap:platform-packages": "bun --filter=git-nav run bootstrap:platform-packages",
     "dev": "bun --filter=desktop run dev",
     "dev:web": "bun --filter=desktop run dev:web",
     "lint": "bun run --workspaces lint",

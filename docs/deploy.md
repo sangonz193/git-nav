@@ -7,7 +7,19 @@ Releases are triggered by pushing a version tag. The tag and these version field
 - `apps/desktop/src-tauri/tauri.conf.json`
 - `packages/cli/package.json` optional dependencies
 
-Before the first CI release, configure npm trusted publishing for each published package:
+Before tagging a release, bootstrap any platform package names that do not yet
+exist, then configure npm trusted publishing for every published package. The
+bootstrap command checks the registry, skips existing packages, and defaults to
+a dry run. Published placeholders use the `bootstrap` dist-tag, never `latest`.
+Review its output, then run it once with npm credentials that can publish to the
+`@git-nav` scope:
+
+```sh
+bun run bootstrap:platform-packages
+bun run bootstrap:platform-packages -- --publish
+```
+
+After the package names exist, configure trusted publishing:
 
 ```sh
 npm trust github @git-nav/darwin-arm64 --file publish.yml --repo sangonz193/git-nav --allow-publish
