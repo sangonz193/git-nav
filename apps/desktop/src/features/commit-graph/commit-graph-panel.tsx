@@ -958,7 +958,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     containerApi.addPanel({
       component: "diff",
       id: panelId("diff"),
-      params: { ...repositoryPanelParams, baseRef, headRef: commit.hash, headLabel: commit.subject },
+      params: { ...repositoryPanelParams, baseRef, headRef: commit.hash, headLabel: commit.subject || "(no subject)" },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
       title: refLabel(commit.hash),

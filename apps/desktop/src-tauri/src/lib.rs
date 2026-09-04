@@ -578,6 +578,10 @@ fn save_setting(key: String, value: serde_json::Value) -> Result<(), String> {
 
 type RepositoryLayouts = BTreeMap<String, BTreeMap<String, serde_json::Value>>;
 
+fn parse_repository_layouts(contents: &str) -> Result<RepositoryLayouts, serde_json::Error> {
+    serde_json::from_str(contents)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RepositoryLayout {
@@ -594,7 +598,7 @@ fn load_repository_layout(path: String, client_id: String) -> Result<RepositoryL
         }
         Err(error) => return Err(error.to_string()),
     };
-    let layouts: RepositoryLayouts = serde_json::from_str(&contents).unwrap_or_default();
+    let layouts = parse_repository_layouts(&contents).unwrap_or_default();
     Ok(RepositoryLayout {
         layout: layouts
             .get(&client_id)
@@ -612,7 +616,7 @@ fn write_repository_layout_at(
 ) -> Result<(), String> {
     with_locked_file(storage_path, || {
         let layouts = match fs::read_to_string(storage_path) {
-            Ok(contents) => match serde_json::from_str(&contents) {
+            Ok(contents) => match parse_repository_layouts(&contents) {
                 Ok(layouts) => layouts,
                 Err(_) => {
                     fs::rename(storage_path, malformed_settings_path(storage_path))
