@@ -130,7 +130,7 @@ describe("usableRepositoryLayout", () => {
             name: "git-nav",
             path,
             selectedFilePath: "src/index.ts",
-            userPreferences: { fileTreeOpen: true, mode: "unified" },
+            userPreferences: { fileTreeOpen: true, hideViewed: true, ignoreWhitespace: true, mode: "unified", wrap: true },
           }),
         },
       },
@@ -140,7 +140,7 @@ describe("usableRepositoryLayout", () => {
       layout: {
         ...value.layout,
         panels: {
-          diff: serializedPanel("diff", "diff", { baseRef: "main", headRef: "feature", name: "git-nav", path, userPreferences: { mode: "automatic" } }),
+          diff: serializedPanel("diff", "diff", { baseRef: "main", headRef: "feature", name: "git-nav", path, userPreferences: { wrap: "yes" } }),
         },
       },
     }, path)).toBeNull()
