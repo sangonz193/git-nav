@@ -71,6 +71,7 @@ const commitColumns = commitColumnHelper.columns([
   commitColumnHelper.accessor("hash", { header: "Commit", maxSize: 160, minSize: 68, size: 84 }),
 ])
 
+// Context menu content stays behind this boundary so its render cost does not grow with history depth.
 function RowContextMenuBody({ canSelectRange, chipMenuEntry, chips, commit, copyText, diffSelectedRange, index, menuHeader, onRequest, openCommitDiff, openRangeDiff, repository, selectCommit, selectRangeTo, selected, source, targetForRow }: {
   canSelectRange: (index: number) => boolean
   chipMenuEntry: (chip: RowChip, sha: string, key: string, components: RefMenuComponents) => ReactNode
