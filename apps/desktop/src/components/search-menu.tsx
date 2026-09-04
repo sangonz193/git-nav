@@ -8,7 +8,7 @@ type Icon = ComponentType<{ className?: string }>
 
 export type SearchMenuItem = {
   /** A second thing the row can do, offered beside it rather than instead of selecting the row. */
-  action?: { hint: string; icon: Icon; onSelect: () => void }
+  action?: { hint: string; icon: Icon; label: string; onSelect: () => void }
   detail: string
   icon: Icon
   key: string
@@ -64,6 +64,11 @@ export function SearchMenu({
     }
     if (event.key === "Enter" && items[activeIndex]) {
       event.preventDefault()
+      const action = items[activeIndex].action
+      if (action && (event.metaKey || event.ctrlKey)) {
+        action.onSelect()
+        return
+      }
       onSelect(activeIndex, "enter")
     }
   }
@@ -88,7 +93,7 @@ export function SearchMenu({
       </div>
       <ul className="max-h-64 overflow-y-auto p-1">
         {items.map((item, index) => (
-          <li className="flex items-center gap-1" key={item.key}>
+          <li className="group flex items-center gap-1" key={item.key}>
             <button
               className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left ${index === activeIndex ? "bg-accent text-accent-foreground" : ""}`}
               onClick={() => onSelect(index, "click")}
@@ -103,8 +108,9 @@ export function SearchMenu({
             {item.action && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button aria-label={item.action.hint} onClick={item.action.onSelect} size="icon-xs" type="button" variant="ghost">
+                  <Button aria-label={item.action.hint} className={index === activeIndex ? "shrink-0" : "shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"} onClick={item.action.onSelect} size="xs" type="button" variant="ghost">
                     <item.action.icon />
+                    {item.action.label}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{item.action.hint}</TooltipContent>

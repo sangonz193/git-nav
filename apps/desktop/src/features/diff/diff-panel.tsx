@@ -14,7 +14,7 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
-import { branchRangeTitle, diffTitle, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
+import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
 import { initialDiffLayout, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH } from "./diff-panel-state"
 import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
 
@@ -544,11 +544,15 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
       .catch((message: unknown) => setError(String(message)))
     setPicker(null)
   }, [api, clearFileSelection, params.path])
+  // Measuring a branch from where it forked moves both ends of the comparison, which is only what the
+  // head end is asking for. Naming the branch it forked from is what keeps that from being a surprise.
+  const forkBase = defaultBranchName(metadata.defaultBranch, metadata.remotes ?? [])
   const menuItems = useMemo(
     () => hits.map((hit, index): SearchMenuItem => ({
-      action: hit.branch === null ? undefined : {
-        hint: `Compare what ${hit.branch} is ahead of the default branch by`,
+      action: picker !== "head" || hit.branch === null || isDefaultBranch(hit.branch, metadata.defaultBranch, metadata.remotes ?? []) ? undefined : {
+        hint: `Changes on ${hit.branch} since it forked from ${forkBase || "the default branch"}`,
         icon: GitCompareArrows,
+        label: forkBase ? `vs ${forkBase}` : "vs default",
         onSelect: () => selectAheadRange(hit.branch as string),
       },
       detail: hit.detail,
@@ -556,7 +560,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
       key: `${hit.kind}-${hit.reference}-${index}`,
       label: hit.label,
     })),
-    [hits, selectAheadRange]
+    [forkBase, hits, metadata.defaultBranch, metadata.remotes, picker, selectAheadRange]
   )
 
   const scrollOffset = rowVirtualizer.scrollOffset ?? 0
