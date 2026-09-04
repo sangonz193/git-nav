@@ -805,13 +805,47 @@ fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
 const RAW_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--raw", "--abbrev=40", "-z"];
 const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
 
+const NUMSTAT_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z", "--ignore-all-space"];
+
+fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
+    if ignore_whitespace {
+        &["--ignore-all-space"]
+    } else {
+        &[]
+    }
+}
+
+// Only the patch answers to --ignore-all-space; --raw lists a file whenever its two blobs differ, however
+// they differ. Numstat is the patch's own machinery, so the files it names are the ones the patch carries.
+fn files_changed_beyond_whitespace(path: &str, revisions: &[&str]) -> Result<HashSet<String>, String> {
+    let output = git_output_bytes(path, &[&NUMSTAT_ARGUMENTS[..], revisions].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| String::from_utf8_lossy(field).into_owned());
+    let mut paths = HashSet::new();
+    while let Some(record) = fields.next() {
+        match record.splitn(3, '\t').nth(2) {
+            Some(path) => {
+                paths.insert(path.to_string());
+            }
+            // A rename carries its two paths in the fields following the counts.
+            None => {
+                paths.extend(fields.by_ref().take(2));
+            }
+        }
+    }
+    Ok(paths)
+}
+
 // A blob of nothing is what git reports for a side a file does not have, and for a working tree file it
 // has not been asked to hash.
 fn blob_oid(oid: &str) -> Option<String> {
     oid.chars().any(|character| character != '0').then(|| oid.to_string())
 }
 
-fn parse_changed_files(raw: &[u8], patch: &str) -> Result<Vec<ChangedFile>, String> {
+fn parse_changed_files(raw: &[u8], patch: &str, kept: Option<&HashSet<String>>) -> Result<Vec<ChangedFile>, String> {
     // The patch lists files in the same order as --raw, so its per-file stats zip by index.
     let stats = parse_patch_stats(patch);
     let fields = raw
@@ -846,6 +880,9 @@ fn parse_changed_files(raw: &[u8], patch: &str) -> Result<Vec<ChangedFile>, Stri
             }
             _ => (Some(first_path.clone()), Some(first_path), "modified"),
         };
+        if kept.is_some_and(|kept| !new_path.as_ref().or(old_path.as_ref()).is_some_and(|name| kept.contains(name))) {
+            continue;
+        }
         let stat = stats.get(files.len()).copied().unwrap_or_default();
         files.push(ChangedFile {
             status: status.to_string(),
@@ -864,12 +901,14 @@ fn parse_changed_files(raw: &[u8], patch: &str) -> Result<Vec<ChangedFile>, Stri
     Ok(files)
 }
 
-fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<ChangedFile>, String> {
+fn changed_files(path: &str, base_sha: &str, head_sha: &str, ignore_whitespace: bool) -> Result<Vec<ChangedFile>, String> {
     let revisions = [base_sha, head_sha];
+    let whitespace = whitespace_arguments(ignore_whitespace);
     let raw = git_output_bytes(path, &[&RAW_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], &revisions].concat())?;
-    parse_changed_files(&raw, &patch)
+    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], whitespace, &revisions].concat())?;
+    let kept = ignore_whitespace.then(|| files_changed_beyond_whitespace(path, &revisions)).transpose()?;
+    parse_changed_files(&raw, &patch, kept.as_ref())
 }
 
 // Untracked files are invisible to git diff, so they are listed separately and appended after the
@@ -906,12 +945,14 @@ fn untracked_files(path: &str) -> Result<Vec<ChangedFile>, String> {
     Ok(files)
 }
 
-fn worktree_changed_files(path: &str, base_sha: &str) -> Result<Vec<ChangedFile>, String> {
+fn worktree_changed_files(path: &str, base_sha: &str, ignore_whitespace: bool) -> Result<Vec<ChangedFile>, String> {
     let revisions = [base_sha];
+    let whitespace = whitespace_arguments(ignore_whitespace);
     let raw = git_output_bytes(path, &[&RAW_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], &revisions].concat())?;
-    let mut files = parse_changed_files(&raw, &patch)?;
+    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], whitespace, &revisions].concat())?;
+    let kept = ignore_whitespace.then(|| files_changed_beyond_whitespace(path, &revisions)).transpose()?;
+    let mut files = parse_changed_files(&raw, &patch, kept.as_ref())?;
     files.extend(untracked_files(path)?);
     Ok(files)
 }
@@ -2614,7 +2655,7 @@ fn branch_sync(repo_path: String) -> Result<Vec<BranchSync>, String> {
     Ok(parse_branch_sync(&output))
 }
 
-fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool) -> Result<Comparison, String> {
+fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool, ignore_whitespace: bool) -> Result<Comparison, String> {
     let is_worktree = head_ref == WORKTREE_REF;
     // The working tree has no commit of its own, so the checkout it sits on stands in for it as the
     // side the fork point is measured from.
@@ -2627,7 +2668,7 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool)
             resolved_base_sha
         };
         return Ok(Comparison {
-            files: worktree_changed_files(repo_path, &base_sha)?,
+            files: worktree_changed_files(repo_path, &base_sha, ignore_whitespace)?,
             base_sha,
             head_sha: WORKTREE_REF.to_string(),
         });
@@ -2639,7 +2680,7 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool)
         resolved_base_sha
     };
     Ok(Comparison {
-        files: changed_files(repo_path, &base_sha, &head_commit_sha)?,
+        files: changed_files(repo_path, &base_sha, &head_commit_sha, ignore_whitespace)?,
         base_sha,
         head_sha: head_commit_sha,
     })
@@ -2647,8 +2688,8 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool)
 
 #[git_nav_macros::http_command]
 #[tauri::command(async)]
-fn compare_refs(repo_path: String, base_ref: String, head_ref: String, merge_base: bool) -> Result<Comparison, String> {
-    comparison(&repo_path, &base_ref, &head_ref, merge_base)
+fn compare_refs(repo_path: String, base_ref: String, head_ref: String, merge_base: bool, ignore_whitespace: bool) -> Result<Comparison, String> {
+    comparison(&repo_path, &base_ref, &head_ref, merge_base, ignore_whitespace)
 }
 
 const VIEWED_COMPARISON_LIMIT: i64 = 50;
@@ -2918,13 +2959,14 @@ fn select_branch_range(repo_path: String, reference: String) -> Result<BranchSel
 }
 
 // git diff cannot see an untracked file, so an empty patch means falling back to an empty left side.
-fn worktree_patch(repo_path: &str, base_sha: &str, path: &str) -> Result<String, String> {
-    let patch = git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], &[base_sha, "--", path]].concat())?;
+fn worktree_patch(repo_path: &str, base_sha: &str, path: &str, ignore_whitespace: bool) -> Result<String, String> {
+    let whitespace = whitespace_arguments(ignore_whitespace);
+    let patch = git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], whitespace, &[base_sha, "--", path]].concat())?;
     if !patch.is_empty() {
         return Ok(patch);
     }
     // --no-index reports a difference by exiting non-zero, so its status carries no error to report.
-    let output = git_result(repo_path, &[&PATCH_ARGUMENTS[..], &["--no-index", "--", "/dev/null", path]].concat())?;
+    let output = git_result(repo_path, &[&PATCH_ARGUMENTS[..], whitespace, &["--no-index", "--", "/dev/null", path]].concat())?;
     String::from_utf8(output.stdout).map_err(|error| error.to_string())
 }
 
@@ -2934,13 +2976,14 @@ fn file_diff(
     head_sha: &str,
     old_path: Option<String>,
     new_path: Option<String>,
+    ignore_whitespace: bool,
 ) -> Result<FileDiff, String> {
     let path = new_path.as_ref().or(old_path.as_ref()).ok_or_else(|| "No file path was provided.".to_string())?;
     let is_worktree = head_sha == WORKTREE_REF;
     let patch = if is_worktree {
-        worktree_patch(repo_path, base_sha, path)?
+        worktree_patch(repo_path, base_sha, path, ignore_whitespace)?
     } else {
-        git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], &[base_sha, head_sha, "--", path]].concat())?
+        git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], whitespace_arguments(ignore_whitespace), &[base_sha, head_sha, "--", path]].concat())?
     };
     // Content lines in a patch always carry a leading marker, so an unprefixed header is git's own.
     if patch.lines().any(|line| line.starts_with("Binary files ") || line == "GIT binary patch") {
@@ -2980,8 +3023,9 @@ fn diff_file(
     head_sha: String,
     old_path: Option<String>,
     new_path: Option<String>,
+    ignore_whitespace: bool,
 ) -> Result<FileDiff, String> {
-    file_diff(&repo_path, &base_sha, &head_sha, old_path, new_path)
+    file_diff(&repo_path, &base_sha, &head_sha, old_path, new_path, ignore_whitespace)
 }
 
 fn git_result(path: &str, arguments: &[&str]) -> Result<Output, String> {
@@ -4596,7 +4640,7 @@ mod tests {
     fn reads_the_blob_each_side_of_a_changed_file_is() {
         let raw = b":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\0src/main.rs\0:000000 100644 0000000000000000000000000000000000000000 3333333333333333333333333333333333333333 A\0src/new.rs\0:100644 100644 4444444444444444444444444444444444444444 5555555555555555555555555555555555555555 R100\0src/old.rs\0src/renamed.rs\0";
 
-        let files = parse_changed_files(raw, "").unwrap();
+        let files = parse_changed_files(raw, "", None).unwrap();
 
         assert_eq!(files.len(), 3);
         assert_eq!(files[0].status, "modified");
@@ -5102,14 +5146,14 @@ mod tests {
             names.sort();
             names
         };
-        let forked = comparison(&path, &selection.base_ref, &selection.head_ref, true).unwrap();
-        let direct = comparison(&path, &selection.base_ref, &selection.head_ref, false).unwrap();
+        let forked = comparison(&path, &selection.base_ref, &selection.head_ref, true, false).unwrap();
+        let direct = comparison(&path, &selection.base_ref, &selection.head_ref, false, false).unwrap();
 
         run(&["checkout", "--quiet", "feature"]);
         write("second.txt", "two\n");
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "second"]);
-        let after_commit = comparison(&path, &selection.base_ref, &selection.head_ref, true).unwrap();
+        let after_commit = comparison(&path, &selection.base_ref, &selection.head_ref, true, false).unwrap();
         remove_scratch_repository(&path);
 
         assert_eq!((selection.base_ref.as_str(), selection.head_ref.as_str()), ("origin/main", "feature"));
@@ -5117,6 +5161,33 @@ mod tests {
         // Without the fork point the primary branch's own commit reads as a deletion on the branch.
         assert_eq!(names(&direct), ["feature.txt", "primary.txt"]);
         assert_eq!(names(&after_commit), ["feature.txt", "second.txt"]);
+    }
+
+    #[test]
+    fn leaves_out_a_file_whose_only_changes_are_whitespace() {
+        let (path, run) = scratch_repository("ignore-whitespace");
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        write("spaced.txt", "one\ntwo\n");
+        write("changed.txt", "one\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "feature"]);
+        write("spaced.txt", "one  \n\ttwo\n");
+        write("changed.txt", "two\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "feature"]);
+
+        let names = |comparison: Comparison| {
+            let mut names: Vec<_> = comparison.files.iter().filter_map(|file| file.new_path.clone()).collect();
+            names.sort();
+            names
+        };
+        let all = names(comparison(&path, "main", "feature", false, false).unwrap());
+        let ignored = names(comparison(&path, "main", "feature", false, true).unwrap());
+        remove_scratch_repository(&path);
+
+        assert_eq!(all, ["changed.txt", "spaced.txt"]);
+        assert_eq!(ignored, ["changed.txt"]);
     }
 
     #[test]
@@ -5130,7 +5201,7 @@ mod tests {
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "unrelated"]);
 
-        let result = comparison(&path, "main", "unrelated", true);
+        let result = comparison(&path, "main", "unrelated", true, false);
         remove_scratch_repository(&path);
 
         assert!(matches!(result, Err(message) if message == "Could not find a merge base for main and unrelated."));
@@ -5209,9 +5280,9 @@ mod tests {
         fs::write(Path::new(&path).join(".gitignore"), "ignored.txt\n").unwrap();
         write("ignored.txt", "invisible\n");
 
-        let comparison = compare_refs(path.clone(), "HEAD".to_string(), WORKTREE_REF.to_string(), false).unwrap();
-        let untracked = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), None, Some("untracked.txt".to_string()));
-        let modified = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), Some("kept.txt".to_string()), Some("kept.txt".to_string()));
+        let comparison = compare_refs(path.clone(), "HEAD".to_string(), WORKTREE_REF.to_string(), false, false).unwrap();
+        let untracked = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), None, Some("untracked.txt".to_string()), false);
+        let modified = diff_file(path.clone(), comparison.base_sha.clone(), comparison.head_sha.clone(), Some("kept.txt".to_string()), Some("kept.txt".to_string()), false);
         fs::remove_dir_all(&path).unwrap();
 
         assert_eq!(comparison.head_sha, WORKTREE_REF);
