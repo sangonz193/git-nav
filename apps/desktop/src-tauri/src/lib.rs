@@ -831,11 +831,11 @@ fn files_changed_beyond_whitespace(path: &str, revisions: &[&str]) -> Result<Has
     let mut paths = HashSet::new();
     while let Some(record) = fields.next() {
         match record.splitn(3, '\t').nth(2) {
-            Some(path) => {
+            Some(path) if !path.is_empty() => {
                 paths.insert(path.to_string());
             }
             // A rename carries its two paths in the fields following the counts.
-            None => {
+            _ => {
                 paths.extend(fields.by_ref().take(2));
             }
         }
@@ -5192,6 +5192,37 @@ mod tests {
 
         assert_eq!(all, ["changed.txt", "spaced.txt"]);
         assert_eq!(ignored, ["changed.txt"]);
+    }
+
+    #[test]
+    fn keeps_files_after_a_rename_when_ignoring_whitespace() {
+        let (path, run) = scratch_repository("ignore-whitespace-rename");
+        let write =
+            |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        write("old.txt", "unchanged\n");
+        write("later.txt", "before\nkeep\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "feature"]);
+        run(&["mv", "old.txt", "renamed.txt"]);
+        write("later.txt", "after\nnext\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "rename and change"]);
+
+        let comparison = comparison(&path, "main", "feature", false, true).unwrap();
+        remove_scratch_repository(&path);
+
+        let later = comparison
+            .files
+            .iter()
+            .find(|file| file.new_path.as_deref() == Some("later.txt"))
+            .unwrap();
+        assert_eq!(later.additions, 2);
+        assert_eq!(later.deletions, 2);
+        assert!(comparison
+            .files
+            .iter()
+            .any(|file| file.new_path.as_deref() == Some("renamed.txt")));
     }
 
     #[test]
