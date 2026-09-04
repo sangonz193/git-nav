@@ -118,6 +118,10 @@ function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
   )
 }
 
+function rangeMarker({ mergeBase }: SelectedRefs) {
+  return mergeBase ? "..." : ".."
+}
+
 function refLabel(reference: string) {
   return reference === WORKTREE_REF ? "Working tree" : reference.replace(/^[0-9a-f]{40}\b/i, (sha) => sha.slice(0, 8))
 }
@@ -340,7 +344,7 @@ function FileDiffCard({ entry, expanded, file, mode, onExpand, theme, wrap }: { 
   )
 }
 
-export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
+export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>) {
   const theme = useTheme()
   const [refs, setRefs] = useState<SelectedRefs>({
     base: params.baseRef,
@@ -435,6 +439,14 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
+
+  // The title a tab opened with names what it was opened from, which stops describing it once either
+  // end has been pointed somewhere else.
+  useEffect(() => {
+    if (refs.base !== params.baseRef || refs.head !== params.headRef) {
+      api.setTitle(`${refs.baseLabel}${rangeMarker(refs)}${refs.headLabel}`)
+    }
+  }, [api, params.baseRef, params.headRef, refs])
 
   // Measured heights belong to the previous comparison or layout, so drop them and start over.
   useEffect(() => {
@@ -594,7 +606,7 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
           <ChevronDown />
         </Button>
         <Hinted hint={refs.mergeBase ? `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}` : `Changes between ${refs.baseLabel} and ${refs.headLabel}`}>
-          <span className="shrink-0 text-muted-foreground">{refs.mergeBase ? "..." : ".."}</span>
+          <span className="shrink-0 text-muted-foreground">{rangeMarker(refs)}</span>
         </Hinted>
         <Button aria-expanded={picker === "head"} className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} onClick={() => openPicker("head")} ref={(element) => { pickerButtons.current.head = element }} size="sm" type="button" variant="outline">
           <span className="truncate">{refs.headLabel}</span>
