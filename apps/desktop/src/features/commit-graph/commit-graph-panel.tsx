@@ -1661,7 +1661,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
           {selection.kind === "commits"
             ? (
               <Hinted hint="Diff the selected range">
-                <Button disabled={!selection.base} onClick={() => openRangeDiff(selection)} size="xs" type="button" variant="outline">
+                <Button disabled={!selection.base} onClick={() => openRangeDiff(selection)} size="sm" type="button" variant="outline">
                   <FileDiff />
                   Diff
                 </Button>
@@ -1669,14 +1669,14 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
             )
             : (
               <Hinted hint={`Diff ${refName(selection.ref)} against the default branch`}>
-                <Button onClick={() => openRefDiff(refName(selection.ref))} size="xs" type="button" variant="outline">
+                <Button onClick={() => openRefDiff(refName(selection.ref))} size="sm" type="button" variant="outline">
                   <FileDiff />
                   Diff
                 </Button>
               </Hinted>
             )}
           <Hinted hint="Clear the selection">
-            <Button onClick={clearSelection} size="xs" type="button" variant="ghost">
+            <Button onClick={clearSelection} size="sm" type="button" variant="ghost">
               <X />
               Clear
             </Button>
