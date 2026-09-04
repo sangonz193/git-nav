@@ -6,11 +6,14 @@ describe("binaryPathFor", () => {
     expect(binaryPathFor("linux", arch)).toBe("git-nav.AppImage");
   });
 
-  test("keeps the macOS app bundle executable", () => {
-    expect(binaryPathFor("darwin", "arm64")).toBe(
-      "Git Nav.app/Contents/MacOS/git-nav",
-    );
-  });
+  test.each(["arm64", "x64"])(
+    "keeps the macOS app bundle executable for %s",
+    (arch) => {
+      expect(binaryPathFor("darwin", arch)).toBe(
+        "Git Nav.app/Contents/MacOS/git-nav",
+      );
+    },
+  );
 
   test.each(["x64", "arm64"])(
     "selects the Windows executable for %s",
