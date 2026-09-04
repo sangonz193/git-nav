@@ -2,16 +2,66 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/app-icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>vite-monorepo</title>
+    <title>Git Nav</title>
     <style>
       html {
-        background-color: oklch(1 0 0);
+        --splash-surface: oklch(1 0 0);
+        --splash-mark: oklch(0.205 0 0);
+        --splash-glyph: oklch(0.985 0 0);
+        background-color: var(--splash-surface);
       }
 
       html.dark {
-        background-color: oklch(0.145 0 0);
+        --splash-surface: oklch(0.145 0 0);
+        --splash-mark: oklch(0.922 0 0);
+        --splash-glyph: oklch(0.205 0 0);
+      }
+
+      /* The splash carries no class from the app stylesheet: it has to stand on its own to paint before
+         the bundle it is covering for has loaded. */
+      #splash {
+        align-items: center;
+        background-color: var(--splash-surface);
+        display: flex;
+        inset: 0;
+        justify-content: center;
+        position: fixed;
+      }
+
+      #splash-mark {
+        align-items: center;
+        animation:
+          splash-appear 240ms ease 150ms both,
+          splash-breathe 1.6s ease-in-out 900ms infinite;
+        background-color: var(--splash-mark);
+        border-radius: 14px;
+        color: var(--splash-glyph);
+        display: flex;
+        height: 44px;
+        justify-content: center;
+        width: 44px;
+      }
+
+      /* A start that beats the delay never shows the mark at all. */
+      @keyframes splash-appear {
+        from {
+          opacity: 0;
+          transform: scale(0.96);
+        }
+      }
+
+      @keyframes splash-breathe {
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #splash-mark {
+          animation: splash-appear 1ms linear 150ms both;
+        }
       }
     </style>
     <script>
@@ -24,6 +74,26 @@
     </script>
   </head>
   <body>
+    <div id="splash">
+      <div id="splash-mark">
+        <svg
+          aria-hidden="true"
+          fill="none"
+          height="22"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="22"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path d="M15 6a9 9 0 0 0-9 9V3" />
+          <circle cx="18" cy="6" r="3" />
+          <circle cx="6" cy="18" r="3" />
+        </svg>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

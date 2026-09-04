@@ -36,6 +36,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "DeveloperTool",
+    "copyright": "Copyright 2026 Santiago González",
+    "homepage": "https://github.com/sangonz193/git-nav",
+    "publisher": "Santiago González",
+    "shortDescription": "Read Git history, worktrees and diffs",
+    "longDescription": "Git Nav opens a repository and every worktree beside it: a commit graph carrying branches, tags, pull request state and uncommitted work, and a diff between any two references.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
