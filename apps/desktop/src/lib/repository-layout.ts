@@ -112,22 +112,41 @@ export async function closeRepositoryWindowAfterSaving(
   event: { preventDefault(): void },
   flush: () => Promise<void>,
   destroy: () => Promise<void>,
+  saveTimeout = 1_000,
 ) {
   event.preventDefault()
-  await flush()
-  await destroy()
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve().then(flush).catch(() => undefined),
+      new Promise<void>((resolve) => { timeout = globalThis.setTimeout(resolve, saveTimeout) }),
+    ])
+  } finally {
+    globalThis.clearTimeout(timeout)
+    await destroy()
+  }
 }
 
 export function repositoryLayoutSaveScheduler(save: (keepalive?: boolean) => Promise<void>, onError: (error: unknown) => void, isCurrent = () => true) {
   let timeout: ReturnType<typeof globalThis.setTimeout> | undefined
   let saveChain = Promise.resolve()
+  let normalSavesPending = 0
   const flush = () => {
     if (timeout === undefined) {
       return saveChain
     }
     globalThis.clearTimeout(timeout)
     timeout = undefined
-    saveChain = saveChain.then(() => isCurrent() ? save() : undefined).catch(onError)
+    normalSavesPending++
+    saveChain = saveChain.then(async () => {
+      try {
+        if (isCurrent()) {
+          await save()
+        }
+      } finally {
+        normalSavesPending--
+      }
+    }).catch(onError)
     return saveChain
   }
   return {
@@ -137,11 +156,14 @@ export function repositoryLayoutSaveScheduler(save: (keepalive?: boolean) => Pro
     },
     flush,
     flushOnPageHide() {
-      if (timeout === undefined || !isCurrent()) {
+      if ((timeout === undefined && normalSavesPending === 0) || !isCurrent()) {
         return
       }
-      globalThis.clearTimeout(timeout)
-      timeout = undefined
+      if (timeout !== undefined) {
+        globalThis.clearTimeout(timeout)
+        timeout = undefined
+      }
+      // A pagehide reissue can race an in-flight save and the later write wins; losing the save entirely on unload is worse.
       const unloadSave = save(true).catch(onError)
       saveChain = Promise.all([saveChain, unloadSave]).then(() => undefined)
     },
@@ -180,6 +202,7 @@ export function repositoryLayoutRestoreController(save: () => void) {
         return false
       }
       restore.userAction(() => undefined)
+      saveEnabled = true
       return true
     },
     restored(change: () => void) {

@@ -218,7 +218,7 @@ export function RepositoryWindow({ path }: { path: string }) {
             const layoutSubscription = event.api.onDidLayoutChange(save)
             const panelAddedSubscription = event.api.onDidAddPanel(() => layoutRestore.userAction())
             let closeUnlisten: (() => void) | undefined
-            let pageHideUnlisten: (() => void) | undefined
+            const pageHideUnlisten = listenForRepositoryLayoutPageHide(window, layoutSave.flushOnPageHide)
             let listenersDisposed = false
             if (isDesktop) {
               const repositoryWindow = getCurrentWindow()
@@ -229,13 +229,11 @@ export function RepositoryWindow({ path }: { path: string }) {
                   closeUnlisten = unlisten
                 }
               })
-            } else {
-              pageHideUnlisten = listenForRepositoryLayoutPageHide(window, layoutSave.flushOnPageHide)
             }
             disposeDockviewListeners.current = () => {
               listenersDisposed = true
               closeUnlisten?.()
-              pageHideUnlisten?.()
+              pageHideUnlisten()
               layoutSubscription.dispose()
               panelAddedSubscription.dispose()
               layoutSave.dispose()

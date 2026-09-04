@@ -368,8 +368,10 @@ struct SaveRepositoryLayoutArgs {
 
 async fn save_repository_layout(Json(args): Json<SaveRepositoryLayoutArgs>) -> CommandResult {
     ok(
-        blocking(move || crate::save_repository_layout(args.path, args.client_id, args.layout))
-            .await?,
+        blocking(move || {
+            crate::save_repository_layout(args.path, args.client_id, args.layout)
+        })
+        .await?,
     )
 }
 

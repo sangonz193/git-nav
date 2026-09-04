@@ -249,6 +249,31 @@ describe("repositoryLayoutSaveScheduler", () => {
     await scheduler.flush()
   })
 
+  test("reissues an in-flight save with keepalive on pagehide", async () => {
+    let finishSave = () => {}
+    const keepalive: (boolean | undefined)[] = []
+    const scheduler = repositoryLayoutSaveScheduler(
+      (value) => {
+        keepalive.push(value)
+        return value
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => { finishSave = resolve })
+      },
+      () => undefined,
+    )
+
+    scheduler.schedule()
+    void scheduler.flush()
+    await Promise.resolve()
+    expect(keepalive).toEqual([undefined])
+
+    scheduler.flushOnPageHide()
+    expect(keepalive).toEqual([undefined, true])
+
+    finishSave()
+    await scheduler.flush()
+  })
+
   test("saves parameter updates through Dockview's layout change event", async () => {
     const layoutChanges = event<void>()
     let saves = 0
@@ -288,6 +313,19 @@ describe("repository window close", () => {
     expect(destroyed).toBe(true)
   })
 
+  test("destroys the window when saving does not finish", async () => {
+    let destroyed = false
+
+    await closeRepositoryWindowAfterSaving(
+      { preventDefault: () => undefined },
+      () => new Promise<void>(() => undefined),
+      async () => { destroyed = true },
+      0,
+    )
+
+    expect(destroyed).toBe(true)
+  })
+
   test("grants destroy permission to every window that can register the close handler", () => {
     const capability = JSON.parse(readFileSync(new URL("../../src-tauri/capabilities/default.json", import.meta.url), "utf8"))
 
@@ -298,17 +336,18 @@ describe("repository window close", () => {
 })
 
 describe("repositoryLayoutRestoreController", () => {
-  test("keeps an early user layout without replacing the stored layout", () => {
+  test("lets an early user action cancel restore while this and later changes keep saving", () => {
     let saves = 0
     const state = { layout: "user" }
     const restore = repositoryLayoutRestoreController(() => saves++)
 
     expect(restore.userAction()).toBe(true)
+    restore.changed()
 
     expect(restore.restored(() => { state.layout = "stored" })).toBe(false)
     restore.changed()
     expect(state.layout).toBe("user")
-    expect(saves).toBe(0)
+    expect(saves).toBe(2)
   })
 
   test("never saves a fallback or later changes after a failed read", () => {
