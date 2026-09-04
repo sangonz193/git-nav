@@ -12,6 +12,8 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(any(target_os = "macos", test))]
+use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_os = "windows")]
@@ -122,6 +124,96 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 // Not a legal ref name, so it cannot collide with anything the user could name a branch or tag.
 const WORKTREE_REF: &str = ":worktree";
 const REFERENCE_FORMAT: &str = "%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(contents:subject)%00%(*contents:subject)%00%(creatordate:iso-strict)";
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Deserialize)]
+struct PersistedWindowState {
+    fullscreen: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_initial_fullscreen_states(bytes: &[u8]) -> HashMap<String, bool> {
+    serde_json::from_slice::<HashMap<String, PersistedWindowState>>(bytes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(label, state)| (label, state.fullscreen))
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn initial_fullscreen_states() -> HashMap<String, bool> {
+    let Some(path) = dirs::config_dir().map(|directory| {
+        directory
+            .join(APPLICATION_IDENTIFIER)
+            .join(tauri_plugin_window_state::DEFAULT_FILENAME)
+    }) else {
+        return HashMap::new();
+    };
+    // The plugin's private state schema can change, so parsing failure falls back to a normal launch.
+    fs::read(path)
+        .map(|bytes| parse_initial_fullscreen_states(&bytes))
+        .unwrap_or_default()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn fullscreen_initialization_script(states: &HashMap<String, bool>) -> String {
+    let states = serde_json::to_string(states).unwrap();
+    format!(
+        "(() => {{ const states = {states}; window.__GIT_NAV_INITIAL_FULLSCREEN__ = states[window.__TAURI_INTERNALS__.metadata.currentWindow.label] ?? false; }})();"
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+struct MacOSWindowChromePlugin {
+    fullscreen_states: Arc<Mutex<HashMap<String, bool>>>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl MacOSWindowChromePlugin {
+    fn new(fullscreen_states: HashMap<String, bool>) -> Self {
+        Self {
+            fullscreen_states: Arc::new(Mutex::new(fullscreen_states)),
+        }
+    }
+
+    fn initialization_script(&self) -> String {
+        fullscreen_initialization_script(&self.fullscreen_states.lock().unwrap())
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for MacOSWindowChromePlugin {
+    fn name(&self) -> &'static str {
+        "macos-window-chrome"
+    }
+
+    fn initialization_script(&self) -> Option<String> {
+        Some(MacOSWindowChromePlugin::initialization_script(self))
+    }
+
+    fn window_created(&mut self, window: tauri::Window<R>) {
+        let fullscreen_states = self.fullscreen_states.clone();
+        let event_window = window.clone();
+        window.on_window_event(move |event| {
+            if matches!(
+                event,
+                WindowEvent::Resized(_) | WindowEvent::CloseRequested { .. }
+            ) {
+                if let Ok(fullscreen) = event_window.is_fullscreen() {
+                    fullscreen_states
+                        .lock()
+                        .unwrap()
+                        .insert(event_window.label().to_string(), fullscreen);
+                }
+            }
+        });
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_chrome_plugin() -> MacOSWindowChromePlugin {
+    MacOSWindowChromePlugin::new(initial_fullscreen_states())
+}
 
 #[cfg(any(target_os = "linux", test))]
 const APPIMAGE_PATH_ENVIRONMENT: [&str; 6] = [
@@ -2074,6 +2166,18 @@ fn reveal_window(window: &WebviewWindow) -> Result<(), String> {
     window.set_focus().map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "macos")]
+fn macos_traffic_light_position(app: &AppHandle) -> Result<tauri::LogicalPosition<f64>, String> {
+    app.config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == "main")
+        .and_then(|config| config.traffic_light_position.as_ref())
+        .map(|position| tauri::LogicalPosition::new(position.x, position.y))
+        .ok_or_else(|| "Could not find the macOS traffic-light position.".to_string())
+}
+
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
 fn disable_browser_accelerator_keys(window: &WebviewWindow) -> Result<(), String> {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
@@ -2243,11 +2347,18 @@ fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
             .append_pair("repository", &worktree_path)
             .finish();
         let url = format!("/?{query}");
-        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
             .title(format!("{} · Git Nav", worktree_name(&worktree_path)))
             .inner_size(1280.0, 800.0)
             .min_inner_size(500.0, 400.0)
-            .visible(false)
+            .visible(false);
+        #[cfg(target_os = "macos")]
+        let builder = builder
+            .decorations(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(macos_traffic_light_position(app)?);
+        let window = builder
             .build()
             .map_err(|error| error.to_string())?;
         reveal_window(&window)?;
@@ -4131,6 +4242,69 @@ async fn stash_action(repo_path: String, name: String, sha: String, action: Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_fullscreen_states_match_persisted_window_state() {
+        let states = parse_initial_fullscreen_states(
+            br#"{
+                "main": {
+                    "width": 1280,
+                    "height": 800,
+                    "x": 10,
+                    "y": 20,
+                    "prev_x": 10,
+                    "prev_y": 20,
+                    "maximized": false,
+                    "visible": false,
+                    "decorated": true,
+                    "fullscreen": false
+                },
+                "repository-1": {
+                    "width": 1280,
+                    "height": 800,
+                    "x": 30,
+                    "y": 40,
+                    "prev_x": 30,
+                    "prev_y": 40,
+                    "maximized": false,
+                    "visible": false,
+                    "decorated": true,
+                    "fullscreen": true
+                }
+            }"#,
+        );
+
+        assert_eq!(states.get("main"), Some(&false));
+        assert_eq!(states.get("repository-1"), Some(&true));
+    }
+
+    #[test]
+    fn malformed_window_state_defaults_to_normal_launch() {
+        assert!(
+            parse_initial_fullscreen_states(br#"{"main":{"fullscreen":true}"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn fullscreen_initialization_script_reflects_state_at_window_creation() {
+        let plugin = MacOSWindowChromePlugin::new(HashMap::from([(
+            "repository-1".to_string(),
+            false,
+        )]));
+        let first_script = plugin.initialization_script();
+
+        plugin
+            .fullscreen_states
+            .lock()
+            .unwrap()
+            .insert("repository-1".to_string(), true);
+        let recreated_script = plugin.initialization_script();
+
+        assert!(first_script.contains("\"repository-1\":false"));
+        assert!(recreated_script.starts_with("(() => { const states = "));
+        assert!(recreated_script.ends_with(" })();"));
+        assert!(recreated_script.contains("\"repository-1\":true"));
+    }
 
     #[test]
     fn recent_paths_move_to_the_front_and_stay_bounded() {
@@ -6277,6 +6451,10 @@ pub fn run() {
                 )
                 .build(),
         );
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.plugin(macos_window_chrome_plugin());
+        }
     }
 
     builder

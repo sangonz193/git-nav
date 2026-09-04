@@ -14,7 +14,6 @@
   --dv-icon-hover-background-color: var(--accent);
   --dv-separator-border: var(--border);
   --dv-tab-divider-color: transparent;
-  --dv-tabs-and-actions-container-height: 36px;
   --dv-tab-font-size: 0.875rem;
   --dv-tab-margin: 4px;
   --dv-tab-border-radius: var(--radius-md);
@@ -96,7 +95,74 @@
   flex-grow: 0;
 }
 
+.macos-traffic-light-spacer,
+.macos-empty-titlebar,
+.macos-launcher-drag-region {
+  display: none;
+}
+
+.macos-window-chrome .macos-traffic-light-group .dv-pre-actions-container {
+  flex: 0 0 72px;
+}
+
+.macos-window-chrome .macos-traffic-light-group .macos-traffic-light-spacer {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+.macos-window-chrome .macos-traffic-light-group .dv-pre-actions-container .dv-react-part {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+
+.macos-window-chrome .macos-empty-titlebar {
+  display: block;
+  height: var(--dv-tabs-and-actions-container-height);
+  inset: 0 0 auto;
+  position: absolute;
+}
+
+.macos-window-chrome .macos-launcher-drag-region {
+  display: block;
+  flex: 0 0 var(--dv-tabs-and-actions-container-height);
+}
+
+.macos-window-chrome .empty-repository-content {
+  padding-top: var(--dv-tabs-and-actions-container-height);
+}
+
+.launcher-window.macos-window-chrome {
+  align-items: stretch;
+  flex-direction: column;
+  height: 100svh;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 0;
+}
+
+.launcher-window-content {
+  display: contents;
+}
+
+.macos-window-chrome .launcher-window-content {
+  align-items: flex-start;
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2rem;
+  position: relative;
+}
+
+.macos-window-chrome .launcher-window-content > section {
+  margin-block: auto;
+}
+
 :root {
+  --dv-tabs-and-actions-container-height: 36px;
   color-scheme: light;
   font-size: 14px;
   /* Overscrolling the viewport would pull-to-refresh and discard the loaded graph. */
@@ -961,4 +1027,3 @@ button.commit-ref-selected:hover {
   color: var(--muted-foreground);
   padding: 16px;
 }
-

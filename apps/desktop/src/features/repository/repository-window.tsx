@@ -25,6 +25,7 @@ import { panelId } from "../../lib/panel-id"
 import { invoke, isDesktop } from "../../lib/ipc"
 import { closeRepositoryWindowAfterSaving, listenForRepositoryLayoutPageHide, repositoryLayoutRestoreController, repositoryLayoutSaveScheduler, REPOSITORY_LAYOUT_VERSION, restoreRepositoryLayout, unresolvablePanelIds, usableRepositoryLayout } from "../../lib/repository-layout"
 import { settingsClientId } from "../../lib/settings"
+import { dockTitleBarGroups } from "../../lib/macos-window-chrome"
 
 export type RepositoryPanelParams = {
   name: string
@@ -137,6 +138,10 @@ function RepositoryHeaderActions(props: IDockviewHeaderActionsProps) {
   )
 }
 
+function RepositoryTitleBarSpacer() {
+  return <div className="macos-traffic-light-spacer" data-tauri-drag-region />
+}
+
 function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
   const params = useContext(RepositoryContext)
   if (!params) {
@@ -144,12 +149,15 @@ function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
   }
 
   return (
-    <div className="flex h-full items-center justify-center gap-1">
-      <Button onClick={() => addGraphPanel(containerApi, params)}>
-        <Plus />
-        New tab
-      </Button>
-      <AppMenuButton />
+    <div className="empty-repository relative h-full">
+      <div className="macos-empty-titlebar" data-tauri-drag-region />
+      <div className="empty-repository-content flex h-full items-center justify-center gap-1">
+        <Button onClick={() => addGraphPanel(containerApi, params)}>
+          <Plus />
+          New tab
+        </Button>
+        <AppMenuButton />
+      </div>
     </div>
   )
 }
@@ -168,10 +176,52 @@ const repositoryDockviewTheme = {
   tabGroupIndicator: "none" as const,
 }
 
-export function RepositoryWindow({ path }: { path: string }) {
+function updateDockviewWindowChrome(api: DockviewApi, root: HTMLElement, enabled: boolean, previouslyApplied: boolean) {
+  if (!enabled && !previouslyApplied) return false
+
+  if (!enabled) {
+    for (const group of api.groups) {
+      const header = group.element.querySelector<HTMLElement>(":scope > .dv-tabs-and-actions-container")
+      const tabs = header?.querySelector<HTMLElement>(".dv-tabs-container")
+      group.element.classList.remove("macos-traffic-light-group")
+      header?.removeAttribute("data-tauri-drag-region")
+      tabs?.removeAttribute("data-tauri-drag-region")
+    }
+    return false
+  }
+
+  const rootRect = root.getBoundingClientRect()
+  const groups = api.groups.map((group) => {
+    const rect = group.element.getBoundingClientRect()
+    return {
+      id: group.id,
+      left: rect.left,
+      location: group.api.location.type,
+      top: rect.top,
+    }
+  })
+  const { titleBarGroupIds, trafficLightGroupId } = dockTitleBarGroups(rootRect, groups)
+
+  for (const group of api.groups) {
+    const titleBarGroup = titleBarGroupIds.has(group.id)
+    const header = group.element.querySelector<HTMLElement>(":scope > .dv-tabs-and-actions-container")
+    const tabs = header?.querySelector<HTMLElement>(".dv-tabs-container")
+    group.element.classList.toggle("macos-traffic-light-group", group.id === trafficLightGroupId)
+    for (const element of [header, tabs]) {
+      if (titleBarGroup) element?.setAttribute("data-tauri-drag-region", "")
+      else element?.removeAttribute("data-tauri-drag-region")
+    }
+  }
+  return true
+}
+
+export function RepositoryWindow({ macOSWindowChrome, path }: { macOSWindowChrome: boolean; path: string }) {
   const [repositoryPath, setRepositoryPath] = useState(path)
   const activeDockview = useRef<DockviewApi | null>(null)
+  const dockviewElement = useRef<HTMLDivElement | null>(null)
   const disposeDockviewListeners = useRef<() => void>(() => undefined)
+  const macOSWindowChromeRef = useRef(macOSWindowChrome)
+  const macOSWindowChromeApplied = useRef(false)
   const name = repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath
   const params = { name, path: repositoryPath }
 
@@ -180,8 +230,15 @@ export function RepositoryWindow({ path }: { path: string }) {
     activeDockview.current = null
   }, [])
 
+  useEffect(() => {
+    macOSWindowChromeRef.current = macOSWindowChrome
+    if (activeDockview.current && dockviewElement.current) {
+      macOSWindowChromeApplied.current = updateDockviewWindowChrome(activeDockview.current, dockviewElement.current, macOSWindowChrome, macOSWindowChromeApplied.current)
+    }
+  }, [macOSWindowChrome])
+
   return (
-    <main className="h-svh">
+    <main className={macOSWindowChrome ? "macos-window-chrome h-svh" : "h-svh"}>
       <RepositoryContext.Provider value={params}>
         <DockviewReact
           components={repositoryPanels}
@@ -191,6 +248,23 @@ export function RepositoryWindow({ path }: { path: string }) {
           onReady={(event) => {
             disposeDockviewListeners.current()
             activeDockview.current = event.api
+            let chromeFrame: number | undefined
+            const applyWindowChrome = () => {
+              if (activeDockview.current === event.api && dockviewElement.current) {
+                macOSWindowChromeApplied.current = updateDockviewWindowChrome(event.api, dockviewElement.current, macOSWindowChromeRef.current, macOSWindowChromeApplied.current)
+              }
+            }
+            const updateWindowChrome = () => {
+              if (!macOSWindowChromeRef.current && !macOSWindowChromeApplied.current) return
+              applyWindowChrome()
+              if (!macOSWindowChromeRef.current) return
+              if (chromeFrame !== undefined) cancelAnimationFrame(chromeFrame)
+              chromeFrame = requestAnimationFrame(() => {
+                chromeFrame = undefined
+                applyWindowChrome()
+              })
+            }
+            updateWindowChrome()
             const clientId = settingsClientId(isDesktop, localStorage)
             let repositoryParams = params
             const isCurrent = () => activeDockview.current === event.api
@@ -215,7 +289,10 @@ export function RepositoryWindow({ path }: { path: string }) {
                 layoutRestore.changed()
               }
             }
-            const layoutSubscription = event.api.onDidLayoutChange(save)
+            const layoutSubscription = event.api.onDidLayoutChange(() => {
+              save()
+              updateWindowChrome()
+            })
             const panelAddedSubscription = event.api.onDidAddPanel(() => layoutRestore.userAction())
             let closeUnlisten: (() => void) | undefined
             const pageHideUnlisten = listenForRepositoryLayoutPageHide(window, layoutSave.flushOnPageHide)
@@ -232,6 +309,7 @@ export function RepositoryWindow({ path }: { path: string }) {
             }
             disposeDockviewListeners.current = () => {
               listenersDisposed = true
+              if (chromeFrame !== undefined) cancelAnimationFrame(chromeFrame)
               closeUnlisten?.()
               pageHideUnlisten()
               layoutSubscription.dispose()
@@ -271,6 +349,8 @@ export function RepositoryWindow({ path }: { path: string }) {
               }
             })()
           }}
+          prefixHeaderActionsComponent={macOSWindowChrome ? RepositoryTitleBarSpacer : undefined}
+          ref={dockviewElement}
           rightHeaderActionsComponent={RepositoryHeaderActions}
           tabComponents={repositoryTabs}
           theme={repositoryDockviewTheme}
