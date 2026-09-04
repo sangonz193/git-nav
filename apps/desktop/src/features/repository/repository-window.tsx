@@ -5,7 +5,7 @@ import {
   type IDockviewPanelHeaderProps,
   type IWatermarkPanelProps,
 } from "dockview-react"
-import { Archive, FilePen, GitCompareArrows, GitGraph, Plus } from "lucide-react"
+import { FileDiff, GitGraph, Plus } from "lucide-react"
 import { createContext, useContext, type ComponentType } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
@@ -33,8 +33,8 @@ export type DiffPanelParams = RepositoryPanelParams & {
 // Matches the sentinel the diff commands accept in place of a commit; not a legal ref name.
 export const WORKTREE_REF = ":worktree"
 
-// The icon carries what a tab holds, which leaves its title free to be only what it holds: a
-// comparison, the worktree it shows the changes in, or a stash.
+// The icon names the panel, not what it is pointed at, which the selectors and the title already say.
+// It leaves the title free to be only the thing itself: a comparison, a worktree or a stash.
 function panelTab(Icon: ComponentType<{ className?: string }>) {
   return function PanelTab(props: IDockviewPanelHeaderProps) {
     return (
@@ -47,10 +47,8 @@ function panelTab(Icon: ComponentType<{ className?: string }>) {
 }
 
 const repositoryTabs = {
-  compare: panelTab(GitCompareArrows),
+  diff: panelTab(FileDiff),
   graph: panelTab(GitGraph),
-  stash: panelTab(Archive),
-  worktree: panelTab(FilePen),
 }
 
 const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
@@ -72,7 +70,7 @@ function addDiffPanel(containerApi: IDockviewHeaderActionsProps["containerApi"],
     id: panelId("diff"),
     params: { ...params, baseRef: "HEAD~1", headRef: "HEAD" },
     position: { direction: "within", referencePanel },
-    tabComponent: "compare",
+    tabComponent: "diff",
     title: "HEAD~1..HEAD",
   })
 }
@@ -97,7 +95,7 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
           Graph
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => addDiffPanel(containerApi, params, activePanel)}>
-          <GitCompareArrows />
+          <FileDiff />
           Diff
         </DropdownMenuItem>
       </DropdownMenuContent>

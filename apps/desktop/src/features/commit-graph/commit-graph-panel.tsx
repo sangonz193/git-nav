@@ -811,7 +811,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         id: panelId("diff"),
         params: { ...params, baseRef: selection.baseRef, headRef: selection.headRef, mergeBase: true },
         position: { direction: "within", referencePanel },
-        tabComponent: "compare",
+        tabComponent: "diff",
         title: branchRangeTitle(selectedRefs(selection.baseRef, selection.headRef, true)),
       })
     } catch (message) {
@@ -839,7 +839,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, baseRef, headRef: commit.hash },
       position: { direction: "within", referencePanel },
-      tabComponent: "compare",
+      tabComponent: "diff",
       title: refLabel(commit.hash),
     })
   }
@@ -856,7 +856,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, path: worktree.path, baseRef: "HEAD", headRef: WORKTREE_REF },
       position: { direction: "within", referencePanel },
-      tabComponent: "worktree",
+      tabComponent: "diff",
       title: worktree.name,
     })
   }
@@ -873,7 +873,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, baseRef: `${entry.sha}^`, headRef: entry.sha },
       position: { direction: "within", referencePanel },
-      tabComponent: "stash",
+      tabComponent: "diff",
       title: entry.name,
     })
   }
@@ -889,7 +889,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
       id: panelId("diff"),
       params: { ...params, baseRef: base.hash, headRef: tip.hash },
       position: { direction: "within", referencePanel },
-      tabComponent: "compare",
+      tabComponent: "diff",
       title: `${refLabel(base.hash)}..${refLabel(tip.hash)}`,
     })
   }
