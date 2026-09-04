@@ -2717,21 +2717,23 @@ fn migrate_viewed_files_database(connection: &mut Connection) -> Result<(), Stri
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, Option<i64>>(0))
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
-    if version < 1 {
+    if version < 2 {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction
             .execute_batch(
                 "
+                DROP TABLE IF EXISTS viewed_files;
                 CREATE TABLE viewed_files (
                   project_id TEXT NOT NULL,
                   base_ref TEXT NOT NULL,
                   head_ref TEXT NOT NULL,
+                  merge_base INTEGER NOT NULL,
                   path TEXT NOT NULL,
                   oid TEXT NOT NULL,
                   viewed_at INTEGER NOT NULL,
-                  PRIMARY KEY (project_id, base_ref, head_ref, path)
+                  PRIMARY KEY (project_id, base_ref, head_ref, merge_base, path)
                 );
-                INSERT INTO schema_migrations (version) VALUES (1);
+                INSERT INTO schema_migrations (version) VALUES (2);
                 ",
             )
             .map_err(|error| error.to_string())?;
@@ -2751,12 +2753,13 @@ fn read_viewed_files(
     project: &str,
     base_ref: &str,
     head_ref: &str,
+    merge_base: bool,
 ) -> Result<Vec<ViewedFile>, String> {
     let mut statement = connection
-        .prepare("SELECT path, oid FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3")
+        .prepare("SELECT path, oid FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND merge_base = ?4")
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![project, base_ref, head_ref], |row| {
+        .query_map(params![project, base_ref, head_ref, merge_base], |row| {
             Ok(ViewedFile {
                 path: row.get(0)?,
                 oid: row.get(1)?,
@@ -2773,10 +2776,10 @@ fn prune_viewed_comparisons(connection: &Connection, project: &str) -> Result<()
     connection
         .execute(
             "
-            DELETE FROM viewed_files WHERE project_id = ?1 AND (base_ref, head_ref) NOT IN (
-              SELECT base_ref, head_ref FROM viewed_files
+            DELETE FROM viewed_files WHERE project_id = ?1 AND (base_ref, head_ref, merge_base) NOT IN (
+              SELECT base_ref, head_ref, merge_base FROM viewed_files
               WHERE project_id = ?1
-              GROUP BY base_ref, head_ref
+              GROUP BY base_ref, head_ref, merge_base
               ORDER BY MAX(viewed_at) DESC
               LIMIT ?2
             )
@@ -2792,6 +2795,7 @@ fn write_viewed_file(
     project: &str,
     base_ref: &str,
     head_ref: &str,
+    merge_base: bool,
     path: &str,
     oid: &str,
     viewed: bool,
@@ -2799,8 +2803,8 @@ fn write_viewed_file(
     if !viewed {
         connection
             .execute(
-                "DELETE FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND path = ?4",
-                params![project, base_ref, head_ref, path],
+                "DELETE FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND merge_base = ?4 AND path = ?5",
+                params![project, base_ref, head_ref, merge_base, path],
             )
             .map_err(|error| error.to_string())?;
         return Ok(());
@@ -2812,12 +2816,12 @@ fn write_viewed_file(
     connection
         .execute(
             "
-            INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-            ON CONFLICT (project_id, base_ref, head_ref, path)
+            INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT (project_id, base_ref, head_ref, merge_base, path)
             DO UPDATE SET oid = excluded.oid, viewed_at = excluded.viewed_at
             ",
-            params![project, base_ref, head_ref, path, oid, viewed_at],
+            params![project, base_ref, head_ref, merge_base, path, oid, viewed_at],
         )
         .map_err(|error| error.to_string())?;
     prune_viewed_comparisons(connection, project)
@@ -2825,10 +2829,10 @@ fn write_viewed_file(
 
 #[git_nav_macros::http_command]
 #[tauri::command(async)]
-fn viewed_files(repo_path: String, base_ref: String, head_ref: String) -> Result<Vec<ViewedFile>, String> {
+fn viewed_files(repo_path: String, base_ref: String, head_ref: String, merge_base: bool) -> Result<Vec<ViewedFile>, String> {
     let project = project_id(&repo_path)?;
     let connection = viewed_files_database(viewed_files_database_path()?)?;
-    read_viewed_files(&connection, &project, &base_ref, &head_ref)
+    read_viewed_files(&connection, &project, &base_ref, &head_ref, merge_base)
 }
 
 #[git_nav_macros::http_command]
@@ -2837,13 +2841,14 @@ fn set_file_viewed(
     repo_path: String,
     base_ref: String,
     head_ref: String,
+    merge_base: bool,
     path: String,
     oid: String,
     viewed: bool,
 ) -> Result<(), String> {
     let project = project_id(&repo_path)?;
     let connection = viewed_files_database(viewed_files_database_path()?)?;
-    write_viewed_file(&connection, &project, &base_ref, &head_ref, &path, &oid, viewed)
+    write_viewed_file(&connection, &project, &base_ref, &head_ref, merge_base, &path, &oid, viewed)
 }
 
 fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
@@ -4665,16 +4670,35 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         migrate_viewed_files_database(&mut connection).unwrap();
 
-        write_viewed_file(&connection, "project", "main", "feature", "src/main.rs", "abc", true).unwrap();
-        write_viewed_file(&connection, "project", "main", "other", "src/main.rs", "def", true).unwrap();
+        write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc", true).unwrap();
+        write_viewed_file(&connection, "project", "main", "other", false, "src/main.rs", "def", true).unwrap();
 
-        let marks = read_viewed_files(&connection, "project", "main", "feature").unwrap();
+        let marks = read_viewed_files(&connection, "project", "main", "feature", false).unwrap();
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].path, "src/main.rs");
         assert_eq!(marks[0].oid, "abc");
 
-        write_viewed_file(&connection, "project", "main", "feature", "src/main.rs", "abc", false).unwrap();
-        assert!(read_viewed_files(&connection, "project", "main", "feature").unwrap().is_empty());
+        write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc", false).unwrap();
+        assert!(read_viewed_files(&connection, "project", "main", "feature", false).unwrap().is_empty());
+    }
+
+    // Both ranges end at the same commit, so a file reads as the same blob in each one and only the
+    // range they were made in tells the marks apart.
+    #[test]
+    fn keeps_a_viewed_mark_within_the_range_it_was_made_in() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate_viewed_files_database(&mut connection).unwrap();
+
+        write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc", true).unwrap();
+
+        assert!(read_viewed_files(&connection, "project", "main", "feature", true).unwrap().is_empty());
+        let direct = read_viewed_files(&connection, "project", "main", "feature", false).unwrap();
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[0].oid, "abc");
+
+        write_viewed_file(&connection, "project", "main", "feature", true, "src/main.rs", "abc", true).unwrap();
+        write_viewed_file(&connection, "project", "main", "feature", true, "src/main.rs", "abc", false).unwrap();
+        assert_eq!(read_viewed_files(&connection, "project", "main", "feature", false).unwrap().len(), 1);
     }
 
     #[test]
@@ -4684,14 +4708,14 @@ mod tests {
         for index in 0..VIEWED_COMPARISON_LIMIT + 5 {
             connection
                 .execute(
-                    "INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at) VALUES ('project', 'main', ?1, 'src/main.rs', 'abc', ?2)",
+                    "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at) VALUES ('project', 'main', ?1, 0, 'src/main.rs', 'abc', ?2)",
                     params![index.to_string(), index],
                 )
                 .unwrap();
         }
         connection
             .execute(
-                "INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at) VALUES ('other-project', 'main', 'old', 'src/main.rs', 'abc', 0)",
+                "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at) VALUES ('other-project', 'main', 'old', 0, 'src/main.rs', 'abc', 0)",
                 [],
             )
             .unwrap();

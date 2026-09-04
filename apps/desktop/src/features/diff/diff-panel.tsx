@@ -463,7 +463,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   // Moving either end of the comparison leaves behind marks that were made against a different one.
   useEffect(() => {
     setViewed(new Map())
-  }, [params.path, refs.base, refs.head])
+  }, [params.path, refs.base, refs.head, refs.mergeBase])
 
   // The working tree's marks are only ever held here, so a reload has nothing to read them back from.
   useEffect(() => {
@@ -471,13 +471,13 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
       return
     }
     let cancelled = false
-    invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head })
+    invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase })
       .then((marks) => !cancelled && setViewed(new Map(marks.map((mark) => [mark.path, mark.oid]))))
       .catch(() => undefined)
     return () => {
       cancelled = true
     }
-  }, [params.path, refs.base, refs.head, version])
+  }, [params.path, refs.base, refs.head, refs.mergeBase, version])
 
   useEffect(() => {
     let cancelled = false
@@ -678,7 +678,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     anchorFold(file)
     setCollapsed(nextCollapsed)
     if (oid) {
-      invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, path, oid, viewed: !wasViewed })
+      invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, path, oid, viewed: !wasViewed })
         .catch((message: unknown) => toast.error("Could not save which files were viewed.", { description: String(message) }))
     }
   }
