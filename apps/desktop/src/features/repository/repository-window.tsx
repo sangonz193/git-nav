@@ -19,6 +19,8 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
 import { AppMenuButton } from "../app-menu/app-menu"
+import { SharingIndicator } from "../sharing/sharing-controls"
+import { repositoryHeaderControls } from "./header-controls"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
 import { closedTabHistory, reopenedPanel } from "../../lib/closed-tabs"
@@ -104,13 +106,14 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
 }
 
 function RepositoryHeaderActions(props: IDockviewHeaderActionsProps) {
-  const showAppMenu = props.isGroupActive && (!props.location || props.location.type === "grid")
+  const { appMenu, sharingIndicator } = repositoryHeaderControls({ desktop: isDesktop, isGroupActive: props.isGroupActive, location: props.location })
   const reopenTab = useContext(ReopenTabContext)
   const activePanel = props.activePanel
   return (
     <div className="flex items-center gap-0.5">
+      {sharingIndicator && <SharingIndicator />}
       <NewTabAction {...props} />
-      {showAppMenu && <AppMenuButton onCloseTab={activePanel && (() => activePanel.api.close())} onReopenTab={reopenTab} />}
+      {appMenu && <AppMenuButton onCloseTab={activePanel && (() => activePanel.api.close())} onReopenTab={reopenTab} />}
     </div>
   )
 }

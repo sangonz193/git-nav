@@ -171,7 +171,11 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::set_setting => Exposure::Api(post(set_setting)),
         IpcCommand::repository_layout => Exposure::Api(post(repository_layout)),
         IpcCommand::save_repository_layout => Exposure::Api(post(save_repository_layout)),
-        IpcCommand::start_sharing | IpcCommand::stop_sharing | IpcCommand::sharing_state => {
+        IpcCommand::start_sharing
+        | IpcCommand::stop_sharing
+        | IpcCommand::sharing_state
+        | IpcCommand::rotate_sharing_token
+        | IpcCommand::update_sharing_setting => {
             Exposure::DesktopOnly
         }
     }
@@ -190,6 +194,7 @@ pub(crate) struct RunningServer {
     options: Options,
     state: SharingState,
     shutdown: Option<oneshot::Sender<()>>,
+    released: Option<std::sync::mpsc::Receiver<()>>,
 }
 
 impl RunningServer {
@@ -201,10 +206,42 @@ impl RunningServer {
         self.state.clone()
     }
 
+    /// Returns once the listener socket has closed, so the caller can rebind the port immediately.
     pub(crate) fn stop(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
+        if let Some(released) = self.released.take() {
+            let _ = released.recv_timeout(std::time::Duration::from_secs(5));
+        }
+    }
+}
+
+/// Signals when the listener has actually closed. Axum drops the listener as soon as the graceful
+/// shutdown signal fires, so the port frees before in-flight connections finish draining.
+struct WatchedListener {
+    listener: Option<tokio::net::TcpListener>,
+    released: std::sync::mpsc::Sender<()>,
+}
+
+impl Drop for WatchedListener {
+    fn drop(&mut self) {
+        self.listener.take();
+        let _ = self.released.send(());
+    }
+}
+
+impl axum::serve::Listener for WatchedListener {
+    type Io = tokio::net::TcpStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        let listener = self.listener.as_mut().expect("listener is only taken on drop");
+        axum::serve::Listener::accept(listener).await
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.listener.as_ref().expect("listener is only taken on drop").local_addr()
     }
 }
 
@@ -277,10 +314,12 @@ fn bind(options: Options, open_worktrees: OpenWorktrees) -> Result<BoundServer, 
 pub(crate) fn start(options: Options, open_worktrees: OpenWorktrees) -> Result<RunningServer, String> {
     let BoundServer { options, state, listener, router } = bind(options, open_worktrees)?;
     let (shutdown, stopped) = oneshot::channel();
+    let (released_sender, released) = std::sync::mpsc::channel();
     let stopped = async { let _ = stopped.await; }.shared();
     tauri::async_runtime::spawn(async move {
         let result = match tokio::net::TcpListener::from_std(listener) {
             Ok(listener) => {
+                let listener = WatchedListener { listener: Some(listener), released: released_sender };
                 let server = axum::serve(listener, router).with_graceful_shutdown(stopped.clone());
                 tokio::select! {
                     result = server => result.map_err(|error| error.to_string()),
@@ -299,7 +338,7 @@ pub(crate) fn start(options: Options, open_worktrees: OpenWorktrees) -> Result<R
             log::error!("Git Nav sharing server stopped unexpectedly: {error}");
         }
     });
-    Ok(RunningServer { options, state, shutdown: Some(shutdown) })
+    Ok(RunningServer { options, state, shutdown: Some(shutdown), released: Some(released) })
 }
 
 pub async fn serve(options: Options) -> Result<(), String> {
@@ -346,7 +385,7 @@ fn entry_urls(
         .collect()
 }
 
-fn public_entry_url(value: &str) -> Option<String> {
+pub(crate) fn public_entry_url(value: &str) -> Option<String> {
     let mut url = url::Url::parse(value).ok()?;
     if url.host_str().is_none() || !matches!(url.scheme(), "http" | "https") {
         return None;
@@ -784,6 +823,35 @@ mod tests {
 
         assert_eq!(bound.options.port, 0);
         assert!(bound.state.port.is_some_and(|port| port != 0));
+    }
+
+    fn local_options(port: u16) -> Options {
+        Options {
+            host: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port,
+            token: None,
+            public_url: None,
+        }
+    }
+
+    #[test]
+    fn stopping_frees_the_port_for_an_immediate_rebind() {
+        let server = start(local_options(0), OpenWorktrees::default()).unwrap();
+        let port = server.state().port.unwrap();
+
+        // Jam every runtime worker so the server task cannot close its listener promptly; only a
+        // stop() that truly waits for the release makes the rebind below safe.
+        for _ in 0..64 {
+            tauri::async_runtime::spawn(async {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        server.stop();
+
+        let rebound = start(local_options(port), OpenWorktrees::default())
+            .unwrap_or_else(|error| panic!("could not rebind port {port}: {error}"));
+        rebound.stop();
     }
 
     #[test]
