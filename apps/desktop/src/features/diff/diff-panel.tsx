@@ -220,15 +220,40 @@ function FileTreeNode({ level, node, onSelect, activeKey }: { level: number; nod
 }
 
 /**
+ * What the repository itself is, rather than what it holds. A title names a comparison the moment it is
+ * chosen, so this is read up front instead of alongside the picker it would otherwise be tied to.
+ */
+function useRepositoryMetadata(path: string, version: number) {
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null)
+  const [headDetail, setHeadDetail] = useState<string | null>(null)
+  const [remotes, setRemotes] = useState<string[]>()
+
+  useEffect(() => {
+    let cancelled = false
+    invoke<{ currentBranch: string | null; defaultBranch: string | null; remotes: string[] }>("repository_state", { repoPath: path })
+      .then((state) => {
+        if (!cancelled) {
+          setDefaultBranch(state.defaultBranch)
+          setRemotes(state.remotes)
+          setHeadDetail(state.currentBranch ?? "Detached head")
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [path, version])
+
+  return useMemo(() => ({ defaultBranch, headDetail, remotes }), [defaultBranch, headDetail, remotes])
+}
+
+/**
  * Everything a diff side can be pointed at. Refs come from the repository rather than the graph window,
  * so a branch is reachable however far back its tip sits.
  */
 function useReferenceSources(path: string, enabled: boolean, version: number) {
   const [commits, setCommits] = useState<Commit[]>([])
-  const [defaultBranch, setDefaultBranch] = useState<string | null>(null)
-  const [headDetail, setHeadDetail] = useState<string | null>(null)
   const [references, setReferences] = useState<Reference[]>([])
-  const [remotes, setRemotes] = useState<string[]>()
   const [stashes, setStashes] = useState<StashEntry[]>([])
 
   useEffect(() => {
@@ -242,22 +267,12 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
     invoke<CommitBatch>("reference_picker_commits", { repoPath: path })
       .then((batch) => settle(batch.map(commitFromTuple), setCommits))
       .catch(() => undefined)
-    invoke<{ currentBranch: string | null; defaultBranch: string | null; remotes: string[] }>("repository_state", { repoPath: path })
-      .then((state) => {
-        settle(state.defaultBranch, setDefaultBranch)
-        settle(state.remotes, setRemotes)
-        settle(state.currentBranch ?? "Detached head", setHeadDetail)
-      })
-      .catch(() => undefined)
     return () => {
       cancelled = true
     }
   }, [enabled, path, version])
 
-  return useMemo(
-    () => ({ commits, defaultBranch, headDetail, references, remotes, stashes }),
-    [commits, defaultBranch, headDetail, references, remotes, stashes]
-  )
+  return useMemo(() => ({ commits, references, stashes }), [commits, references, stashes])
 }
 
 function useDiffLoader(repoPath: string, comparison: Comparison | null) {
@@ -369,6 +384,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const scrollElement = useRef<HTMLDivElement>(null)
   const pendingScroll = useRef<string | null>(null)
   const { entries, request, reset } = useDiffLoader(params.path, comparison)
+  const metadata = useRepositoryMetadata(params.path, version)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const tree = useMemo(() => fileTree(comparison?.files ?? []), [comparison])
   const files = useMemo(() => flattenTree(tree), [tree])
@@ -477,8 +493,8 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   }, [params.path, searchQuery])
 
   const hits = useMemo(
-    () => picker === null ? [] : searchReferences(searchQuery, { ...sources, allowWorktree: picker === "head", revision }),
-    [picker, revision, searchQuery, sources]
+    () => picker === null ? [] : searchReferences(searchQuery, { ...sources, ...metadata, allowWorktree: picker === "head", revision }),
+    [metadata, picker, revision, searchQuery, sources]
   )
   const selectAheadRange = useCallback((reference: string) => {
     invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
@@ -544,7 +560,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
       ? { ...refs, base: hit.reference, baseLabel: hit.label, mergeBase: false }
       : { ...refs, head: hit.reference, headLabel: hit.label }
     setRefs(moved)
-    api.setTitle(diffTitle(moved, sources.defaultBranch, sources.remotes ?? []))
+    api.setTitle(diffTitle(moved, metadata.defaultBranch, metadata.remotes ?? []))
     setPicker(null)
   }
 
