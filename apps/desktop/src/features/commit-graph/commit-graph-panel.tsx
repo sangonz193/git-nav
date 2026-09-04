@@ -21,7 +21,7 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
 import { WORKTREE_REF, type RepositoryPanelParams } from "../repository/repository-window"
-import { diffTitle, refLabel, selectedRefs } from "../diff/diff-title"
+import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type { Project, Worktree as ProjectWorktree } from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
@@ -812,7 +812,7 @@ export function CommitGraphPanel({ api, containerApi, params }: IDockviewPanelPr
         params: { ...params, baseRef: selection.baseRef, headRef: selection.headRef, mergeBase: true },
         position: { direction: "within", referencePanel },
         tabComponent: "compare",
-        title: diffTitle(selectedRefs(selection.baseRef, selection.headRef, true), repository?.defaultBranch ?? null, repository?.remotes ?? []),
+        title: branchRangeTitle(selectedRefs(selection.baseRef, selection.headRef, true)),
       })
     } catch (message) {
       setError(String(message))

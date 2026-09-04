@@ -1965,23 +1965,30 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool)
     let is_worktree = head_ref == WORKTREE_REF;
     // The working tree has no commit of its own, so the checkout it sits on stands in for it as the
     // side the fork point is measured from.
-    let base_sha = if merge_base {
-        merge_base_sha(repo_path, base_ref, if is_worktree { "HEAD" } else { head_ref })?
-    } else {
-        resolve_commit(repo_path, base_ref)?
-    };
+    let resolved_base_sha = resolve_commit(repo_path, base_ref)?;
     if is_worktree {
+        let base_sha = if merge_base {
+            let head_commit_sha = resolve_commit(repo_path, "HEAD")?;
+            merge_base_for_commits(repo_path, &resolved_base_sha, &head_commit_sha, base_ref, "HEAD")?
+        } else {
+            resolved_base_sha
+        };
         return Ok(Comparison {
             files: worktree_changed_files(repo_path, &base_sha)?,
             base_sha,
             head_sha: WORKTREE_REF.to_string(),
         });
     }
-    let head_sha = resolve_commit(repo_path, head_ref)?;
+    let head_commit_sha = resolve_commit(repo_path, head_ref)?;
+    let base_sha = if merge_base {
+        merge_base_for_commits(repo_path, &resolved_base_sha, &head_commit_sha, base_ref, head_ref)?
+    } else {
+        resolved_base_sha
+    };
     Ok(Comparison {
-        files: changed_files(repo_path, &base_sha, &head_sha)?,
+        files: changed_files(repo_path, &base_sha, &head_commit_sha)?,
         base_sha,
-        head_sha,
+        head_sha: head_commit_sha,
     })
 }
 
@@ -2076,9 +2083,18 @@ fn resolve_revision(repo_path: String, revision: String) -> Result<ResolvedRevis
 fn merge_base_sha(repo_path: &str, base_ref: &str, head_ref: &str) -> Result<String, String> {
     let base_sha = resolve_commit(repo_path, base_ref)?;
     let head_sha = resolve_commit(repo_path, head_ref)?;
-    let sha = git_output_allow_empty(repo_path, &["merge-base", &base_sha, &head_sha])?
-        .trim()
-        .to_string();
+    merge_base_for_commits(repo_path, &base_sha, &head_sha, base_ref, head_ref)
+}
+
+fn merge_base_for_commits(repo_path: &str, base_sha: &str, head_sha: &str, base_ref: &str, head_ref: &str) -> Result<String, String> {
+    let output = git_result(repo_path, &["merge-base", base_sha, head_sha])?;
+    let sha = String::from_utf8(output.stdout).map_err(|error| error.to_string())?.trim().to_string();
+    if !output.status.success() {
+        if output.status.code() == Some(1) && sha.is_empty() {
+            return Err(format!("Could not find a merge base for {base_ref} and {head_ref}."));
+        }
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
     if sha.is_empty() {
         return Err(format!("Could not find a merge base for {base_ref} and {head_ref}."));
     }
@@ -3987,21 +4003,8 @@ mod tests {
 
     #[test]
     fn compares_a_branch_against_where_it_forked_from_the_primary_branch() {
-        let path = env::temp_dir()
-            .join(format!("git-nav-branch-range-{}", std::process::id()))
-            .to_string_lossy()
-            .to_string();
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        let run = |arguments: &[&str]| {
-            let output = git_result(&path, arguments).unwrap();
-            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
-        };
+        let (path, run) = scratch_repository("branch-range");
         let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
-        run(&["init", "--quiet", "--initial-branch=main"]);
-        run(&["config", "user.email", "tests@example.com"]);
-        run(&["config", "user.name", "Tests"]);
-        run(&["config", "commit.gpgsign", "false"]);
         write("shared.txt", "base\n");
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "base"]);
@@ -4032,13 +4035,30 @@ mod tests {
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "second"]);
         let after_commit = comparison(&path, &selection.base_ref, &selection.head_ref, true).unwrap();
-        fs::remove_dir_all(&path).unwrap();
+        remove_scratch_repository(&path);
 
         assert_eq!((selection.base_ref.as_str(), selection.head_ref.as_str()), ("origin/main", "feature"));
         assert_eq!(names(&forked), ["feature.txt"]);
         // Without the fork point the primary branch's own commit reads as a deletion on the branch.
         assert_eq!(names(&direct), ["feature.txt", "primary.txt"]);
         assert_eq!(names(&after_commit), ["feature.txt", "second.txt"]);
+    }
+
+    #[test]
+    fn reports_when_refs_have_no_merge_base() {
+        let (path, run) = scratch_repository("no-merge-base");
+        fs::write(Path::new(&path).join("main.txt"), "main\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "main"]);
+        run(&["checkout", "--quiet", "--orphan", "unrelated"]);
+        fs::write(Path::new(&path).join("unrelated.txt"), "unrelated\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "unrelated"]);
+
+        let result = comparison(&path, "main", "unrelated", true);
+        remove_scratch_repository(&path);
+
+        assert!(matches!(result, Err(message) if message == "Could not find a merge base for main and unrelated."));
     }
 
     #[test]

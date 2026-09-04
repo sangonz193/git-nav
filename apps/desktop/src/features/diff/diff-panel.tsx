@@ -13,7 +13,7 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
-import { diffTitle, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
+import { branchRangeTitle, diffTitle, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
 import type { DiffPanelParams } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
@@ -423,14 +423,6 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     return () => observer.disconnect()
   }, [])
 
-  // The title a tab opened with names what it was opened from, which stops describing it once either
-  // end has been pointed somewhere else.
-  useEffect(() => {
-    if (refs.base !== params.baseRef || refs.head !== params.headRef) {
-      api.setTitle(diffTitle(refs, sources.defaultBranch, sources.remotes ?? []))
-    }
-  }, [api, params.baseRef, params.headRef, refs, sources.defaultBranch, sources.remotes])
-
   // Measured heights belong to the previous comparison or layout, so drop them and start over.
   useEffect(() => {
     rowVirtualizer.measure()
@@ -475,10 +467,14 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   )
   const selectAheadRange = useCallback((reference: string) => {
     invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
-      .then((selection) => setRefs(selectedRefs(selection.baseRef, selection.headRef, true)))
+      .then((selection) => {
+        const range = selectedRefs(selection.baseRef, selection.headRef, true)
+        setRefs(range)
+        api.setTitle(branchRangeTitle(range))
+      })
       .catch((message: unknown) => setError(String(message)))
     setPicker(null)
-  }, [params.path])
+  }, [api, params.path])
   const menuItems = useMemo(
     () => hits.map((hit, index): SearchMenuItem => ({
       action: hit.branch === null ? undefined : {
@@ -526,10 +522,14 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     setHitIndex(0)
   }
 
+  // Where the ends sit cannot say whether a tab still carries the name it opened with, since a
+  // comparison can be pointed back at the ends it opened from. Moving an end is what retitles the tab.
   function selectHit(hit: ReferenceHit) {
-    setRefs((current) => picker === "base"
-      ? { ...current, base: hit.reference, baseLabel: hit.label, mergeBase: false }
-      : { ...current, head: hit.reference, headLabel: hit.label })
+    const moved = picker === "base"
+      ? { ...refs, base: hit.reference, baseLabel: hit.label, mergeBase: false }
+      : { ...refs, head: hit.reference, headLabel: hit.label }
+    setRefs(moved)
+    api.setTitle(diffTitle(moved, sources.defaultBranch, sources.remotes ?? []))
     setPicker(null)
   }
 

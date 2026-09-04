@@ -26,9 +26,19 @@ function isDefaultBranch(reference: string, defaultBranch: string | null, remote
  * its own reads as the uncommitted changes rather than as everything the branch carries.
  */
 export function diffTitle(refs: SelectedRefs, defaultBranch: string | null, remotes: string[]) {
+  const baseLabel = refLabel(refs.base)
+  const headLabel = refLabel(refs.head)
   return refs.mergeBase && refs.head !== WORKTREE_REF && isDefaultBranch(refs.base, defaultBranch, remotes)
-    ? refs.headLabel
-    : `${refs.baseLabel}${rangeMarker(refs)}${refs.headLabel}`
+    ? headLabel
+    : `${baseLabel}${rangeMarker(refs)}${headLabel}`
+}
+
+/**
+ * select_branch_range measures a branch from the primary reference, so its base is the default branch
+ * whatever the repository names it, and the title never waits on the repository's metadata to say so.
+ */
+export function branchRangeTitle(range: SelectedRefs) {
+  return diffTitle(range, range.base, [])
 }
 
 export function selectedRefs(base: string, head: string, mergeBase: boolean): SelectedRefs {
@@ -36,5 +46,5 @@ export function selectedRefs(base: string, head: string, mergeBase: boolean): Se
 }
 
 export function refLabel(reference: string) {
-  return reference === WORKTREE_REF ? "Working tree" : reference.replace(/^[0-9a-f]{40}\b/i, (sha) => sha.slice(0, 8))
+  return reference === WORKTREE_REF ? "Working tree" : reference.replace(/^[0-9a-f]{40}(?:[0-9a-f]{24})?\b/i, (sha) => sha.slice(0, 8))
 }
