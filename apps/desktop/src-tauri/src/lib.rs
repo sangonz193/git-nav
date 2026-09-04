@@ -2702,7 +2702,7 @@ const VIEWED_COMPARISON_LIMIT: i64 = 50;
 #[serde(rename_all = "camelCase")]
 struct ViewedFile {
     path: String,
-    oid: String,
+    identity: String,
 }
 
 fn viewed_files_database_path() -> Result<PathBuf, String> {
@@ -2739,6 +2739,21 @@ fn migrate_viewed_files_database(connection: &mut Connection) -> Result<(), Stri
             .map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
+    if version < 3 {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        // A mark now stands for the patch a file was read at, which both of its blobs decide together, so
+        // the marks stored against one of them no longer say what they were taken to say.
+        transaction
+            .execute_batch(
+                "
+                ALTER TABLE viewed_files RENAME COLUMN oid TO identity;
+                DELETE FROM viewed_files;
+                INSERT INTO schema_migrations (version) VALUES (3);
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -2756,13 +2771,13 @@ fn read_viewed_files(
     merge_base: bool,
 ) -> Result<Vec<ViewedFile>, String> {
     let mut statement = connection
-        .prepare("SELECT path, oid FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND merge_base = ?4")
+        .prepare("SELECT path, identity FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND merge_base = ?4")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project, base_ref, head_ref, merge_base], |row| {
             Ok(ViewedFile {
                 path: row.get(0)?,
-                oid: row.get(1)?,
+                identity: row.get(1)?,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -2797,7 +2812,7 @@ fn write_viewed_file(
     head_ref: &str,
     merge_base: bool,
     path: &str,
-    oid: &str,
+    identity: &str,
     viewed: bool,
 ) -> Result<(), String> {
     if !viewed {
@@ -2816,12 +2831,12 @@ fn write_viewed_file(
     connection
         .execute(
             "
-            INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at)
+            INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, identity, viewed_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT (project_id, base_ref, head_ref, merge_base, path)
-            DO UPDATE SET oid = excluded.oid, viewed_at = excluded.viewed_at
+            DO UPDATE SET identity = excluded.identity, viewed_at = excluded.viewed_at
             ",
-            params![project, base_ref, head_ref, merge_base, path, oid, viewed_at],
+            params![project, base_ref, head_ref, merge_base, path, identity, viewed_at],
         )
         .map_err(|error| error.to_string())?;
     prune_viewed_comparisons(connection, project)
@@ -2843,12 +2858,12 @@ fn set_file_viewed(
     head_ref: String,
     merge_base: bool,
     path: String,
-    oid: String,
+    identity: String,
     viewed: bool,
 ) -> Result<(), String> {
     let project = project_id(&repo_path)?;
     let connection = viewed_files_database(viewed_files_database_path()?)?;
-    write_viewed_file(&connection, &project, &base_ref, &head_ref, merge_base, &path, &oid, viewed)
+    write_viewed_file(&connection, &project, &base_ref, &head_ref, merge_base, &path, &identity, viewed)
 }
 
 fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
@@ -4676,7 +4691,7 @@ mod tests {
         let marks = read_viewed_files(&connection, "project", "main", "feature", false).unwrap();
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].path, "src/main.rs");
-        assert_eq!(marks[0].oid, "abc");
+        assert_eq!(marks[0].identity, "abc");
 
         write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc", false).unwrap();
         assert!(read_viewed_files(&connection, "project", "main", "feature", false).unwrap().is_empty());
@@ -4694,11 +4709,42 @@ mod tests {
         assert!(read_viewed_files(&connection, "project", "main", "feature", true).unwrap().is_empty());
         let direct = read_viewed_files(&connection, "project", "main", "feature", false).unwrap();
         assert_eq!(direct.len(), 1);
-        assert_eq!(direct[0].oid, "abc");
+        assert_eq!(direct[0].identity, "abc");
 
         write_viewed_file(&connection, "project", "main", "feature", true, "src/main.rs", "abc", true).unwrap();
         write_viewed_file(&connection, "project", "main", "feature", true, "src/main.rs", "abc", false).unwrap();
         assert_eq!(read_viewed_files(&connection, "project", "main", "feature", false).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn retires_marks_taken_against_a_single_blob() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+                CREATE TABLE viewed_files (
+                  project_id TEXT NOT NULL,
+                  base_ref TEXT NOT NULL,
+                  head_ref TEXT NOT NULL,
+                  merge_base INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  oid TEXT NOT NULL,
+                  viewed_at INTEGER NOT NULL,
+                  PRIMARY KEY (project_id, base_ref, head_ref, merge_base, path)
+                );
+                INSERT INTO schema_migrations (version) VALUES (2);
+                INSERT INTO viewed_files VALUES ('project', 'main', 'feature', 0, 'src/main.rs', 'abc', 1);
+                ",
+            )
+            .unwrap();
+
+        migrate_viewed_files_database(&mut connection).unwrap();
+
+        assert!(read_viewed_files(&connection, "project", "main", "feature", false).unwrap().is_empty());
+        write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc:def", true).unwrap();
+        let marks = read_viewed_files(&connection, "project", "main", "feature", false).unwrap();
+        assert_eq!(marks[0].identity, "abc:def");
     }
 
     #[test]
@@ -4708,14 +4754,14 @@ mod tests {
         for index in 0..VIEWED_COMPARISON_LIMIT + 5 {
             connection
                 .execute(
-                    "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at) VALUES ('project', 'main', ?1, 0, 'src/main.rs', 'abc', ?2)",
+                    "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, identity, viewed_at) VALUES ('project', 'main', ?1, 0, 'src/main.rs', 'abc', ?2)",
                     params![index.to_string(), index],
                 )
                 .unwrap();
         }
         connection
             .execute(
-                "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at) VALUES ('other-project', 'main', 'old', 0, 'src/main.rs', 'abc', 0)",
+                "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, identity, viewed_at) VALUES ('other-project', 'main', 'old', 0, 'src/main.rs', 'abc', 0)",
                 [],
             )
             .unwrap();
