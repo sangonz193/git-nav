@@ -809,7 +809,7 @@ fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
 const RAW_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--raw", "--abbrev=40", "-z"];
 const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
 
-const NUMSTAT_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z", "--ignore-all-space"];
+const NUMSTAT_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z"];
 
 fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
     if ignore_whitespace {
@@ -822,7 +822,7 @@ fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
 // Only the patch answers to --ignore-all-space; --raw lists a file whenever its two blobs differ, however
 // they differ. Numstat is the patch's own machinery, so the files it names are the ones the patch carries.
 fn files_changed_beyond_whitespace(path: &str, revisions: &[&str]) -> Result<HashSet<String>, String> {
-    let output = git_output_bytes(path, &[&NUMSTAT_ARGUMENTS[..], revisions].concat())
+    let output = git_output_bytes(path, &[&NUMSTAT_ARGUMENTS[..], whitespace_arguments(true), revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
     let mut fields = output
         .split(|byte| *byte == 0)
@@ -831,11 +831,11 @@ fn files_changed_beyond_whitespace(path: &str, revisions: &[&str]) -> Result<Has
     let mut paths = HashSet::new();
     while let Some(record) = fields.next() {
         match record.splitn(3, '\t').nth(2) {
-            Some(path) => {
+            Some(path) if !path.is_empty() => {
                 paths.insert(path.to_string());
             }
             // A rename carries its two paths in the fields following the counts.
-            None => {
+            _ => {
                 paths.extend(fields.by_ref().take(2));
             }
         }
@@ -2717,21 +2717,23 @@ fn migrate_viewed_files_database(connection: &mut Connection) -> Result<(), Stri
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, Option<i64>>(0))
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
-    if version < 1 {
+    if version < 2 {
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         transaction
             .execute_batch(
                 "
+                DROP TABLE IF EXISTS viewed_files;
                 CREATE TABLE viewed_files (
                   project_id TEXT NOT NULL,
                   base_ref TEXT NOT NULL,
                   head_ref TEXT NOT NULL,
+                  merge_base INTEGER NOT NULL,
                   path TEXT NOT NULL,
                   oid TEXT NOT NULL,
                   viewed_at INTEGER NOT NULL,
-                  PRIMARY KEY (project_id, base_ref, head_ref, path)
+                  PRIMARY KEY (project_id, base_ref, head_ref, merge_base, path)
                 );
-                INSERT INTO schema_migrations (version) VALUES (1);
+                INSERT INTO schema_migrations (version) VALUES (2);
                 ",
             )
             .map_err(|error| error.to_string())?;
@@ -2751,12 +2753,13 @@ fn read_viewed_files(
     project: &str,
     base_ref: &str,
     head_ref: &str,
+    merge_base: bool,
 ) -> Result<Vec<ViewedFile>, String> {
     let mut statement = connection
-        .prepare("SELECT path, oid FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3")
+        .prepare("SELECT path, oid FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND merge_base = ?4")
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![project, base_ref, head_ref], |row| {
+        .query_map(params![project, base_ref, head_ref, merge_base], |row| {
             Ok(ViewedFile {
                 path: row.get(0)?,
                 oid: row.get(1)?,
@@ -2769,18 +2772,19 @@ fn read_viewed_files(
 
 // Marks are only worth keeping for the comparisons still being read, so the least recently marked ones
 // fall away rather than growing a store nothing empties.
-fn prune_viewed_comparisons(connection: &Connection) -> Result<(), String> {
+fn prune_viewed_comparisons(connection: &Connection, project: &str) -> Result<(), String> {
     connection
         .execute(
             "
-            DELETE FROM viewed_files WHERE (project_id, base_ref, head_ref) NOT IN (
-              SELECT project_id, base_ref, head_ref FROM viewed_files
-              GROUP BY project_id, base_ref, head_ref
+            DELETE FROM viewed_files WHERE project_id = ?1 AND (base_ref, head_ref, merge_base) NOT IN (
+              SELECT base_ref, head_ref, merge_base FROM viewed_files
+              WHERE project_id = ?1
+              GROUP BY base_ref, head_ref, merge_base
               ORDER BY MAX(viewed_at) DESC
-              LIMIT ?1
+              LIMIT ?2
             )
             ",
-            params![VIEWED_COMPARISON_LIMIT],
+            params![project, VIEWED_COMPARISON_LIMIT],
         )
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -2791,6 +2795,7 @@ fn write_viewed_file(
     project: &str,
     base_ref: &str,
     head_ref: &str,
+    merge_base: bool,
     path: &str,
     oid: &str,
     viewed: bool,
@@ -2798,8 +2803,8 @@ fn write_viewed_file(
     if !viewed {
         connection
             .execute(
-                "DELETE FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND path = ?4",
-                params![project, base_ref, head_ref, path],
+                "DELETE FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND merge_base = ?4 AND path = ?5",
+                params![project, base_ref, head_ref, merge_base, path],
             )
             .map_err(|error| error.to_string())?;
         return Ok(());
@@ -2811,23 +2816,23 @@ fn write_viewed_file(
     connection
         .execute(
             "
-            INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-            ON CONFLICT (project_id, base_ref, head_ref, path)
+            INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT (project_id, base_ref, head_ref, merge_base, path)
             DO UPDATE SET oid = excluded.oid, viewed_at = excluded.viewed_at
             ",
-            params![project, base_ref, head_ref, path, oid, viewed_at],
+            params![project, base_ref, head_ref, merge_base, path, oid, viewed_at],
         )
         .map_err(|error| error.to_string())?;
-    prune_viewed_comparisons(connection)
+    prune_viewed_comparisons(connection, project)
 }
 
 #[git_nav_macros::http_command]
 #[tauri::command(async)]
-fn viewed_files(repo_path: String, base_ref: String, head_ref: String) -> Result<Vec<ViewedFile>, String> {
+fn viewed_files(repo_path: String, base_ref: String, head_ref: String, merge_base: bool) -> Result<Vec<ViewedFile>, String> {
     let project = project_id(&repo_path)?;
     let connection = viewed_files_database(viewed_files_database_path()?)?;
-    read_viewed_files(&connection, &project, &base_ref, &head_ref)
+    read_viewed_files(&connection, &project, &base_ref, &head_ref, merge_base)
 }
 
 #[git_nav_macros::http_command]
@@ -2836,13 +2841,14 @@ fn set_file_viewed(
     repo_path: String,
     base_ref: String,
     head_ref: String,
+    merge_base: bool,
     path: String,
     oid: String,
     viewed: bool,
 ) -> Result<(), String> {
     let project = project_id(&repo_path)?;
     let connection = viewed_files_database(viewed_files_database_path()?)?;
-    write_viewed_file(&connection, &project, &base_ref, &head_ref, &path, &oid, viewed)
+    write_viewed_file(&connection, &project, &base_ref, &head_ref, merge_base, &path, &oid, viewed)
 }
 
 fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
@@ -4664,41 +4670,82 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         migrate_viewed_files_database(&mut connection).unwrap();
 
-        write_viewed_file(&connection, "project", "main", "feature", "src/main.rs", "abc", true).unwrap();
-        write_viewed_file(&connection, "project", "main", "other", "src/main.rs", "def", true).unwrap();
+        write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc", true).unwrap();
+        write_viewed_file(&connection, "project", "main", "other", false, "src/main.rs", "def", true).unwrap();
 
-        let marks = read_viewed_files(&connection, "project", "main", "feature").unwrap();
+        let marks = read_viewed_files(&connection, "project", "main", "feature", false).unwrap();
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].path, "src/main.rs");
         assert_eq!(marks[0].oid, "abc");
 
-        write_viewed_file(&connection, "project", "main", "feature", "src/main.rs", "abc", false).unwrap();
-        assert!(read_viewed_files(&connection, "project", "main", "feature").unwrap().is_empty());
+        write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc", false).unwrap();
+        assert!(read_viewed_files(&connection, "project", "main", "feature", false).unwrap().is_empty());
+    }
+
+    // Both ranges end at the same commit, so a file reads as the same blob in each one and only the
+    // range they were made in tells the marks apart.
+    #[test]
+    fn keeps_a_viewed_mark_within_the_range_it_was_made_in() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate_viewed_files_database(&mut connection).unwrap();
+
+        write_viewed_file(&connection, "project", "main", "feature", false, "src/main.rs", "abc", true).unwrap();
+
+        assert!(read_viewed_files(&connection, "project", "main", "feature", true).unwrap().is_empty());
+        let direct = read_viewed_files(&connection, "project", "main", "feature", false).unwrap();
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[0].oid, "abc");
+
+        write_viewed_file(&connection, "project", "main", "feature", true, "src/main.rs", "abc", true).unwrap();
+        write_viewed_file(&connection, "project", "main", "feature", true, "src/main.rs", "abc", false).unwrap();
+        assert_eq!(read_viewed_files(&connection, "project", "main", "feature", false).unwrap().len(), 1);
     }
 
     #[test]
-    fn forgets_the_comparisons_left_behind_by_the_ones_still_being_read() {
+    fn keeps_recent_viewed_comparisons_per_project() {
         let mut connection = Connection::open_in_memory().unwrap();
         migrate_viewed_files_database(&mut connection).unwrap();
         for index in 0..VIEWED_COMPARISON_LIMIT + 5 {
             connection
                 .execute(
-                    "INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at) VALUES ('project', 'main', ?1, 'src/main.rs', 'abc', ?2)",
+                    "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at) VALUES ('project', 'main', ?1, 0, 'src/main.rs', 'abc', ?2)",
                     params![index.to_string(), index],
                 )
                 .unwrap();
         }
+        connection
+            .execute(
+                "INSERT INTO viewed_files (project_id, base_ref, head_ref, merge_base, path, oid, viewed_at) VALUES ('other-project', 'main', 'old', 0, 'src/main.rs', 'abc', 0)",
+                [],
+            )
+            .unwrap();
 
-        prune_viewed_comparisons(&connection).unwrap();
+        prune_viewed_comparisons(&connection, "project").unwrap();
 
         let comparisons = connection
-            .query_row("SELECT COUNT(DISTINCT head_ref) FROM viewed_files", [], |row| row.get::<_, i64>(0))
+            .query_row(
+                "SELECT COUNT(DISTINCT head_ref) FROM viewed_files WHERE project_id = 'project'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
             .unwrap();
         assert_eq!(comparisons, VIEWED_COMPARISON_LIMIT);
         let oldest = connection
-            .query_row("SELECT MIN(viewed_at) FROM viewed_files", [], |row| row.get::<_, i64>(0))
+            .query_row(
+                "SELECT MIN(viewed_at) FROM viewed_files WHERE project_id = 'project'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
             .unwrap();
         assert_eq!(oldest, 5);
+        let other_project = connection
+            .query_row(
+                "SELECT COUNT(*) FROM viewed_files WHERE project_id = 'other-project'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(other_project, 1);
     }
 
     #[test]
@@ -5192,6 +5239,37 @@ mod tests {
 
         assert_eq!(all, ["changed.txt", "spaced.txt"]);
         assert_eq!(ignored, ["changed.txt"]);
+    }
+
+    #[test]
+    fn keeps_files_after_a_rename_when_ignoring_whitespace() {
+        let (path, run) = scratch_repository("ignore-whitespace-rename");
+        let write =
+            |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        write("old.txt", "unchanged\n");
+        write("later.txt", "before\nkeep\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "feature"]);
+        run(&["mv", "old.txt", "renamed.txt"]);
+        write("later.txt", "after\nnext\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "rename and change"]);
+
+        let comparison = comparison(&path, "main", "feature", false, true).unwrap();
+        remove_scratch_repository(&path);
+
+        let later = comparison
+            .files
+            .iter()
+            .find(|file| file.new_path.as_deref() == Some("later.txt"))
+            .unwrap();
+        assert_eq!(later.additions, 2);
+        assert_eq!(later.deletions, 2);
+        assert!(comparison
+            .files
+            .iter()
+            .any(|file| file.new_path.as_deref() == Some("renamed.txt")));
     }
 
     #[test]

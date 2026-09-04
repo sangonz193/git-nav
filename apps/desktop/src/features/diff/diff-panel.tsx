@@ -1,5 +1,6 @@
 import { DiffModeEnum, DiffView } from "@git-diff-view/react"
 import { invoke } from "@/lib/ipc"
+import { WORKTREE_REF } from "@/lib/repository-constants"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { IDockviewPanelProps } from "dockview-react"
 import { Archive, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cloud, Columns2, FilePen, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, PanelLeft, RefreshCw, Rows3, SlidersHorizontal, Tag } from "lucide-react"
@@ -189,18 +190,18 @@ function FileStat({ additions, deletions }: { additions: number; deletions: numb
   )
 }
 
-function FileTree({ files, onSelect, activeKey, viewed }: { files: FileTreeNode[]; onSelect: (file: ChangedFile) => void; activeKey: string | null; viewed: ReadonlyMap<string, string> }) {
-  return files.map((node) => <FileTreeNode activeKey={activeKey} key={node.path} level={0} node={node} onSelect={onSelect} viewed={viewed} />)
+function FileTree({ files, onSelect, activeKey, headRef, viewed }: { files: FileTreeNode[]; onSelect: (file: ChangedFile) => void; activeKey: string | null; headRef: string; viewed: ReadonlyMap<string, string> }) {
+  return files.map((node) => <FileTreeNode activeKey={activeKey} headRef={headRef} key={node.path} level={0} node={node} onSelect={onSelect} viewed={viewed} />)
 }
 
-function FileTreeNode({ level, node, onSelect, activeKey, viewed }: { level: number; node: FileTreeNode; onSelect: (file: ChangedFile) => void; activeKey: string | null; viewed: ReadonlyMap<string, string> }) {
+function FileTreeNode({ level, node, onSelect, activeKey, headRef, viewed }: { level: number; node: FileTreeNode; onSelect: (file: ChangedFile) => void; activeKey: string | null; headRef: string; viewed: ReadonlyMap<string, string> }) {
   const [open, setOpen] = useState(true)
   const paddingLeft = 6 + level * 14
 
   if (node.file) {
     const key = fileKey(node.file)
     return (
-      <button className={`diff-file${key === activeKey ? " is-selected" : ""}${isViewedFile(node.file, viewed) ? " is-viewed" : ""}`} key={key} onClick={() => onSelect(node.file!)} style={{ paddingLeft }} type="button">
+      <button className={`diff-file${key === activeKey ? " is-selected" : ""}${isViewedFile(node.file, headRef, viewed) ? " is-viewed" : ""}`} key={key} onClick={() => onSelect(node.file!)} style={{ paddingLeft }} type="button">
         <span className={`diff-file-status ${STATUS_COLORS[statusLetter(node.file)] ?? "text-muted-foreground"}`}>{statusLetter(node.file)}</span>
         <span className="truncate">{node.name}</span>
         {!node.file.isBinary && <FileStat additions={node.file.additions} deletions={node.file.deletions} />}
@@ -216,7 +217,7 @@ function FileTreeNode({ level, node, onSelect, activeKey, viewed }: { level: num
         <span className="truncate">{node.name}</span>
       </button>
       {open && <div className="diff-folder-children">
-        {node.children.map((child) => <FileTreeNode activeKey={activeKey} key={child.path} level={level + 1} node={child} onSelect={onSelect} viewed={viewed} />)}
+        {node.children.map((child) => <FileTreeNode activeKey={activeKey} headRef={headRef} key={child.path} level={level + 1} node={child} onSelect={onSelect} viewed={viewed} />)}
       </div>}
     </div>
   )
@@ -408,13 +409,13 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const metadata = useRepositoryMetadata(params.path, version)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const shownFiles = useMemo(
-    () => hideViewed ? (comparison?.files ?? []).filter((file) => !isViewedFile(file, viewed)) : comparison?.files ?? [],
-    [comparison, hideViewed, viewed]
+    () => hideViewed ? (comparison?.files ?? []).filter((file) => !isViewedFile(file, refs.head, viewed)) : comparison?.files ?? [],
+    [comparison, hideViewed, refs.head, viewed]
   )
   const tree = useMemo(() => fileTree(shownFiles), [shownFiles])
   const files = useMemo(() => flattenTree(tree), [tree])
   const total = useMemo(() => changedLines(files), [files])
-  const viewedCount = useMemo(() => (comparison?.files ?? []).filter((file) => isViewedFile(file, viewed)).length, [comparison, viewed])
+  const viewedCount = useMemo(() => (comparison?.files ?? []).filter((file) => isViewedFile(file, refs.head, viewed)).length, [comparison, refs.head, viewed])
 
   function toggleFileTree() {
     const next = toggledDiffFileTree(isSidebarOpen, isNarrow, userPreferencesRef.current)
@@ -459,12 +460,27 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
 
+  // Moving either end of the comparison leaves behind marks that were made against a different one.
   useEffect(() => {
-    let cancelled = false
     setViewed(new Map())
-    invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head })
+  }, [params.path, refs.base, refs.head, refs.mergeBase])
+
+  // The working tree's marks are only ever held here, so a reload has nothing to read them back from.
+  useEffect(() => {
+    if (refs.head === WORKTREE_REF) {
+      return
+    }
+    let cancelled = false
+    invoke<ViewedFile[]>("viewed_files", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase })
       .then((marks) => !cancelled && setViewed(new Map(marks.map((mark) => [mark.path, mark.oid]))))
       .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [params.path, refs.base, refs.head, refs.mergeBase, version])
+
+  useEffect(() => {
+    let cancelled = false
     invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, ignoreWhitespace })
       .then((nextComparison) => {
         if (!cancelled) {
@@ -527,13 +543,15 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   }, [comparison, rowVirtualizer])
 
   // A fold changes the heights the scroller was measured at, so they are dropped and taken again. Only a
-  // fold that moved what sits above the scroller asks to be put back where it was.
+  // fold that moved what sits above the scroller asks to be put back where it was, and marking a file
+  // viewed while viewed files are hidden takes that card out of the list before it can be aimed at.
   useEffect(() => {
     rowVirtualizer.measure()
     const key = pendingAnchor.current
-    if (key) {
-      pendingAnchor.current = null
-      rowVirtualizer.scrollToIndex(files.findIndex((file) => fileKey(file) === key), { align: "start" })
+    pendingAnchor.current = null
+    const index = key === null ? -1 : files.findIndex((file) => fileKey(file) === key)
+    if (index !== -1) {
+      rowVirtualizer.scrollToIndex(index, { align: "start" })
     }
   }, [collapsed, files, mode, rowVirtualizer, wrap])
 
@@ -643,8 +661,8 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   // behind it can be remembered, which leaves the working tree marked for as long as the tab is open.
   function toggleViewed(file: ChangedFile) {
     const path = fileName(file)
-    const oid = fileOid(file)
-    const wasViewed = isViewedFile(file, viewed)
+    const oid = fileOid(file, refs.head)
+    const wasViewed = isViewedFile(file, refs.head, viewed)
     const nextViewed = new Map(viewed)
     if (wasViewed) {
       nextViewed.delete(path)
@@ -662,7 +680,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     anchorFold(file)
     setCollapsed(nextCollapsed)
     if (oid) {
-      invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, path, oid, viewed: !wasViewed })
+      invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, path, oid, viewed: !wasViewed })
         .catch((message: unknown) => toast.error("Could not save which files were viewed.", { description: String(message) }))
     }
   }
@@ -692,7 +710,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
       scrollToFile(file)
     }
   }, [comparison, files, scrollToFile])
-  const fileList = useMemo(() => <FileTree activeKey={activeKey} files={tree} onSelect={selectFile} viewed={viewed} />, [activeKey, selectFile, tree, viewed])
+  const fileList = useMemo(() => <FileTree activeKey={activeKey} files={tree} headRef={refs.head} onSelect={selectFile} viewed={viewed} />, [activeKey, refs.head, selectFile, tree, viewed])
 
   function openPicker(side: PickerSide) {
     setPicker(side)
@@ -754,7 +772,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
                 onToggleCollapsed={() => toggleCollapsed(file)}
                 onToggleViewed={() => toggleViewed(file)}
                 theme={theme}
-                viewed={isViewedFile(file, viewed)}
+                viewed={isViewedFile(file, refs.head, viewed)}
                 wrap={wrap}
               />
             </div>
