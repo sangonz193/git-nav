@@ -929,6 +929,16 @@ button.commit-ref-selected:hover {
   z-index: 2;
 }
 
+.diff-file-card-toggle {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  height: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
 .diff-file-card-path {
   font-size: 0.8125rem;
   min-width: 0;
