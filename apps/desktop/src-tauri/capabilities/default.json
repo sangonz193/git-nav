@@ -6,8 +6,5 @@
     "main",
     "repository-*"
   ],
-  "permissions": [
-    "core:default",
-    "dialog:default"
-  ]
+  "permissions": ["core:default"]
 }

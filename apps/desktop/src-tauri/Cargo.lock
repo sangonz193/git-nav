@@ -1484,6 +1484,8 @@ dependencies = [
  "tokio-stream",
  "tower-http",
  "url",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

@@ -12,12 +12,17 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use tauri::{
     ipc::Channel, window::Color, AppHandle, Emitter, Manager, RunEvent, Theme, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use tauri::menu::{IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
+use tauri_plugin_dialog::DialogExt;
 
 mod server;
 
@@ -44,7 +49,11 @@ macro_rules! commands {
 
 commands![
     recent_projects,
+    clear_recent_projects,
     open_repository,
+    show_launcher,
+    choose_repository,
+    zoom,
     update_command,
     open_worktree,
     open_url,
@@ -94,6 +103,12 @@ commands![
 
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
 const SETTING_CHANGED_EVENT: &str = "setting-changed";
+const RECENT_PROJECTS_CLEARED_EVENT: &str = "recent-projects-cleared";
+const ZOOM_FACTOR_SETTING: &str = "app.zoomFactor";
+const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
+const MINIMUM_ZOOM_FACTOR: f64 = 0.5;
+const MAXIMUM_ZOOM_FACTOR: f64 = 2.0;
+const ZOOM_STEP: f64 = 0.1;
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
@@ -554,18 +569,37 @@ fn load_recent_paths() -> Result<Vec<String>, String> {
         .map_err(|error| error.to_string())
 }
 
-fn save_recent_path(repository_path: &str) -> Result<(), String> {
-    let mut paths = load_recent_paths()?;
+fn updated_recent_paths(mut paths: Vec<String>, repository_path: &str) -> Vec<String> {
     paths.retain(|path| path != repository_path);
     paths.insert(0, repository_path.to_string());
     paths.truncate(MAX_RECENT_REPOSITORIES);
+    paths
+}
 
+fn write_recent_paths(paths: Vec<String>) -> Result<(), String> {
     let contents = serde_json::to_string(&RecentRepositories {
         projects: paths,
         repositories: Vec::new(),
     })
     .map_err(|error| error.to_string())?;
     fs::write(recent_repositories_path()?, contents).map_err(|error| error.to_string())
+}
+
+fn save_recent_path(repository_path: &str, app: Option<&AppHandle>) -> Result<(), String> {
+    let paths = updated_recent_paths(load_recent_paths()?, repository_path);
+    write_recent_paths(paths)?;
+    update_recent_menu(app);
+    Ok(())
+}
+
+fn clear_recent_paths(app: Option<&AppHandle>) -> Result<(), String> {
+    write_recent_paths(Vec::new())?;
+    update_recent_menu(app);
+    if let Some(app) = app {
+        app.emit(RECENT_PROJECTS_CLEARED_EVENT, ())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn git_output(path: &str, arguments: &[&str]) -> Option<String> {
@@ -1588,17 +1622,176 @@ fn recent_project_list(open_worktrees: &OpenWorktrees) -> Result<Vec<Project>, S
         .collect())
 }
 
+#[cfg(target_os = "macos")]
+const MENU_NEW_WINDOW: &str = "new-window";
+#[cfg(target_os = "macos")]
+const MENU_OPEN: &str = "open-repository";
+#[cfg(target_os = "macos")]
+const MENU_CLEAR_RECENT: &str = "clear-recent-projects";
+#[cfg(target_os = "macos")]
+const MENU_ZOOM_IN: &str = "zoom-in";
+#[cfg(target_os = "macos")]
+const MENU_ZOOM_OUT: &str = "zoom-out";
+#[cfg(target_os = "macos")]
+const MENU_ACTUAL_SIZE: &str = "actual-size";
+#[cfg(target_os = "macos")]
+const MENU_RECENT_PREFIX: &str = "open-recent-";
+
+#[cfg(target_os = "macos")]
+fn recent_menu_id(path: &str) -> String {
+    format!("{MENU_RECENT_PREFIX}{path}")
+}
+
+#[cfg(target_os = "macos")]
+fn recent_menu_path(id: &str) -> Option<&str> {
+    id.strip_prefix(MENU_RECENT_PREFIX)
+}
+
+#[cfg(target_os = "macos")]
+struct AppMenuState {
+    recent: Submenu<tauri::Wry>,
+    rebuild_generation: AtomicU64,
+    rebuild_lock: Mutex<()>,
+}
+
+#[cfg(target_os = "macos")]
+fn menu_submenu(menu: &Menu<tauri::Wry>, title: &str) -> Result<Submenu<tauri::Wry>, String> {
+    menu.items()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find_map(|item| match item {
+            MenuItemKind::Submenu(submenu) if submenu.text().ok().as_deref() == Some(title) => {
+                Some(submenu)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| format!("Could not find the {title} menu."))
+}
+
+#[cfg(target_os = "macos")]
+fn populate_recent_menu(
+    app: &AppHandle,
+    recent: &Submenu<tauri::Wry>,
+    projects: &[Project],
+) -> Result<(), String> {
+    for index in (0..recent.items().map_err(|error| error.to_string())?.len()).rev() {
+        recent.remove_at(index).map_err(|error| error.to_string())?;
+    }
+
+    let project_items = if projects.is_empty() {
+        vec![MenuItem::with_id(
+            app,
+            "no-recent-projects",
+            "No Recent Projects",
+            false,
+            None::<&str>,
+        )
+        .map_err(|error| error.to_string())?]
+    } else {
+        projects
+            .iter()
+            .map(|project| {
+                let label = project.name.replace('&', "&&");
+                MenuItem::with_id(
+                    app,
+                    recent_menu_id(&project.path),
+                    &label,
+                    true,
+                    None::<&str>,
+                )
+                .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let project_item_refs = project_items
+        .iter()
+        .map(|item| item as &dyn IsMenuItem<tauri::Wry>)
+        .collect::<Vec<_>>();
+    recent
+        .append_items(&project_item_refs)
+        .map_err(|error| error.to_string())?;
+
+    let separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
+    let clear = MenuItem::with_id(
+        app,
+        MENU_CLEAR_RECENT,
+        "Clear Menu",
+        !projects.is_empty(),
+        None::<&str>,
+    )
+    .map_err(|error| error.to_string())?;
+    recent
+        .append_items(&[&separator, &clear])
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn update_recent_menu(app: Option<&AppHandle>) {
+    let Some(app) = app else {
+        return;
+    };
+    let Some(state) = app.try_state::<AppMenuState>() else {
+        return;
+    };
+    let generation = state.rebuild_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let list_app = app.clone();
+        let projects = tauri::async_runtime::spawn_blocking(move || {
+            recent_project_list(&list_app.state::<OpenWorktrees>())
+        })
+        .await;
+        let projects = match projects {
+            Ok(Ok(projects)) => projects,
+            Ok(Err(error)) => {
+                log::error!("Could not rebuild the recent projects menu: {error}");
+                return;
+            }
+            Err(error) => {
+                log::error!("Could not rebuild the recent projects menu: {error}");
+                return;
+            }
+        };
+        let state = app.state::<AppMenuState>();
+        let _rebuild = match state.rebuild_lock.lock() {
+            Ok(rebuild) => rebuild,
+            Err(error) => {
+                log::error!("Could not rebuild the recent projects menu: {error}");
+                return;
+            }
+        };
+        if state.rebuild_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if let Err(error) = populate_recent_menu(&app, &state.recent, &projects) {
+            log::error!("Could not rebuild the recent projects menu: {error}");
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn update_recent_menu(_app: Option<&AppHandle>) {}
+
 /// Canonicalizes a user-supplied path to its worktree root and records it as recently opened.
-fn remember_repository(path: &str, open_worktrees: &OpenWorktrees) -> Result<Project, String> {
+fn remember_repository(
+    path: &str,
+    open_worktrees: &OpenWorktrees,
+    app: Option<&AppHandle>,
+) -> Result<Project, String> {
     let worktree_path = worktree_path(path)?;
     let project = project_at(&worktree_path, open_worktrees)?;
-    save_recent_path(&project.path)?;
+    save_recent_path(&project.path, app)?;
     Ok(project)
 }
 
 #[tauri::command]
 fn recent_projects(open_worktrees: tauri::State<OpenWorktrees>) -> Result<Vec<Project>, String> {
     recent_project_list(&open_worktrees)
+}
+
+#[tauri::command]
+fn clear_recent_projects(app: AppHandle) -> Result<(), String> {
+    clear_recent_paths(Some(&app))
 }
 
 #[tauri::command]
@@ -1622,6 +1815,75 @@ fn project_snapshot(
     project_at(&path, &open_worktrees)
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ZoomDirection {
+    In,
+    Out,
+    ActualSize,
+}
+
+fn clamp_zoom_factor(factor: f64) -> f64 {
+    if factor.is_finite() {
+        factor.clamp(MINIMUM_ZOOM_FACTOR, MAXIMUM_ZOOM_FACTOR)
+    } else {
+        DEFAULT_ZOOM_FACTOR
+    }
+}
+
+fn saved_zoom_factor() -> Result<f64, String> {
+    Ok(load_settings()?
+        .get(ZOOM_FACTOR_SETTING)
+        .and_then(serde_json::Value::as_f64)
+        .map(clamp_zoom_factor)
+        .unwrap_or(DEFAULT_ZOOM_FACTOR))
+}
+
+fn next_zoom_factor(factor: f64, direction: ZoomDirection) -> f64 {
+    let factor = clamp_zoom_factor(factor);
+    let next = match direction {
+        ZoomDirection::In => factor + ZOOM_STEP,
+        ZoomDirection::Out => factor - ZOOM_STEP,
+        ZoomDirection::ActualSize => DEFAULT_ZOOM_FACTOR,
+    };
+    (clamp_zoom_factor(next) * 10.0).round() / 10.0
+}
+
+fn set_app_zoom(app: &AppHandle, direction: ZoomDirection) -> Result<(), String> {
+    let factor = next_zoom_factor(saved_zoom_factor()?, direction);
+    let mut zoom_error = None;
+    for window in app.webview_windows().values() {
+        if let Err(error) = window.set_zoom(factor) {
+            zoom_error.get_or_insert_with(|| error.to_string());
+        }
+    }
+    let value = serde_json::json!(factor);
+    save_setting_at_then(
+        &settings_path()?,
+        ZOOM_FACTOR_SETTING.to_string(),
+        value.clone(),
+        || {
+            app.emit(
+                SETTING_CHANGED_EVENT,
+                SettingChanged {
+                    key: ZOOM_FACTOR_SETTING.to_string(),
+                    value,
+                },
+            )
+            .map_err(|error| error.to_string())
+        },
+    )?;
+    match zoom_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+#[tauri::command]
+fn zoom(app: AppHandle, direction: ZoomDirection) -> Result<(), String> {
+    set_app_zoom(&app, direction)
+}
+
 /// The two `html` background colours from index.html, so a window carries the page's own surface from the
 /// moment it appears rather than the platform default.
 fn theme_background(theme: Theme) -> Color {
@@ -1636,12 +1898,173 @@ fn reveal_window(window: &WebviewWindow) -> Result<(), String> {
     window
         .set_background_color(Some(theme_background(theme)))
         .map_err(|error| error.to_string())?;
+    #[cfg(all(target_os = "windows", not(debug_assertions)))]
+    if let Err(error) = disable_browser_accelerator_keys(window) {
+        log::error!("Could not disable browser accelerator keys: {error}");
+    }
+    if let Err(error) = saved_zoom_factor()
+        .and_then(|factor| window.set_zoom(factor).map_err(|error| error.to_string()))
+    {
+        log::error!("Could not apply the saved zoom factor: {error}");
+    }
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
 }
 
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn disable_browser_accelerator_keys(window: &WebviewWindow) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows::core::Interface;
+
+    window
+        .with_webview(|webview| unsafe {
+            let result = webview
+                .controller()
+                .CoreWebView2()
+                .and_then(|webview| webview.Settings())
+                .and_then(|settings| settings.cast::<ICoreWebView2Settings3>())
+                .and_then(|settings| settings.SetAreBrowserAcceleratorKeysEnabled(false));
+            if let Err(error) = result {
+                log::error!("Could not disable browser accelerator keys: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn reveal_launcher(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        return reveal_window(&window);
+    }
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == "main")
+        .ok_or_else(|| "Could not find the launcher window configuration.".to_string())?;
+    let window = WebviewWindowBuilder::from_config(app, config)
+        .map_err(|error| error.to_string())?
+        .build()
+        .map_err(|error| error.to_string())?;
+    reveal_window(&window)
+}
+
+#[tauri::command]
+fn show_launcher(app: AppHandle) -> Result<(), String> {
+    reveal_launcher(&app)
+}
+
+#[tauri::command]
+async fn choose_repository(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    let picker_app = app.clone();
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        picker_app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("Choose a Git repository")
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(path) = selected else {
+        return Ok(());
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    open_repository_window(&app, &path.to_string_lossy())
+}
+
+#[cfg(target_os = "macos")]
+fn install_app_menu(app: &AppHandle) -> Result<(), String> {
+    let menu = Menu::default(app).map_err(|error| error.to_string())?;
+    let file = menu_submenu(&menu, "File")?;
+    let view = menu_submenu(&menu, "View")?;
+    let window = menu_submenu(&menu, "Window")?;
+    let recent = Submenu::with_id(app, "open-recent", "Open Recent", true)
+        .map_err(|error| error.to_string())?;
+
+    let new_window = MenuItem::with_id(
+        app,
+        MENU_NEW_WINDOW,
+        "New Window",
+        true,
+        Some("CmdOrCtrl+N"),
+    )
+    .map_err(|error| error.to_string())?;
+    let open = MenuItem::with_id(app, MENU_OPEN, "Open…", true, Some("CmdOrCtrl+O"))
+        .map_err(|error| error.to_string())?;
+    let file_separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
+    file.prepend_items(&[&new_window, &open, &recent, &file_separator])
+        .map_err(|error| error.to_string())?;
+
+    let zoom_in = MenuItem::with_id(app, MENU_ZOOM_IN, "Zoom In", true, Some("CmdOrCtrl+="))
+        .map_err(|error| error.to_string())?;
+    let zoom_out = MenuItem::with_id(app, MENU_ZOOM_OUT, "Zoom Out", true, Some("CmdOrCtrl+-"))
+        .map_err(|error| error.to_string())?;
+    let actual_size = MenuItem::with_id(
+        app,
+        MENU_ACTUAL_SIZE,
+        "Actual Size",
+        true,
+        Some("CmdOrCtrl+0"),
+    )
+    .map_err(|error| error.to_string())?;
+    let view_separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
+    view.prepend_items(&[&zoom_in, &zoom_out, &actual_size, &view_separator])
+        .map_err(|error| error.to_string())?;
+
+    let window_separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
+    let bring_all =
+        PredefinedMenuItem::bring_all_to_front(app, None).map_err(|error| error.to_string())?;
+    window
+        .append_items(&[&window_separator, &bring_all])
+        .map_err(|error| error.to_string())?;
+
+    populate_recent_menu(app, &recent, &[])?;
+    app.set_menu(menu).map_err(|error| error.to_string())?;
+    app.manage(AppMenuState {
+        recent,
+        rebuild_generation: AtomicU64::new(0),
+        rebuild_lock: Mutex::new(()),
+    });
+    app.on_menu_event(|app, event| {
+        let id = event.id().as_ref();
+        let result = match id {
+            MENU_NEW_WINDOW => reveal_launcher(app),
+            MENU_CLEAR_RECENT => clear_recent_paths(Some(app)),
+            MENU_ZOOM_IN => set_app_zoom(app, ZoomDirection::In),
+            MENU_ZOOM_OUT => set_app_zoom(app, ZoomDirection::Out),
+            MENU_ACTUAL_SIZE => set_app_zoom(app, ZoomDirection::ActualSize),
+            MENU_OPEN => {
+                let app = app.clone();
+                let window = app
+                    .webview_windows()
+                    .into_values()
+                    .find(|window| window.is_focused().unwrap_or(false))
+                    .or_else(|| app.get_webview_window("main"));
+                match window {
+                    Some(window) => {
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(error) = choose_repository(app, window).await {
+                                log::error!("Could not open a repository: {error}");
+                            }
+                        });
+                        Ok(())
+                    }
+                    None => Err("Could not find a window for the repository picker.".to_string()),
+                }
+            }
+            _ => recent_menu_path(id).map_or(Ok(()), |path| open_repository_window(app, path)),
+        };
+        if let Err(error) = result {
+            log::error!("Menu command failed: {error}");
+        }
+    });
+    Ok(())
+}
+
 fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
-    let project = remember_repository(path, &app.state::<OpenWorktrees>())?;
+    let project = remember_repository(path, &app.state::<OpenWorktrees>(), Some(app))?;
     let worktree_path = worktree_path(path)?;
     let label = format!(
         "repository-{}",
@@ -3387,6 +3810,40 @@ async fn stash_action(repo_path: String, name: String, sha: String, action: Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_paths_move_to_the_front_and_stay_bounded() {
+        let paths = (0..MAX_RECENT_REPOSITORIES)
+            .map(|index| format!("/repo/{index}"))
+            .collect();
+        let paths = updated_recent_paths(paths, "/repo/4");
+        assert_eq!(paths[0], "/repo/4");
+        assert_eq!(paths.len(), MAX_RECENT_REPOSITORIES);
+        assert_eq!(paths.iter().filter(|path| *path == "/repo/4").count(), 1);
+
+        let paths = updated_recent_paths(paths, "/repo/new");
+        assert_eq!(paths[0], "/repo/new");
+        assert_eq!(paths.len(), MAX_RECENT_REPOSITORIES);
+        assert!(!paths.iter().any(|path| path == "/repo/7"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recent_menu_ids_round_trip_the_selected_path() {
+        let path = "/Volumes/External/repository 4";
+        assert_eq!(recent_menu_path(&recent_menu_id(path)), Some(path));
+        assert_eq!(recent_menu_path("unrelated-menu-item"), None);
+    }
+
+    #[test]
+    fn zoom_uses_ten_percent_steps_and_clamps_the_range() {
+        assert_eq!(next_zoom_factor(1.0, ZoomDirection::In), 1.1);
+        assert_eq!(next_zoom_factor(1.0, ZoomDirection::Out), 0.9);
+        assert_eq!(next_zoom_factor(1.7, ZoomDirection::ActualSize), 1.0);
+        assert_eq!(next_zoom_factor(2.0, ZoomDirection::In), 2.0);
+        assert_eq!(next_zoom_factor(0.5, ZoomDirection::Out), 0.5);
+        assert_eq!(next_zoom_factor(f64::NAN, ZoomDirection::In), 1.1);
+    }
 
     fn joined_paths<const N: usize>(paths: [&str; N]) -> OsString {
         env::join_paths(paths).unwrap()
@@ -5228,10 +5685,16 @@ pub fn run() {
         .manage(OpenWorktrees::default())
         .invoke_handler(invoke_handler())
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            if let Err(error) = install_app_menu(app.handle()) {
+                log::error!("Could not install the application menu: {error}");
+            }
             if let Some(path) = &repository_path {
                 open_repository_window(app.handle(), path)?;
-            } else if let Some(window) = app.get_webview_window("main") {
-                reveal_window(&window)?;
+            } else {
+                reveal_launcher(app.handle())?;
+                #[cfg(target_os = "macos")]
+                update_recent_menu(Some(app.handle()));
             }
             if cfg!(debug_assertions) {
                 app.handle().plugin(

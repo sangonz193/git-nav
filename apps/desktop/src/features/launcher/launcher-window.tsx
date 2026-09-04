@@ -1,9 +1,11 @@
 import { ChevronDown, ChevronRight, FolderGit2, FolderOpen, GitBranch, Plus } from "lucide-react"
-import { useEffect, useState } from "react"
+import { listen } from "@tauri-apps/api/event"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
 import { invoke, isDesktop } from "@/lib/ipc"
 import { openRepository } from "@/lib/navigation"
+import { AppMenuButton } from "../app-menu/app-menu"
 import { FolderPicker } from "./folder-picker"
 import type { Project } from "../repository/project"
 
@@ -13,12 +15,55 @@ export function LauncherWindow() {
   const [error, setError] = useState<string | null>(null)
   const [isChoosing, setIsChoosing] = useState(false)
   const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const clearVersion = useRef(0)
+
+  const loadProjects = useCallback(async () => {
+    const loadVersion = clearVersion.current
+    const recentProjects = await invoke<Project[]>("recent_projects")
+    if (loadVersion !== clearVersion.current) return []
+    setProjects(recentProjects)
+    return recentProjects
+  }, [])
 
   useEffect(() => {
-    invoke<Project[]>("recent_projects")
-      .then(setProjects)
-      .catch((message: unknown) => setError(String(message)))
-  }, [])
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    const refreshProjects = () => {
+      void loadProjects().catch((message: unknown) => {
+        if (!disposed) setError(String(message))
+      })
+    }
+
+    if (!isDesktop) {
+      refreshProjects()
+      return () => {
+        disposed = true
+      }
+    }
+
+    void listen("recent-projects-cleared", () => {
+      clearVersion.current += 1
+      setProjects([])
+    })
+      .then((dispose) => {
+        if (disposed) dispose()
+        else {
+          unlisten = dispose
+          refreshProjects()
+        }
+      })
+      .catch((message: unknown) => {
+        if (!disposed) {
+          setError(String(message))
+          refreshProjects()
+        }
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [loadProjects])
 
   async function chooseRepository() {
     if (!isDesktop) {
@@ -30,16 +75,7 @@ export function LauncherWindow() {
     setError(null)
 
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog")
-      const selectedPath = await open({
-        directory: true,
-        multiple: false,
-        title: "Choose a Git repository",
-      })
-
-      if (typeof selectedPath === "string") {
-        await openRepository(selectedPath)
-      }
+      await invoke<void>("choose_repository")
     } catch (message) {
       setError(String(message))
     } finally {
@@ -48,7 +84,13 @@ export function LauncherWindow() {
   }
 
   return (
-    <main className="flex min-h-svh items-center justify-center bg-background p-8">
+    <main className="relative flex min-h-svh items-center justify-center bg-background p-8">
+      <div className="absolute top-4 right-4">
+        <AppMenuButton
+          loadRecentProjects={loadProjects}
+          onRecentProjectsChange={setProjects}
+        />
+      </div>
       <section className="w-full max-w-lg space-y-7">
         <div className="space-y-2">
           <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
