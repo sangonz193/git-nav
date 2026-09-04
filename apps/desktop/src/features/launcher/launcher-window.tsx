@@ -9,6 +9,7 @@ import { invoke, isDesktop } from "@/lib/ipc"
 import { openRepository } from "@/lib/navigation"
 import { AppMenuButton } from "../app-menu/app-menu"
 import { FolderPicker } from "./folder-picker"
+import { NetworkSharingRow } from "../sharing/sharing-controls"
 import type { Project } from "../repository/project"
 
 export function LauncherWindow({ macOSWindowChrome }: { macOSWindowChrome: boolean }) {
@@ -174,6 +175,7 @@ export function LauncherWindow({ macOSWindowChrome }: { macOSWindowChrome: boole
             {isChoosing ? <FolderOpen /> : <Plus />}
             {isChoosing ? "Opening folder picker…" : "Choose folder"}
           </Button>
+          {isDesktop && <NetworkSharingRow />}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </section>
         <FolderPicker

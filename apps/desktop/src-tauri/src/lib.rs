@@ -107,6 +107,8 @@ commands![
     start_sharing,
     stop_sharing,
     sharing_state,
+    rotate_sharing_token,
+    update_sharing_setting,
 ];
 
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
@@ -122,6 +124,10 @@ const SERVE_HOST_SETTING: &str = "serve.host";
 const SERVE_PORT_SETTING: &str = "serve.port";
 const SERVE_TOKEN_SETTING: &str = "serve.token";
 const SERVE_PUBLIC_URL_SETTING: &str = "serve.publicUrl";
+const SERVE_START_SHARING_SETTING: &str = "serve.startSharing";
+const MINIMUM_SERVE_PORT: u16 = 1024;
+#[cfg(target_os = "macos")]
+const SERVE_CLOSE_NOTICE_SETTING: &str = "serve.closeNoticeShown";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MINIMUM_ZOOM_FACTOR: f64 = 0.5;
 const MAXIMUM_ZOOM_FACTOR: f64 = 2.0;
@@ -548,7 +554,10 @@ struct OpenWorktree {
 struct OpenWorktrees(Arc<Mutex<HashMap<String, OpenWorktree>>>);
 
 #[derive(Default)]
-struct SharingServer(Mutex<Option<server::RunningServer>>);
+struct SharingServer {
+    server: Mutex<Option<server::RunningServer>>,
+    operation: Mutex<()>,
+}
 
 /// Mirrors Tauri's `app_data_dir` so the desktop app and `git-nav serve` share one store.
 fn data_dir() -> Result<PathBuf, String> {
@@ -2323,8 +2332,43 @@ fn reveal_launcher(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?
         .build()
         .map_err(|error| error.to_string())?;
+    watch_sharing_close(&window);
     reveal_window(&window)
 }
+
+#[cfg(target_os = "macos")]
+fn watch_sharing_close(window: &WebviewWindow) {
+    let app = window.app_handle().clone();
+    window.on_window_event(move |event| {
+        if !matches!(event, WindowEvent::CloseRequested { .. })
+            || app.webview_windows().len() != 1
+            || !active_sharing_state(&app).sharing
+        {
+            return;
+        }
+        let already_shown = load_settings()
+            .ok()
+            .and_then(|settings| settings.get(SERVE_CLOSE_NOTICE_SETTING).and_then(serde_json::Value::as_bool))
+            .unwrap_or(false);
+        if already_shown {
+            return;
+        }
+        if let Err(error) = save_setting(
+            SERVE_CLOSE_NOTICE_SETTING.to_string(),
+            serde_json::Value::Bool(true),
+        ) {
+            log::warn!("Could not save sharing close notice state: {error}");
+            return;
+        }
+        app.dialog()
+            .message("Git Nav is still sharing on the network. Reopen it from the Dock to manage sharing.")
+            .title("Sharing is still on")
+            .show(|_| {});
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn watch_sharing_close(_: &WebviewWindow) {}
 
 #[tauri::command]
 fn show_launcher(app: AppHandle) -> Result<(), String> {
@@ -2514,6 +2558,7 @@ fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
         let window = builder
             .build()
             .map_err(|error| error.to_string())?;
+        watch_sharing_close(&window);
         reveal_window(&window)?;
         window.on_window_event({
             let app = app.clone();
@@ -4410,6 +4455,126 @@ async fn stash_action(repo_path: String, name: String, sha: String, action: Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    fn restart_error(
+        sharing: &mut Option<()>,
+        change: impl FnOnce(&()) -> Result<server::Options, String>,
+    ) -> String {
+        match take_sharing_server_for_restart(sharing, change) {
+            Ok(_) => panic!("the restart should be refused"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn sharing_restarts_are_refused_when_sharing_is_inactive() {
+        let mut sharing = None;
+
+        let error = restart_error(&mut sharing, |_| {
+            Ok(sharing_options([127, 0, 0, 1], 4300, None))
+        });
+
+        assert_eq!(error, "Git Nav is not sharing on the network.");
+    }
+
+    #[test]
+    fn an_invalid_change_keeps_the_server_running() {
+        let mut sharing = Some(());
+
+        let error = restart_error(&mut sharing, |_| Err("invalid change".to_string()));
+
+        assert_eq!(error, "invalid change");
+        assert!(sharing.is_some());
+    }
+
+    /// Stands in for the running server: replacements are identified by the port they listen on.
+    fn replaced_sharing_server(
+        start: impl Fn(server::Options) -> Result<u16, String>,
+        persist: impl FnOnce() -> Result<(), String>,
+        steps: &RefCell<Vec<String>>,
+    ) -> Result<u16, (Option<u16>, String)> {
+        replace_sharing_server(
+            4300,
+            sharing_options([127, 0, 0, 1], 4300, None),
+            sharing_options([127, 0, 0, 1], 4310, None),
+            |port| steps.borrow_mut().push(format!("stop {port}")),
+            |options| {
+                steps.borrow_mut().push(format!("start {}", options.port));
+                start(options)
+            },
+            || {
+                steps.borrow_mut().push("persist".to_string());
+                persist()
+            },
+        )
+    }
+
+    #[test]
+    fn a_restart_saves_the_change_only_once_the_replacement_is_listening() {
+        let steps = RefCell::new(Vec::new());
+
+        let replacement = replaced_sharing_server(|options| Ok(options.port), || Ok(()), &steps);
+
+        assert_eq!(replacement.map_err(|(_, error)| error), Ok(4310));
+        assert_eq!(steps.into_inner(), ["stop 4300", "start 4310", "persist"]);
+    }
+
+    #[test]
+    fn a_replacement_that_cannot_start_restores_the_previous_server_unsaved() {
+        let steps = RefCell::new(Vec::new());
+
+        let Err((restored, error)) = replaced_sharing_server(
+            |options| match options.port {
+                4310 => Err("Port 4310 is already in use.".to_string()),
+                port => Ok(port),
+            },
+            || panic!("a failed restart must not be saved"),
+            &steps,
+        ) else {
+            panic!("the restart should fail");
+        };
+
+        assert_eq!(restored, Some(4300));
+        assert_eq!(error, "Port 4310 is already in use.");
+        assert_eq!(steps.into_inner(), ["stop 4300", "start 4310", "start 4300"]);
+    }
+
+    #[test]
+    fn a_change_that_cannot_be_saved_restores_the_previous_server() {
+        let steps = RefCell::new(Vec::new());
+
+        let Err((restored, error)) = replaced_sharing_server(
+            |options| Ok(options.port),
+            || Err("Could not save the setting.".to_string()),
+            &steps,
+        ) else {
+            panic!("the restart should fail");
+        };
+
+        assert_eq!(restored, Some(4300));
+        assert_eq!(error, "Could not save the setting.");
+        assert_eq!(
+            steps.into_inner(),
+            ["stop 4300", "start 4310", "persist", "stop 4310", "start 4300"]
+        );
+    }
+
+    #[test]
+    fn a_restart_that_cannot_be_undone_reports_the_original_failure() {
+        let steps = RefCell::new(Vec::new());
+
+        let Err((restored, error)) = replaced_sharing_server(
+            |options| Err(format!("Port {} is already in use.", options.port)),
+            || panic!("a failed restart must not be saved"),
+            &steps,
+        ) else {
+            panic!("the restart should fail");
+        };
+
+        assert_eq!(restored, None);
+        assert_eq!(error, "Port 4310 is already in use.");
+    }
 
     #[test]
     fn initial_fullscreen_states_match_persisted_window_state() {
@@ -4698,16 +4863,112 @@ mod tests {
     }
 
     #[test]
-    fn serve_ignores_invalid_stored_host_and_port() {
+    fn serve_rejects_an_invalid_stored_port() {
         let settings = BTreeMap::from([
             (SERVE_HOST_SETTING.to_string(), serde_json::json!("localhost")),
-            (SERVE_PORT_SETTING.to_string(), serde_json::json!("4301")),
+            (SERVE_PORT_SETTING.to_string(), serde_json::json!(1023)),
         ]);
 
-        let parsed = parse_serve_arguments(&[], &settings).unwrap();
+        let Err(error) = parse_serve_arguments(&[], &settings) else {
+            panic!("an invalid stored port should be rejected");
+        };
 
-        assert_eq!(parsed.host, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        assert!(error.contains("serve.port"));
+        assert!(error.contains("1024"));
+    }
+
+    #[test]
+    fn serve_allows_a_privileged_port_passed_on_the_command_line() {
+        let parsed = parse_serve_arguments(
+            &["--port".to_string(), "80".to_string()],
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(parsed.port, 80);
+    }
+
+    #[test]
+    fn serve_port_flag_overrides_an_invalid_stored_port() {
+        let settings = BTreeMap::from([(SERVE_PORT_SETTING.to_string(), serde_json::json!(80))]);
+
+        let parsed = parse_serve_arguments(
+            &["--port".to_string(), "4300".to_string()],
+            &settings,
+        )
+        .unwrap();
+
         assert_eq!(parsed.port, 4300);
+    }
+
+    #[test]
+    fn sharing_setting_updates_replace_only_the_changed_option() {
+        let running = server::Options {
+            public_url: Some("https://git-nav.example".to_owned()),
+            ..sharing_options([127, 0, 0, 1], 5000, Some("cli-token"))
+        };
+
+        let updated =
+            sharing_options_with_setting(&running, SERVE_HOST_SETTING, &serde_json::json!("0.0.0.0"))
+                .unwrap();
+        assert_eq!(updated.host, std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        assert_eq!(updated.port, 5000);
+        assert_eq!(updated.token.as_deref(), Some("cli-token"));
+        assert_eq!(updated.public_url.as_deref(), Some("https://git-nav.example"));
+
+        let updated =
+            sharing_options_with_setting(&running, SERVE_PORT_SETTING, &serde_json::json!(4310))
+                .unwrap();
+        assert_eq!(updated.host, running.host);
+        assert_eq!(updated.port, 4310);
+        assert_eq!(updated.token.as_deref(), Some("cli-token"));
+
+        let updated = sharing_options_with_setting(
+            &running,
+            SERVE_PUBLIC_URL_SETTING,
+            &serde_json::json!("https://other.example"),
+        )
+        .unwrap();
+        assert_eq!(updated.public_url.as_deref(), Some("https://other.example"));
+        assert_eq!(updated.token.as_deref(), Some("cli-token"));
+    }
+
+    #[test]
+    fn sharing_setting_updates_clear_the_public_url_with_an_empty_string() {
+        let running = sharing_options([127, 0, 0, 1], 4300, None);
+
+        let updated =
+            sharing_options_with_setting(&running, SERVE_PUBLIC_URL_SETTING, &serde_json::json!(""))
+                .unwrap();
+
+        assert_eq!(updated.public_url, None);
+    }
+
+    #[test]
+    fn sharing_setting_updates_reject_invalid_values() {
+        let running = sharing_options([127, 0, 0, 1], 4300, None);
+        let error = |key: &str, value: serde_json::Value| {
+            match sharing_options_with_setting(&running, key, &value) {
+                Ok(_) => panic!("the {key} update should be rejected"),
+                Err(error) => error,
+            }
+        };
+
+        assert!(error(SERVE_HOST_SETTING, serde_json::json!("localhost"))
+            .contains(SERVE_HOST_SETTING));
+        assert!(error(SERVE_PORT_SETTING, serde_json::json!(80)).contains("1024"));
+        assert!(error(SERVE_PUBLIC_URL_SETTING, serde_json::json!(5))
+            .contains(SERVE_PUBLIC_URL_SETTING));
+        assert!(error(SERVE_PUBLIC_URL_SETTING, serde_json::json!("git-nav.example"))
+            .contains("http or https"));
+        assert!(error(SERVE_PUBLIC_URL_SETTING, serde_json::json!("ftp://git-nav.example"))
+            .contains("http or https"));
+        assert!(error(SERVE_PUBLIC_URL_SETTING, serde_json::json!("https://"))
+            .contains("http or https"));
+        assert!(error(SERVE_TOKEN_SETTING, serde_json::json!("token"))
+            .contains(SERVE_TOKEN_SETTING));
+        assert!(error(SERVE_START_SHARING_SETTING, serde_json::json!(true))
+            .contains(SERVE_START_SHARING_SETTING));
     }
 
     #[test]
@@ -6903,7 +7164,7 @@ fn parse_serve_arguments(
     settings: &BTreeMap<String, serde_json::Value>,
 ) -> Result<ServeArguments, String> {
     let mut host = stored_serve_host(settings);
-    let mut port = stored_serve_port(settings);
+    let mut port = None;
     let mut token = None;
     let mut generate_token = true;
     let mut index = 0;
@@ -6918,7 +7179,9 @@ fn parse_serve_arguments(
         };
         match argument.as_str() {
             "--host" => host = value()?.parse().map_err(|_| "Invalid --host.".to_string())?,
-            "--port" => port = value()?.parse().map_err(|_| "Invalid --port.".to_string())?,
+            "--port" => {
+                port = Some(value()?.parse().map_err(|_| "Invalid --port.".to_string())?);
+            }
             "--token" => {
                 token = Some(value()?);
                 generate_token = false;
@@ -6928,6 +7191,12 @@ fn parse_serve_arguments(
             _ => return Err(format!("Unknown option {argument}.\n\n{SERVE_USAGE}")),
         }
     }
+
+    // An explicit --port may be privileged, so the stored port is read and checked only without one.
+    let port = match port {
+        Some(port) => port,
+        None => stored_serve_port(settings)?,
+    };
 
     let mut persist_token = false;
     if generate_token {
@@ -6959,11 +7228,8 @@ fn parse_serve_arguments(
     })
 }
 
-fn stored_serve_host(settings: &BTreeMap<String, serde_json::Value>) -> std::net::IpAddr {
-    let Some(value) = settings.get(SERVE_HOST_SETTING) else {
-        return std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
-    };
-    let host = value
+fn valid_serve_host(value: &serde_json::Value) -> Option<std::net::IpAddr> {
+    value
         .as_str()
         .and_then(|host| host.parse().ok())
         .filter(|host| {
@@ -6972,8 +7238,21 @@ fn stored_serve_host(settings: &BTreeMap<String, serde_json::Value>) -> std::net
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
                     | std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
             )
-        });
-    match host {
+        })
+}
+
+fn valid_serve_port(value: &serde_json::Value) -> Option<u16> {
+    value
+        .as_u64()
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port >= MINIMUM_SERVE_PORT)
+}
+
+fn stored_serve_host(settings: &BTreeMap<String, serde_json::Value>) -> std::net::IpAddr {
+    let Some(value) = settings.get(SERVE_HOST_SETTING) else {
+        return std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    };
+    match valid_serve_host(value) {
         Some(host) => host,
         None => {
             eprintln!("Ignoring invalid {SERVE_HOST_SETTING}: {value}");
@@ -6982,17 +7261,15 @@ fn stored_serve_host(settings: &BTreeMap<String, serde_json::Value>) -> std::net
     }
 }
 
-fn stored_serve_port(settings: &BTreeMap<String, serde_json::Value>) -> u16 {
+fn stored_serve_port(settings: &BTreeMap<String, serde_json::Value>) -> Result<u16, String> {
     let Some(value) = settings.get(SERVE_PORT_SETTING) else {
-        return 4300;
+        return Ok(4300);
     };
-    match value.as_u64().and_then(|port| port.try_into().ok()) {
-        Some(port) => port,
-        None => {
-            eprintln!("Ignoring invalid {SERVE_PORT_SETTING}: {value}");
-            4300
-        }
-    }
+    valid_serve_port(value).ok_or_else(|| {
+        format!(
+            "Invalid {SERVE_PORT_SETTING}: {value}. The port must be a number between {MINIMUM_SERVE_PORT} and 65535."
+        )
+    })
 }
 
 fn generated_token() -> String {
@@ -7020,7 +7297,7 @@ fn inactive_sharing_state() -> server::SharingState {
 
 fn active_sharing_state(app: &AppHandle) -> server::SharingState {
     app.state::<SharingServer>()
-        .0
+        .server
         .lock()
         .ok()
         .and_then(|server| server.as_ref().map(server::RunningServer::state))
@@ -7061,7 +7338,8 @@ fn start_sharing_with_arguments(
     arguments: ServeArguments,
 ) -> Result<server::SharingState, String> {
     let sharing_server = app.state::<SharingServer>();
-    let mut sharing = sharing_server.0.lock().map_err(|error| error.to_string())?;
+    let _operation = sharing_server.operation.lock().map_err(|error| error.to_string())?;
+    let mut sharing = sharing_server.server.lock().map_err(|error| error.to_string())?;
     if let Some(server) = sharing.as_ref() {
         if let Some(conflict) = sharing_configuration_conflict(server.options(), &arguments) {
             return Err(conflict);
@@ -7087,7 +7365,9 @@ fn start_sharing_with_arguments(
 }
 
 fn stop_sharing_from_app(app: &AppHandle) -> Result<server::SharingState, String> {
-    let server = app.state::<SharingServer>().0.lock().map_err(|error| error.to_string())?.take();
+    let sharing_server = app.state::<SharingServer>();
+    let _operation = sharing_server.operation.lock().map_err(|error| error.to_string())?;
+    let server = sharing_server.server.lock().map_err(|error| error.to_string())?.take();
     let Some(server) = server else {
         return Ok(inactive_sharing_state());
     };
@@ -7105,6 +7385,152 @@ fn stop_sharing_from_app(app: &AppHandle) -> Result<server::SharingState, String
     Ok(state)
 }
 
+fn take_sharing_server_for_restart<T>(
+    sharing: &mut Option<T>,
+    change: impl FnOnce(&T) -> Result<server::Options, String>,
+) -> Result<(T, server::Options), String> {
+    let Some(server) = sharing.as_ref() else {
+        return Err("Git Nav is not sharing on the network.".to_string());
+    };
+    let options = change(server)?;
+    let server = sharing.take().expect("sharing server disappeared after it was checked");
+    Ok((server, options))
+}
+
+/// Saves the change only once the replacement is listening, and starts the previous configuration
+/// again when either step fails, so a rejected change leaves neither an unusable saved setting nor
+/// a stopped server behind.
+fn replace_sharing_server<T>(
+    server: T,
+    previous: server::Options,
+    options: server::Options,
+    stop: impl Fn(T),
+    start: impl Fn(server::Options) -> Result<T, String>,
+    persist: impl FnOnce() -> Result<(), String>,
+) -> Result<T, (Option<T>, String)> {
+    stop(server);
+    let error = match start(options) {
+        Ok(replacement) => match persist() {
+            Ok(()) => return Ok(replacement),
+            Err(error) => {
+                stop(replacement);
+                error
+            }
+        },
+        Err(error) => error,
+    };
+    Err((start(previous).ok(), error))
+}
+
+fn restart_sharing_with(
+    app: &AppHandle,
+    change: impl FnOnce(&server::Options) -> Result<server::Options, String>,
+    persist: impl FnOnce() -> Result<(), String>,
+) -> Result<server::SharingState, String> {
+    let sharing_server = app.state::<SharingServer>();
+    let _operation = sharing_server.operation.lock().map_err(|error| error.to_string())?;
+    let (server, options) = {
+        let mut sharing = sharing_server.server.lock().map_err(|error| error.to_string())?;
+        // The running configuration wins over persisted settings: only the requested change applies.
+        take_sharing_server_for_restart(&mut sharing, |server| change(server.options()))?
+    };
+    let previous = server.options().clone();
+    let open_worktrees = app.state::<OpenWorktrees>().inner().clone();
+    let (running, error) = match replace_sharing_server(
+        server,
+        previous,
+        options,
+        server::RunningServer::stop,
+        |options| server::start(options, open_worktrees.clone()),
+        persist,
+    ) {
+        Ok(server) => (Some(server), None),
+        Err((restored, error)) => (restored, Some(error)),
+    };
+    let state = running
+        .as_ref()
+        .map_or_else(inactive_sharing_state, server::RunningServer::state);
+    *sharing_server.server.lock().map_err(|error| error.to_string())? = running;
+    match error {
+        Some(error) => {
+            let _ = app.emit(SHARING_CHANGED_EVENT, &state);
+            Err(error)
+        }
+        None => {
+            app.emit(SHARING_CHANGED_EVENT, &state)
+                .map_err(|error| error.to_string())?;
+            Ok(state)
+        }
+    }
+}
+
+fn restart_sharing_with_token(
+    app: &AppHandle,
+    token: String,
+) -> Result<server::SharingState, String> {
+    let persisted = serde_json::Value::String(token.clone());
+    restart_sharing_with(
+        app,
+        move |options| Ok(server::Options { token: Some(token), ..options.clone() }),
+        move || save_setting(SERVE_TOKEN_SETTING.to_string(), persisted),
+    )
+}
+
+fn sharing_options_with_setting(
+    options: &server::Options,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<server::Options, String> {
+    let mut options = options.clone();
+    match key {
+        SERVE_HOST_SETTING => {
+            options.host = valid_serve_host(value)
+                .ok_or_else(|| format!("Invalid {SERVE_HOST_SETTING}: {value}."))?;
+        }
+        SERVE_PORT_SETTING => {
+            options.port = valid_serve_port(value).ok_or_else(|| {
+                format!(
+                    "Invalid {SERVE_PORT_SETTING}: {value}. The port must be a number between {MINIMUM_SERVE_PORT} and 65535."
+                )
+            })?;
+        }
+        SERVE_PUBLIC_URL_SETTING => {
+            let url = value
+                .as_str()
+                .ok_or_else(|| format!("Invalid {SERVE_PUBLIC_URL_SETTING}: {value}."))?;
+            options.public_url = (!url.is_empty())
+                .then(|| {
+                    // Sharing serves the entry URL this parses to, so anything it rejects would be
+                    // saved and then quietly replaced by a listener URL.
+                    server::public_entry_url(url).map(|_| url.to_owned()).ok_or_else(|| {
+                        format!(
+                            "Invalid {SERVE_PUBLIC_URL_SETTING}: {value}. It must be an http or https URL."
+                        )
+                    })
+                })
+                .transpose()?;
+        }
+        _ => return Err(format!("{key} does not change the running sharing server.")),
+    }
+    Ok(options)
+}
+
+#[tauri::command]
+fn update_sharing_setting(
+    app: AppHandle,
+    key: String,
+    value: serde_json::Value,
+) -> Result<server::SharingState, String> {
+    let persist_app = app.clone();
+    let persisted_key = key.clone();
+    let persisted = value.clone();
+    restart_sharing_with(
+        &app,
+        move |options| sharing_options_with_setting(options, &key, &value),
+        move || set_setting(persist_app, persisted_key, persisted),
+    )
+}
+
 #[tauri::command]
 fn start_sharing(app: AppHandle) -> Result<server::SharingState, String> {
     start_sharing_with_arguments(&app, load_serve_arguments(&[])?)
@@ -7118,6 +7544,12 @@ fn stop_sharing(app: AppHandle) -> Result<server::SharingState, String> {
 #[tauri::command]
 fn sharing_state(app: AppHandle) -> server::SharingState {
     active_sharing_state(&app)
+}
+
+#[tauri::command]
+fn rotate_sharing_token(app: AppHandle) -> Result<server::SharingState, String> {
+    let token = generated_token();
+    restart_sharing_with_token(&app, token)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -7452,6 +7884,9 @@ pub fn run() {
             if let Err(error) = install_app_menu(app.handle()) {
                 log::error!("Could not install the application menu: {error}");
             }
+            if let Some(window) = app.get_webview_window("main") {
+                watch_sharing_close(&window);
+            }
             if let Some((readiness_path, options)) = &serve_request {
                 #[cfg(target_os = "macos")]
                 update_recent_menu(Some(app.handle()));
@@ -7469,6 +7904,15 @@ pub fn run() {
                     app.handle().exit(0);
                 }
                 return Ok(());
+            }
+            if load_settings()
+                .ok()
+                .and_then(|settings| settings.get(SERVE_START_SHARING_SETTING).and_then(serde_json::Value::as_bool))
+                .unwrap_or(false)
+            {
+                if let Err(error) = start_sharing(app.handle().clone()) {
+                    log::error!("Could not start sharing on launch: {error}");
+                }
             }
             if let Some(path) = &repository_path {
                 open_repository_window(app.handle(), path)?;
