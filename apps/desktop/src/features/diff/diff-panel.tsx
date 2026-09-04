@@ -160,6 +160,13 @@ function fileTree(files: ChangedFile[]) {
   return root.children
 }
 
+function changedLines(files: ChangedFile[]) {
+  return files.reduce(
+    (total, file) => ({ additions: total.additions + file.additions, deletions: total.deletions + file.deletions }),
+    { additions: 0, deletions: 0 }
+  )
+}
+
 function flattenTree(nodes: FileTreeNode[], files: ChangedFile[] = []) {
   for (const node of nodes) {
     if (node.file) {
@@ -168,6 +175,15 @@ function flattenTree(nodes: FileTreeNode[], files: ChangedFile[] = []) {
     flattenTree(node.children, files)
   }
   return files
+}
+
+function FileStat({ additions, deletions }: { additions: number; deletions: number }) {
+  return (
+    <span className="diff-file-stat">
+      <span className="text-emerald-400">+{additions.toLocaleString()}</span>
+      <span className="text-rose-400">−{deletions.toLocaleString()}</span>
+    </span>
+  )
 }
 
 function FileTree({ files, onSelect, activeKey }: { files: FileTreeNode[]; onSelect: (file: ChangedFile) => void; activeKey: string | null }) {
@@ -184,6 +200,7 @@ function FileTreeNode({ level, node, onSelect, activeKey }: { level: number; nod
       <button className={`diff-file${key === activeKey ? " is-selected" : ""}`} key={key} onClick={() => onSelect(node.file!)} style={{ paddingLeft }} type="button">
         <span className={`diff-file-status ${STATUS_COLORS[statusLetter(node.file)] ?? "text-muted-foreground"}`}>{statusLetter(node.file)}</span>
         <span className="truncate">{node.name}</span>
+        {!node.file.isBinary && <FileStat additions={node.file.additions} deletions={node.file.deletions} />}
       </button>
     )
   }
@@ -323,10 +340,7 @@ function FileDiffCard({ entry, expanded, file, mode, onExpand, theme, wrap }: { 
       <header className="diff-file-card-header">
         <span className={`diff-file-status ${STATUS_COLORS[statusLetter(file)] ?? "text-muted-foreground"}`}>{statusLetter(file)}</span>
         <span className="diff-file-card-path truncate">{fileName(file)}</span>
-        {!file.isBinary && <span className="diff-file-card-stat">
-          <span className="text-emerald-400">+{file.additions}</span>
-          <span className="text-rose-400">−{file.deletions}</span>
-        </span>}
+        {!file.isBinary && <FileStat additions={file.additions} deletions={file.deletions} />}
       </header>
       {body()}
     </article>
@@ -358,6 +372,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const tree = useMemo(() => fileTree(comparison?.files ?? []), [comparison])
   const files = useMemo(() => flattenTree(tree), [tree])
+  const total = useMemo(() => changedLines(files), [files])
 
   const rowVirtualizer = useVirtualizer({
     count: files.length,
@@ -541,8 +556,14 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
 
   const sidebar = (
     <nav aria-label="Changed files" className="diff-file-list">
-      {fileList}
-      {comparison?.files.length === 0 && <p className="diff-empty">No changed files</p>}
+      <header className="diff-file-total">
+        <span>{files.length === 1 ? "1 file" : `${files.length.toLocaleString()} files`}</span>
+        <FileStat additions={total.additions} deletions={total.deletions} />
+      </header>
+      <div className="diff-file-tree">
+        {fileList}
+        {comparison?.files.length === 0 && <p className="diff-empty">No changed files</p>}
+      </div>
     </nav>
   )
   const diffScroll = (
