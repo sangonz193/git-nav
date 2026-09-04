@@ -4,6 +4,34 @@ import type { SelectedRefs } from "./diff-title"
 export const NARROW_DIFF_PANEL_WIDTH = 620
 export const WIDE_DIFF_PANEL_WIDTH = 900
 
+export type ChangedFile = {
+  status: string
+  oldPath: string | null
+  newPath: string | null
+  oldOid: string | null
+  newOid: string | null
+  additions: number
+  deletions: number
+  isBinary: boolean
+  splitRows: number
+  unifiedRows: number
+  hunkRows: number
+}
+
+export function fileName(file: ChangedFile) {
+  return file.newPath ?? file.oldPath ?? "Unknown file"
+}
+
+// What the file is at, rather than where it sits, so a mark falls away the moment its contents move on.
+// A working tree file has no blob to be read at, which is why its mark is never written down.
+export function fileOid(file: ChangedFile) {
+  return file.newOid ?? file.oldOid ?? ""
+}
+
+export function isViewedFile(file: ChangedFile, viewed: ReadonlyMap<string, string>) {
+  return viewed.get(fileName(file)) === fileOid(file)
+}
+
 export function initialDiffLayout(width: number, preferences: DiffPanelUserPreferences) {
   return {
     fileTreeOpen: width >= NARROW_DIFF_PANEL_WIDTH && (preferences.fileTreeOpen ?? true),

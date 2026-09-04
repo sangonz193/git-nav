@@ -70,6 +70,8 @@ commands![
     delete_squashed_branches,
     delete_branch,
     compare_refs,
+    viewed_files,
+    set_file_viewed,
     reference_picker_commits,
     repository_references,
     resolve_revision,
@@ -217,6 +219,8 @@ struct ChangedFile {
     status: String,
     old_path: Option<String>,
     new_path: Option<String>,
+    old_oid: Option<String>,
+    new_oid: Option<String>,
     additions: u32,
     deletions: u32,
     is_binary: bool,
@@ -797,21 +801,33 @@ fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
     files
 }
 
-const NAME_STATUS_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--name-status", "-z"];
+// --raw carries the blob each side of a file is, which is what a file being marked as read is read at.
+const RAW_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--raw", "--abbrev=40", "-z"];
 const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
 
-fn parse_changed_files(name_status: &[u8], patch: &str) -> Result<Vec<ChangedFile>, String> {
-    // The patch lists files in the same order as --name-status, so its per-file stats zip by index.
+// A blob of nothing is what git reports for a side a file does not have, and for a working tree file it
+// has not been asked to hash.
+fn blob_oid(oid: &str) -> Option<String> {
+    oid.chars().any(|character| character != '0').then(|| oid.to_string())
+}
+
+fn parse_changed_files(raw: &[u8], patch: &str) -> Result<Vec<ChangedFile>, String> {
+    // The patch lists files in the same order as --raw, so its per-file stats zip by index.
     let stats = parse_patch_stats(patch);
-    let fields = name_status
+    let fields = raw
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty())
         .map(|field| String::from_utf8(field.to_vec()).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let mut files = Vec::new();
     let mut index = 0;
-    while let Some(status) = fields.get(index) {
+    while let Some(record) = fields.get(index) {
         index += 1;
+        // ":<old mode> <new mode> <old blob> <new blob> <status>"
+        let [_, _, old_oid, new_oid, status] = record.trim_start_matches(':').split(' ').collect::<Vec<_>>()[..] else {
+            return Err("Invalid git diff record.".to_string());
+        };
+        let (old_oid, new_oid) = (blob_oid(old_oid), blob_oid(new_oid));
         let kind = status.chars().next().ok_or_else(|| "Invalid git diff status.".to_string())?;
         let first_path = fields.get(index).ok_or_else(|| "Invalid git diff path.".to_string())?.clone();
         index += 1;
@@ -835,6 +851,8 @@ fn parse_changed_files(name_status: &[u8], patch: &str) -> Result<Vec<ChangedFil
             status: status.to_string(),
             old_path,
             new_path,
+            old_oid,
+            new_oid,
             additions: stat.additions,
             deletions: stat.deletions,
             is_binary: stat.is_binary,
@@ -848,10 +866,10 @@ fn parse_changed_files(name_status: &[u8], patch: &str) -> Result<Vec<ChangedFil
 
 fn changed_files(path: &str, base_sha: &str, head_sha: &str) -> Result<Vec<ChangedFile>, String> {
     let revisions = [base_sha, head_sha];
-    let name_status = git_output_bytes(path, &[&NAME_STATUS_ARGUMENTS[..], &revisions].concat())
+    let raw = git_output_bytes(path, &[&RAW_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
     let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], &revisions].concat())?;
-    parse_changed_files(&name_status, &patch)
+    parse_changed_files(&raw, &patch)
 }
 
 // Untracked files are invisible to git diff, so they are listed separately and appended after the
@@ -875,6 +893,8 @@ fn untracked_files(path: &str) -> Result<Vec<ChangedFile>, String> {
             status: "added".to_string(),
             old_path: None,
             new_path: Some(name),
+            old_oid: None,
+            new_oid: None,
             additions: lines,
             deletions: 0,
             is_binary,
@@ -888,10 +908,10 @@ fn untracked_files(path: &str) -> Result<Vec<ChangedFile>, String> {
 
 fn worktree_changed_files(path: &str, base_sha: &str) -> Result<Vec<ChangedFile>, String> {
     let revisions = [base_sha];
-    let name_status = git_output_bytes(path, &[&NAME_STATUS_ARGUMENTS[..], &revisions].concat())
+    let raw = git_output_bytes(path, &[&RAW_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
     let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], &revisions].concat())?;
-    let mut files = parse_changed_files(&name_status, &patch)?;
+    let mut files = parse_changed_files(&raw, &patch)?;
     files.extend(untracked_files(path)?);
     Ok(files)
 }
@@ -2629,6 +2649,155 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool)
 #[tauri::command(async)]
 fn compare_refs(repo_path: String, base_ref: String, head_ref: String, merge_base: bool) -> Result<Comparison, String> {
     comparison(&repo_path, &base_ref, &head_ref, merge_base)
+}
+
+const VIEWED_COMPARISON_LIMIT: i64 = 50;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewedFile {
+    path: String,
+    oid: String,
+}
+
+fn viewed_files_database_path() -> Result<PathBuf, String> {
+    data_dir().map(|dir| dir.join("viewed-files.sqlite3"))
+}
+
+fn migrate_viewed_files_database(connection: &mut Connection) -> Result<(), String> {
+    connection
+        .execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+        .map_err(|error| error.to_string())?;
+    let version = connection
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, Option<i64>>(0))
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    if version < 1 {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction
+            .execute_batch(
+                "
+                CREATE TABLE viewed_files (
+                  project_id TEXT NOT NULL,
+                  base_ref TEXT NOT NULL,
+                  head_ref TEXT NOT NULL,
+                  path TEXT NOT NULL,
+                  oid TEXT NOT NULL,
+                  viewed_at INTEGER NOT NULL,
+                  PRIMARY KEY (project_id, base_ref, head_ref, path)
+                );
+                INSERT INTO schema_migrations (version) VALUES (1);
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn viewed_files_database(path: PathBuf) -> Result<Connection, String> {
+    let mut connection = Connection::open(path).map_err(|error| error.to_string())?;
+    migrate_viewed_files_database(&mut connection)?;
+    Ok(connection)
+}
+
+fn read_viewed_files(
+    connection: &Connection,
+    project: &str,
+    base_ref: &str,
+    head_ref: &str,
+) -> Result<Vec<ViewedFile>, String> {
+    let mut statement = connection
+        .prepare("SELECT path, oid FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![project, base_ref, head_ref], |row| {
+            Ok(ViewedFile {
+                path: row.get(0)?,
+                oid: row.get(1)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+// Marks are only worth keeping for the comparisons still being read, so the least recently marked ones
+// fall away rather than growing a store nothing empties.
+fn prune_viewed_comparisons(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            DELETE FROM viewed_files WHERE (project_id, base_ref, head_ref) NOT IN (
+              SELECT project_id, base_ref, head_ref FROM viewed_files
+              GROUP BY project_id, base_ref, head_ref
+              ORDER BY MAX(viewed_at) DESC
+              LIMIT ?1
+            )
+            ",
+            params![VIEWED_COMPARISON_LIMIT],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn write_viewed_file(
+    connection: &Connection,
+    project: &str,
+    base_ref: &str,
+    head_ref: &str,
+    path: &str,
+    oid: &str,
+    viewed: bool,
+) -> Result<(), String> {
+    if !viewed {
+        connection
+            .execute(
+                "DELETE FROM viewed_files WHERE project_id = ?1 AND base_ref = ?2 AND head_ref = ?3 AND path = ?4",
+                params![project, base_ref, head_ref, path],
+            )
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let viewed_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs() as i64;
+    connection
+        .execute(
+            "
+            INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT (project_id, base_ref, head_ref, path)
+            DO UPDATE SET oid = excluded.oid, viewed_at = excluded.viewed_at
+            ",
+            params![project, base_ref, head_ref, path, oid, viewed_at],
+        )
+        .map_err(|error| error.to_string())?;
+    prune_viewed_comparisons(connection)
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+fn viewed_files(repo_path: String, base_ref: String, head_ref: String) -> Result<Vec<ViewedFile>, String> {
+    let project = project_id(&repo_path)?;
+    let connection = viewed_files_database(viewed_files_database_path()?)?;
+    read_viewed_files(&connection, &project, &base_ref, &head_ref)
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+fn set_file_viewed(
+    repo_path: String,
+    base_ref: String,
+    head_ref: String,
+    path: String,
+    oid: String,
+    viewed: bool,
+) -> Result<(), String> {
+    let project = project_id(&repo_path)?;
+    let connection = viewed_files_database(viewed_files_database_path()?)?;
+    write_viewed_file(&connection, &project, &base_ref, &head_ref, &path, &oid, viewed)
 }
 
 fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
@@ -4421,6 +4590,67 @@ mod tests {
             github_repository("https://github.com/octocat/hello-world.git"),
             Some(("github.com".to_string(), "octocat/hello-world".to_string()))
         );
+    }
+
+    #[test]
+    fn reads_the_blob_each_side_of_a_changed_file_is() {
+        let raw = b":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\0src/main.rs\0:000000 100644 0000000000000000000000000000000000000000 3333333333333333333333333333333333333333 A\0src/new.rs\0:100644 100644 4444444444444444444444444444444444444444 5555555555555555555555555555555555555555 R100\0src/old.rs\0src/renamed.rs\0";
+
+        let files = parse_changed_files(raw, "").unwrap();
+
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].status, "modified");
+        assert_eq!(files[0].old_oid.as_deref(), Some("1".repeat(40).as_str()));
+        assert_eq!(files[0].new_oid.as_deref(), Some("2".repeat(40).as_str()));
+        assert_eq!(files[1].status, "added");
+        assert_eq!(files[1].old_oid, None);
+        assert_eq!(files[1].new_path.as_deref(), Some("src/new.rs"));
+        assert_eq!(files[2].status, "renamed");
+        assert_eq!(files[2].old_path.as_deref(), Some("src/old.rs"));
+        assert_eq!(files[2].new_path.as_deref(), Some("src/renamed.rs"));
+        assert_eq!(files[2].new_oid.as_deref(), Some("5".repeat(40).as_str()));
+    }
+
+    #[test]
+    fn keeps_a_viewed_mark_against_the_blob_it_was_made_at() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate_viewed_files_database(&mut connection).unwrap();
+
+        write_viewed_file(&connection, "project", "main", "feature", "src/main.rs", "abc", true).unwrap();
+        write_viewed_file(&connection, "project", "main", "other", "src/main.rs", "def", true).unwrap();
+
+        let marks = read_viewed_files(&connection, "project", "main", "feature").unwrap();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].path, "src/main.rs");
+        assert_eq!(marks[0].oid, "abc");
+
+        write_viewed_file(&connection, "project", "main", "feature", "src/main.rs", "abc", false).unwrap();
+        assert!(read_viewed_files(&connection, "project", "main", "feature").unwrap().is_empty());
+    }
+
+    #[test]
+    fn forgets_the_comparisons_left_behind_by_the_ones_still_being_read() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate_viewed_files_database(&mut connection).unwrap();
+        for index in 0..VIEWED_COMPARISON_LIMIT + 5 {
+            connection
+                .execute(
+                    "INSERT INTO viewed_files (project_id, base_ref, head_ref, path, oid, viewed_at) VALUES ('project', 'main', ?1, 'src/main.rs', 'abc', ?2)",
+                    params![index.to_string(), index],
+                )
+                .unwrap();
+        }
+
+        prune_viewed_comparisons(&connection).unwrap();
+
+        let comparisons = connection
+            .query_row("SELECT COUNT(DISTINCT head_ref) FROM viewed_files", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(comparisons, VIEWED_COMPARISON_LIMIT);
+        let oldest = connection
+            .query_row("SELECT MIN(viewed_at) FROM viewed_files", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(oldest, 5);
     }
 
     #[test]
