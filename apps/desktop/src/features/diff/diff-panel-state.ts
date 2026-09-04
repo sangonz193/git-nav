@@ -38,10 +38,11 @@ export function isViewedFile(file: ChangedFile, headRef: string, viewed: Readonl
   return viewed.get(fileName(file)) === fileIdentity(file, headRef)
 }
 
-// A file that has been read is folded away, and the exceptions are the files whose fold was set by hand,
-// so a mark arriving after the comparison folds its file without a second pass over the list.
-export function isFoldedFile(file: ChangedFile, headRef: string, viewed: ReadonlyMap<string, string>, exceptions: ReadonlySet<string>, key: string) {
-  return isViewedFile(file, headRef, viewed) !== exceptions.has(key)
+// A file that has been read is folded away, so a mark arriving after the comparison folds its file
+// without a second pass over the list. A fold set by hand says what it is rather than what it differs
+// from, since the mark it would be read against may not have arrived yet.
+export function isFoldedFile(file: ChangedFile, headRef: string, viewed: ReadonlyMap<string, string>, folds: ReadonlyMap<string, boolean>, key: string) {
+  return folds.get(key) ?? isViewedFile(file, headRef, viewed)
 }
 
 // The counts describe the comparison, whatever the filter is showing of it, so two numbers beside each

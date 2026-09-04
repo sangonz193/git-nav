@@ -103,14 +103,21 @@ describe("isFoldedFile", () => {
 
   test("folds a file once it has been read", () => {
     const read = new Map([["src/index.ts", fileIdentity(file(), "feature")]])
-    expect(isFoldedFile(file(), "feature", read, new Set(), "key")).toBe(true)
-    expect(isFoldedFile(file(), "feature", new Map(), new Set(), "key")).toBe(false)
+    expect(isFoldedFile(file(), "feature", read, new Map(), "key")).toBe(true)
+    expect(isFoldedFile(file(), "feature", new Map(), new Map(), "key")).toBe(false)
   })
 
   test("lets a fold set by hand answer the mark either way", () => {
     const read = new Map([["src/index.ts", fileIdentity(file(), "feature")]])
-    expect(isFoldedFile(file(), "feature", read, new Set(["key"]), "key")).toBe(false)
-    expect(isFoldedFile(file(), "feature", new Map(), new Set(["key"]), "key")).toBe(true)
+    expect(isFoldedFile(file(), "feature", read, new Map([["key", false]]), "key")).toBe(false)
+    expect(isFoldedFile(file(), "feature", new Map(), new Map([["key", true]]), "key")).toBe(true)
+  })
+
+  test("holds a fold set by hand when the marks arrive after it", () => {
+    const read = new Map([["src/index.ts", fileIdentity(file(), "feature")]])
+    const folded = new Map([["key", true]])
+    expect(isFoldedFile(file(), "feature", new Map(), folded, "key")).toBe(true)
+    expect(isFoldedFile(file(), "feature", read, folded, "key")).toBe(true)
   })
 })
 

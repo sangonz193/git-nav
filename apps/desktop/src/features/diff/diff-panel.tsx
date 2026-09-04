@@ -383,7 +383,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const [mode, setMode] = useState(params.userPreferences?.mode === "unified" ? DiffModeEnum.Unified : DiffModeEnum.Split)
   const [wrap, setWrap] = useState(false)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
-  const [foldExceptions, setFoldExceptions] = useState<ReadonlySet<string>>(new Set())
+  const [handFolds, setHandFolds] = useState<ReadonlyMap<string, boolean>>(new Map())
   const [viewed, setViewed] = useState<ReadonlyMap<string, string>>(new Map())
   const [hideViewed, setHideViewed] = useState(params.userPreferences?.hideViewed ?? false)
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(params.userPreferences?.ignoreWhitespace ?? false)
@@ -420,8 +420,8 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const changedCount = comparison?.files.length ?? 0
 
   const isFolded = useCallback(
-    (file: ChangedFile) => isFoldedFile(file, refs.head, viewed, foldExceptions, fileKey(file)),
-    [foldExceptions, refs.head, viewed]
+    (file: ChangedFile) => isFoldedFile(file, refs.head, viewed, handFolds, fileKey(file)),
+    [handFolds, refs.head, viewed]
   )
 
   function toggleFileTree() {
@@ -521,7 +521,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
         if (!cancelled) {
           reset()
           setExpanded(new Set())
-          setFoldExceptions(new Set())
+          setHandFolds(new Map())
           setComparison(nextComparison)
           setError(null)
         }
@@ -684,12 +684,10 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
 
   function toggleCollapsed(file: ChangedFile) {
     const key = fileKey(file)
-    const next = new Set(foldExceptions)
-    if (!next.delete(key)) {
-      next.add(key)
-    }
+    const next = new Map(handFolds)
+    next.set(key, !isFolded(file))
     anchorFold(file)
-    setFoldExceptions(next)
+    setHandFolds(next)
   }
 
   // Reading a file is what folding it away means here, so the two move together. Only a file with a blob
@@ -707,10 +705,10 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     marksDuringLoad.current?.set(path, wasViewed ? null : identity)
     setViewed(nextViewed)
     // The mark decides the fold, so a fold that was set by hand has been answered.
-    const next = new Set(foldExceptions)
+    const next = new Map(handFolds)
     next.delete(fileKey(file))
     anchorFold(file)
-    setFoldExceptions(next)
+    setHandFolds(next)
     if (identity) {
       invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, path, identity, viewed: !wasViewed })
         .catch((message: unknown) => toast.error("Could not save which files were viewed.", { description: String(message) }))
@@ -719,7 +717,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
 
   function collapseAll(collapse: boolean) {
     pendingAnchor.current = activeKey
-    setFoldExceptions(new Set(files.filter((file) => isViewedFile(file, refs.head, viewed) !== collapse).map(fileKey)))
+    setHandFolds(new Map(files.map((file) => [fileKey(file), collapse])))
   }
 
   const selectFile = useCallback((file: ChangedFile) => {

@@ -25,6 +25,10 @@ type SerializedPanel = {
 
 const GRAPH_PARAM_KEYS = new Set(["name", "path", "selectedCommitHashes", "userPreferences"])
 const DIFF_PARAM_KEYS = new Set(["name", "path", "baseRef", "baseLabel", "headRef", "headLabel", "mergeBase", "selectedFilePath", "userPreferences"])
+// A preference the panel writes but this does not know is a whole layout thrown away, so the two lists
+// are the same list.
+const DIFF_BOOLEAN_PREFERENCES = ["fileTreeOpen", "hideViewed", "ignoreWhitespace", "wrap"] as const
+const DIFF_PREFERENCE_KEYS = new Set<string>([...DIFF_BOOLEAN_PREFERENCES, "mode"])
 
 type RestorablePanel = { id: string, api: { setActive(): void } }
 type RestorableContainer<Panel extends RestorablePanel> = {
@@ -77,10 +81,13 @@ function validDiffParams(params: PanelParams) {
   if (params.userPreferences === undefined) {
     return true
   }
-  return isObject(params.userPreferences)
-    && Object.keys(params.userPreferences).every((key) => key === "fileTreeOpen" || key === "mode")
-    && (params.userPreferences.fileTreeOpen === undefined || typeof params.userPreferences.fileTreeOpen === "boolean")
-    && (params.userPreferences.mode === undefined || params.userPreferences.mode === "split" || params.userPreferences.mode === "unified")
+  if (!isObject(params.userPreferences)) {
+    return false
+  }
+  const preferences = params.userPreferences
+  return Object.keys(preferences).every((key) => DIFF_PREFERENCE_KEYS.has(key))
+    && DIFF_BOOLEAN_PREFERENCES.every((key) => preferences[key] === undefined || typeof preferences[key] === "boolean")
+    && (preferences.mode === undefined || preferences.mode === "split" || preferences.mode === "unified")
 }
 
 export function usableRepositoryLayout(value: unknown, path: string): SerializedDockview | null {
