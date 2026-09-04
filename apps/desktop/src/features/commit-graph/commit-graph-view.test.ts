@@ -2,14 +2,16 @@ import { describe, expect, test } from "bun:test"
 
 import type { Commit, RowWorktree, StashEntry } from "./commit-graph"
 import {
+  applyViewConfigSetting,
   appendGraphRows,
   commitChips,
   DEFAULT_VIEW_CONFIG,
   isMarkedCommit,
-  parseViewConfig,
+  loadViewConfig,
   rowIndexOfCommit,
   searchGraph,
   type ChipContext,
+  viewConfigSettingKeys,
 } from "./commit-graph-view"
 
 function commit(hash: string, refs: string[] = [], activeLanes: boolean[] = [true]): Commit {
@@ -43,20 +45,236 @@ function context(overrides: Partial<ChipContext> = {}): ChipContext {
 const stash: StashEntry = { base: "c", branch: "main", date: "2026-01-01T00:00:00Z", message: "work in progress", name: "stash@{0}", sha: "s" }
 const worktree: RowWorktree = { branch: "feature", changedFiles: 0, head: "d", isCurrent: false, isOpen: false, name: "feature", path: "/tmp/feature", pendingOperation: null, untrackedFiles: 0 }
 
-describe("parseViewConfig", () => {
+describe("loadViewConfig", () => {
   test("falls back to the defaults when nothing is stored", () => {
-    expect(parseViewConfig(null)).toEqual(DEFAULT_VIEW_CONFIG)
+    return expect(
+      loadViewConfig(
+        async () => {
+          throw new Error("unreachable")
+        },
+        async () => undefined,
+        null,
+        "desktop"
+      )
+    ).resolves.toEqual(DEFAULT_VIEW_CONFIG)
   })
 
   test("falls back to the defaults when the stored value is not readable", () => {
-    expect(parseViewConfig("{oops")).toEqual(DEFAULT_VIEW_CONFIG)
+    return expect(
+      loadViewConfig(
+        async () => {
+          throw new Error("unreachable")
+        },
+        async () => undefined,
+        "{oops",
+        "desktop"
+      )
+    ).resolves.toEqual(DEFAULT_VIEW_CONFIG)
   })
 
-  test("keeps the defaults for anything the stored value leaves out", () => {
-    const config = parseViewConfig(JSON.stringify({ chipKinds: { tag: false }, collapseUnmarked: true }))
+  test("keeps the defaults for anything the legacy value leaves out", async () => {
+    const config = await loadViewConfig(
+      async () => {
+        throw new Error("unreachable")
+      },
+      async () => undefined,
+      JSON.stringify({ chipKinds: { tag: false }, collapseUnmarked: true }),
+      "desktop"
+    )
     expect(config.chipKinds).toEqual({ branch: true, remote: true, stash: true, tag: false })
     expect(config.collapseUnmarked).toBe(true)
     expect(config.cleanOptions).toEqual(DEFAULT_VIEW_CONFIG.cleanOptions)
+  })
+
+  test("ignores legacy values with the wrong types", async () => {
+    const config = await loadViewConfig(
+      async () => {
+        throw new Error("unreachable")
+      },
+      async () => undefined,
+      JSON.stringify({ chipKinds: { branch: "yes", tag: false }, cleanOptions: { deleteMergedBranches: 1 }, collapseUnmarked: "yes" }),
+      "desktop"
+    )
+    expect(config).toEqual({
+      chipKinds: { branch: true, remote: true, stash: true, tag: false },
+      cleanOptions: DEFAULT_VIEW_CONFIG.cleanOptions,
+      collapseUnmarked: false,
+    })
+  })
+})
+
+describe("loadViewConfig", () => {
+  test("migrates a readable legacy value into the client's individual settings", async () => {
+    const saved: [string, boolean][] = []
+    let removed = false
+    const config = await loadViewConfig(
+      async () => ({}),
+      async (key, value) => {
+        saved.push([key, value])
+      },
+      JSON.stringify({ chipKinds: { tag: false } }),
+      "browser-a",
+      () => {
+        removed = true
+      }
+    )
+    const keys = viewConfigSettingKeys("browser-a")
+    expect(config.chipKinds.tag).toBe(false)
+    expect(saved).toContainEqual([keys.chipKinds.tag, false])
+    expect(saved).toContainEqual([keys.chipKinds.branch, true])
+    expect(saved).toHaveLength(8)
+    expect(removed).toBe(true)
+  })
+
+  test("loads only the requested client's values", async () => {
+    const browserA = viewConfigSettingKeys("browser-a")
+    const browserB = viewConfigSettingKeys("browser-b")
+    const config = await loadViewConfig(
+      async () => ({
+        [browserA.chipKinds.tag]: false,
+        [browserB.chipKinds.tag]: true,
+      }),
+      async () => undefined,
+      null,
+      "browser-a"
+    )
+    expect(config.chipKinds.tag).toBe(false)
+  })
+
+  test("loads each setting independently", async () => {
+    const keys = viewConfigSettingKeys("desktop")
+    const config = await loadViewConfig(
+      async () => ({
+        [keys.chipKinds.tag]: false,
+        [keys.cleanOptions.deleteMergedBranches]: true,
+        [keys.collapseUnmarked]: true,
+      }),
+      async () => undefined,
+      null,
+      "desktop"
+    )
+    expect(config.chipKinds.tag).toBe(false)
+    expect(config.chipKinds.branch).toBe(true)
+    expect(config.cleanOptions.deleteMergedBranches).toBe(true)
+    expect(config.collapseUnmarked).toBe(true)
+  })
+
+  test("ignores a per-setting value with the wrong type", async () => {
+    const keys = viewConfigSettingKeys("desktop")
+    const config = await loadViewConfig(
+      async () => ({ [keys.chipKinds.tag]: "no" }),
+      async () => undefined,
+      null,
+      "desktop"
+    )
+    expect(config.chipKinds.tag).toBe(true)
+  })
+
+  test("does not overwrite settings that already migrated", async () => {
+    const keys = viewConfigSettingKeys("desktop")
+    const saved: [string, boolean][] = []
+    const config = await loadViewConfig(
+      async () => ({ [keys.chipKinds.tag]: true }),
+      async (key, value) => {
+        saved.push([key, value])
+      },
+      JSON.stringify({ chipKinds: { branch: false, tag: false } }),
+      "desktop"
+    )
+    expect(config.chipKinds).toEqual({ branch: false, remote: true, stash: true, tag: true })
+    expect(saved.some(([key]) => key === keys.chipKinds.tag)).toBe(false)
+    expect(saved).toHaveLength(7)
+  })
+
+  test("replaces an invalid stored setting during migration", async () => {
+    const keys = viewConfigSettingKeys("desktop")
+    const saved: [string, boolean][] = []
+    const config = await loadViewConfig(
+      async () => ({ [keys.chipKinds.tag]: "no" }),
+      async (key, value) => {
+        saved.push([key, value])
+      },
+      JSON.stringify({ chipKinds: { tag: false } }),
+      "desktop"
+    )
+    expect(config.chipKinds.tag).toBe(false)
+    expect(saved).toContainEqual([keys.chipKinds.tag, false])
+    expect(saved).toHaveLength(8)
+  })
+
+  test("uses the legacy value when the settings store is unreachable", async () => {
+    const config = await loadViewConfig(
+      async () => {
+        throw new Error("unreachable")
+      },
+      async () => undefined,
+      JSON.stringify({ chipKinds: { stash: false } }),
+      "desktop"
+    )
+    expect(config.chipKinds.stash).toBe(false)
+  })
+
+  test("does not migrate an unreadable legacy value", async () => {
+    const saved: unknown[] = []
+    await loadViewConfig(
+      async () => ({}),
+      async (key, value) => {
+        saved.push([key, value])
+      },
+      "{oops",
+      "desktop"
+    )
+    expect(saved).toEqual([])
+  })
+
+  test("keeps the legacy value when migration fails and reports the error", async () => {
+    const failures: unknown[] = []
+    let removed = false
+    await loadViewConfig(
+      async () => ({}),
+      async () => {
+        throw new Error("unwritable")
+      },
+      JSON.stringify({ collapseUnmarked: true }),
+      "desktop",
+      () => {
+        removed = true
+      },
+      (error) => {
+        failures.push(error)
+      }
+    )
+    expect(failures).toHaveLength(8)
+    expect(removed).toBe(false)
+  })
+})
+
+describe("applyViewConfigSetting", () => {
+  test("merges a broadcast setting without replacing other values", () => {
+    const keys = viewConfigSettingKeys("desktop")
+    const current = {
+      ...DEFAULT_VIEW_CONFIG,
+      chipKinds: { ...DEFAULT_VIEW_CONFIG.chipKinds, tag: false },
+    }
+    const next = applyViewConfigSetting(
+      current,
+      "desktop",
+      keys.chipKinds.branch,
+      false
+    )
+    expect(next.chipKinds).toEqual({
+      branch: false,
+      remote: true,
+      stash: true,
+      tag: false,
+    })
+  })
+
+  test("ignores the emitting window's unchanged value", () => {
+    const key = viewConfigSettingKeys("desktop").chipKinds.tag
+    expect(applyViewConfigSetting(DEFAULT_VIEW_CONFIG, "desktop", key, true)).toBe(
+      DEFAULT_VIEW_CONFIG
+    )
   })
 })
 

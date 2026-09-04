@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 #[cfg(any(target_os = "linux", test))]
 use std::ffi::{OsStr, OsString};
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet},
     env, fs,
     hash::{Hash, Hasher},
     io::{BufRead, BufReader},
@@ -15,8 +15,8 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use tauri::{
-    ipc::Channel, window::Color, AppHandle, Manager, RunEvent, Theme, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
+    ipc::Channel, window::Color, AppHandle, Emitter, Manager, RunEvent, Theme, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
 mod server;
@@ -88,9 +88,12 @@ commands![
     stash_changes,
     stash_action,
     undo_ref_updates,
+    settings,
+    set_setting,
 ];
 
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
+const SETTING_CHANGED_EVENT: &str = "setting-changed";
 const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
@@ -433,8 +436,103 @@ fn recent_repositories_path() -> Result<PathBuf, String> {
     data_dir().map(|dir| dir.join("recent-repositories.json"))
 }
 
+fn settings_path() -> Result<PathBuf, String> {
+    data_dir().map(|dir| dir.join("settings.json"))
+}
+
 fn pull_request_database_path() -> Result<PathBuf, String> {
     data_dir().map(|dir| dir.join("pull-requests.sqlite3"))
+}
+
+enum StoredSettings {
+    Valid(BTreeMap<String, serde_json::Value>),
+    Malformed,
+}
+
+#[derive(Clone, Serialize)]
+struct SettingChanged {
+    key: String,
+    value: serde_json::Value,
+}
+
+fn read_settings(path: &Path) -> Result<StoredSettings, String> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(StoredSettings::Valid(BTreeMap::new()))
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(match serde_json::from_str(&contents) {
+        Ok(settings) => StoredSettings::Valid(settings),
+        Err(_) => StoredSettings::Malformed,
+    })
+}
+
+fn load_settings() -> Result<BTreeMap<String, serde_json::Value>, String> {
+    Ok(match read_settings(&settings_path()?)? {
+        StoredSettings::Valid(settings) => settings,
+        StoredSettings::Malformed => BTreeMap::new(),
+    })
+}
+
+fn malformed_settings_path(path: &Path) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let name = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("settings");
+    for suffix in 0.. {
+        let candidate = path.with_file_name(format!("{name}.invalid-{timestamp}-{suffix}.json"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+fn save_setting_at_then(
+    path: &Path,
+    key: String,
+    value: serde_json::Value,
+    after_save: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    use fs2::FileExt;
+
+    let lock_path = path.with_extension("lock");
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(lock_path)
+        .map_err(|error| error.to_string())?;
+    lock.lock_exclusive().map_err(|error| error.to_string())?;
+    let mut settings = match read_settings(path)? {
+        StoredSettings::Valid(settings) => settings,
+        StoredSettings::Malformed => {
+            fs::rename(path, malformed_settings_path(path)).map_err(|error| error.to_string())?;
+            BTreeMap::new()
+        }
+    };
+    settings.insert(key, value);
+    let contents = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
+    let temporary_path = path.with_extension("json.tmp");
+    fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
+    fs::rename(temporary_path, path).map_err(|error| error.to_string())?;
+    if let Err(error) = after_save() {
+        log::warn!("Could not broadcast saved setting: {error}");
+    }
+    Ok(())
+}
+
+fn save_setting_at(path: &Path, key: String, value: serde_json::Value) -> Result<(), String> {
+    save_setting_at_then(path, key, value, || Ok(()))
+}
+
+fn save_setting(key: String, value: serde_json::Value) -> Result<(), String> {
+    save_setting_at(&settings_path()?, key, value)
 }
 
 fn load_recent_paths() -> Result<Vec<String>, String> {
@@ -1501,6 +1599,19 @@ fn remember_repository(path: &str, open_worktrees: &OpenWorktrees) -> Result<Pro
 #[tauri::command]
 fn recent_projects(open_worktrees: tauri::State<OpenWorktrees>) -> Result<Vec<Project>, String> {
     recent_project_list(&open_worktrees)
+}
+
+#[tauri::command]
+fn settings() -> Result<BTreeMap<String, serde_json::Value>, String> {
+    load_settings()
+}
+
+#[tauri::command]
+fn set_setting(app: AppHandle, key: String, value: serde_json::Value) -> Result<(), String> {
+    save_setting_at_then(&settings_path()?, key.clone(), value.clone(), || {
+        app.emit(SETTING_CHANGED_EVENT, SettingChanged { key, value })
+            .map_err(|error| error.to_string())
+    })
 }
 
 #[tauri::command]
@@ -3279,6 +3390,66 @@ mod tests {
 
     fn joined_paths<const N: usize>(paths: [&str; N]) -> OsString {
         env::join_paths(paths).unwrap()
+    }
+
+    #[test]
+    fn preserves_malformed_settings_before_starting_a_new_store() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            env::temp_dir().join(format!("git-nav-settings-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+        fs::write(&path, "{malformed").unwrap();
+
+        save_setting_at(&path, "new-key".to_string(), serde_json::json!(true)).unwrap();
+
+        let settings = match read_settings(&path).unwrap() {
+            StoredSettings::Valid(settings) => settings,
+            StoredSettings::Malformed => panic!("new settings store is malformed"),
+        };
+        assert_eq!(settings.get("new-key"), Some(&serde_json::json!(true)));
+        let backups = fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.invalid-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), "{malformed");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn keeps_a_saved_setting_when_the_notification_fails() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            env::temp_dir().join(format!("git-nav-settings-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+
+        save_setting_at_then(&path, "new-key".to_string(), serde_json::json!(true), || {
+            Err("could not notify".to_string())
+        })
+        .unwrap();
+
+        let settings = match read_settings(&path).unwrap() {
+            StoredSettings::Valid(settings) => settings,
+            StoredSettings::Malformed => panic!("new settings store is malformed"),
+        };
+        assert_eq!(settings.get("new-key"), Some(&serde_json::json!(true)));
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { createSettingsStore, loadSettings, saveSetting } from "@/lib/settings"
 
 import { detachedWorktrees, displayRefs, isCurrentCheckout, rowChips, type BranchPullRequest, type BranchSync, type Commit, type RowChip, type RowWorktree, type StashEntry } from "./commit-graph"
 
@@ -8,6 +8,11 @@ export type ViewConfig = {
   chipKinds: Record<ChipKind, boolean>
   cleanOptions: CleanOptions
   collapseUnmarked: boolean
+}
+export type ViewConfigChange = {
+  chipKinds?: Partial<Record<ChipKind, boolean>>
+  cleanOptions?: Partial<CleanOptions>
+  collapseUnmarked?: boolean
 }
 
 export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
@@ -23,36 +28,277 @@ export const DEFAULT_VIEW_CONFIG: ViewConfig = {
   collapseUnmarked: false,
 }
 
-const VIEW_CONFIG_KEY = "git-nav.commit-graph.view"
+const LEGACY_VIEW_CONFIG_KEY = "git-nav.commit-graph.view"
 const DEFAULT_REMOTES = ["origin"]
 const SEARCH_LIMIT = 12
 
-export function parseViewConfig(stored: string | null): ViewConfig {
-  if (!stored) {
-    return DEFAULT_VIEW_CONFIG
-  }
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function booleanOr(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback
+}
+
+function parsedViewConfig(stored: unknown): ViewConfig | null {
   try {
-    const value = JSON.parse(stored) as Partial<ViewConfig>
+    const value = typeof stored === "string" ? JSON.parse(stored) : stored
+    if (!isObject(value)) {
+      return null
+    }
+    const chipKinds = isObject(value.chipKinds) ? value.chipKinds : {}
+    const cleanOptions = isObject(value.cleanOptions) ? value.cleanOptions : {}
     return {
-      chipKinds: { ...DEFAULT_VIEW_CONFIG.chipKinds, ...value.chipKinds },
-      cleanOptions: { ...DEFAULT_VIEW_CONFIG.cleanOptions, ...value.cleanOptions },
-      collapseUnmarked: value.collapseUnmarked === true,
+      chipKinds: {
+        branch: booleanOr(
+          chipKinds.branch,
+          DEFAULT_VIEW_CONFIG.chipKinds.branch
+        ),
+        remote: booleanOr(
+          chipKinds.remote,
+          DEFAULT_VIEW_CONFIG.chipKinds.remote
+        ),
+        stash: booleanOr(chipKinds.stash, DEFAULT_VIEW_CONFIG.chipKinds.stash),
+        tag: booleanOr(chipKinds.tag, DEFAULT_VIEW_CONFIG.chipKinds.tag),
+      },
+      cleanOptions: {
+        deleteMergedPullRequestBranches: booleanOr(
+          cleanOptions.deleteMergedPullRequestBranches,
+          DEFAULT_VIEW_CONFIG.cleanOptions.deleteMergedPullRequestBranches
+        ),
+        deleteMergedBranches: booleanOr(
+          cleanOptions.deleteMergedBranches,
+          DEFAULT_VIEW_CONFIG.cleanOptions.deleteMergedBranches
+        ),
+        deleteSquashMergedBranches: booleanOr(
+          cleanOptions.deleteSquashMergedBranches,
+          DEFAULT_VIEW_CONFIG.cleanOptions.deleteSquashMergedBranches
+        ),
+      },
+      collapseUnmarked: booleanOr(
+        value.collapseUnmarked,
+        DEFAULT_VIEW_CONFIG.collapseUnmarked
+      ),
     }
   } catch {
-    return DEFAULT_VIEW_CONFIG
+    return null
   }
 }
 
+export function viewConfigSettingKeys(clientId: string) {
+  const prefix = `git-nav.clients.${clientId}.commit-graph.view`
+  return {
+    chipKinds: {
+      branch: `${prefix}.chip-kinds.branch`,
+      remote: `${prefix}.chip-kinds.remote`,
+      stash: `${prefix}.chip-kinds.stash`,
+      tag: `${prefix}.chip-kinds.tag`,
+    },
+    cleanOptions: {
+      deleteMergedPullRequestBranches: `${prefix}.clean-options.delete-merged-pull-request-branches`,
+      deleteMergedBranches: `${prefix}.clean-options.delete-merged-branches`,
+      deleteSquashMergedBranches: `${prefix}.clean-options.delete-squash-merged-branches`,
+    },
+    collapseUnmarked: `${prefix}.collapse-unmarked`,
+  }
+}
+
+function viewConfigSettings(
+  config: ViewConfig,
+  clientId: string
+): [string, boolean][] {
+  const keys = viewConfigSettingKeys(clientId)
+  return [
+    [keys.chipKinds.branch, config.chipKinds.branch],
+    [keys.chipKinds.remote, config.chipKinds.remote],
+    [keys.chipKinds.stash, config.chipKinds.stash],
+    [keys.chipKinds.tag, config.chipKinds.tag],
+    [
+      keys.cleanOptions.deleteMergedPullRequestBranches,
+      config.cleanOptions.deleteMergedPullRequestBranches,
+    ],
+    [
+      keys.cleanOptions.deleteMergedBranches,
+      config.cleanOptions.deleteMergedBranches,
+    ],
+    [
+      keys.cleanOptions.deleteSquashMergedBranches,
+      config.cleanOptions.deleteSquashMergedBranches,
+    ],
+    [keys.collapseUnmarked, config.collapseUnmarked],
+  ]
+}
+
+function viewConfigFromSettings(
+  settings: Record<string, unknown>,
+  clientId: string,
+  fallback: ViewConfig
+) {
+  const keys = viewConfigSettingKeys(clientId)
+  return {
+    chipKinds: {
+      branch: booleanOr(
+        settings[keys.chipKinds.branch],
+        fallback.chipKinds.branch
+      ),
+      remote: booleanOr(
+        settings[keys.chipKinds.remote],
+        fallback.chipKinds.remote
+      ),
+      stash: booleanOr(
+        settings[keys.chipKinds.stash],
+        fallback.chipKinds.stash
+      ),
+      tag: booleanOr(settings[keys.chipKinds.tag], fallback.chipKinds.tag),
+    },
+    cleanOptions: {
+      deleteMergedPullRequestBranches: booleanOr(
+        settings[keys.cleanOptions.deleteMergedPullRequestBranches],
+        fallback.cleanOptions.deleteMergedPullRequestBranches
+      ),
+      deleteMergedBranches: booleanOr(
+        settings[keys.cleanOptions.deleteMergedBranches],
+        fallback.cleanOptions.deleteMergedBranches
+      ),
+      deleteSquashMergedBranches: booleanOr(
+        settings[keys.cleanOptions.deleteSquashMergedBranches],
+        fallback.cleanOptions.deleteSquashMergedBranches
+      ),
+    },
+    collapseUnmarked: booleanOr(
+      settings[keys.collapseUnmarked],
+      fallback.collapseUnmarked
+    ),
+  }
+}
+
+function mergeViewConfig(
+  config: ViewConfig,
+  change: ViewConfigChange
+): ViewConfig {
+  return {
+    ...config,
+    ...change,
+    chipKinds: { ...config.chipKinds, ...change.chipKinds },
+    cleanOptions: { ...config.cleanOptions, ...change.cleanOptions },
+  }
+}
+
+export function applyViewConfigSetting(
+  config: ViewConfig,
+  clientId: string,
+  key: string,
+  value: unknown
+) {
+  if (typeof value !== "boolean") {
+    return config
+  }
+  const current = viewConfigSettings(config, clientId).find(
+    ([settingKey]) => settingKey === key
+  )
+  if (!current || current[1] === value) {
+    return config
+  }
+  return viewConfigFromSettings({ [key]: value }, clientId, config)
+}
+
+export async function loadViewConfig(
+  settings: () => Promise<Record<string, unknown>>,
+  setSetting: (key: string, value: boolean) => Promise<unknown>,
+  local: string | null,
+  clientId: string,
+  removeLocal: () => void = () => undefined,
+  onSaveError: (error: unknown) => void = () => undefined
+) {
+  const legacy = parsedViewConfig(local)
+  try {
+    const stored = await settings()
+    const config = viewConfigFromSettings(
+      stored,
+      clientId,
+      legacy ?? DEFAULT_VIEW_CONFIG
+    )
+    if (!legacy) {
+      return config
+    }
+    let failed = false
+    for (const [key, value] of viewConfigSettings(legacy, clientId)) {
+      if (typeof stored[key] === "boolean") {
+        continue
+      }
+      try {
+        await setSetting(key, value)
+      } catch (error) {
+        failed = true
+        onSaveError(error)
+      }
+    }
+    if (!failed) {
+      removeLocal()
+    }
+    return config
+  } catch {
+    return legacy ?? DEFAULT_VIEW_CONFIG
+  }
+}
+
+function legacyViewConfig() {
+  try {
+    return localStorage.getItem(LEGACY_VIEW_CONFIG_KEY)
+  } catch {
+    return null
+  }
+}
+
+function removeLegacyViewConfig() {
+  try {
+    localStorage.removeItem(LEGACY_VIEW_CONFIG_KEY)
+  } catch {
+    return
+  }
+}
+
+function viewConfigChanges(change: ViewConfigChange, clientId: string) {
+  const keys = viewConfigSettingKeys(clientId)
+  const changedSettings: [string, boolean][] = []
+  for (const [kind, value] of Object.entries(change.chipKinds ?? {})) {
+    if (typeof value === "boolean") {
+      changedSettings.push([keys.chipKinds[kind as ChipKind], value])
+    }
+  }
+  for (const [option, value] of Object.entries(change.cleanOptions ?? {})) {
+    if (typeof value === "boolean") {
+      changedSettings.push([
+        keys.cleanOptions[option as keyof CleanOptions],
+        value,
+      ])
+    }
+  }
+  if (typeof change.collapseUnmarked === "boolean") {
+    changedSettings.push([keys.collapseUnmarked, change.collapseUnmarked])
+  }
+  return changedSettings
+}
+
+const viewConfigSettingsStore = createSettingsStore({
+  apply: applyViewConfigSetting,
+  changes: viewConfigChanges,
+  load: (clientId, onSaveError) =>
+    loadViewConfig(
+      loadSettings,
+      saveSetting,
+      legacyViewConfig(),
+      clientId,
+      removeLegacyViewConfig,
+      onSaveError
+    ),
+  saveErrorMessage: "Could not save graph settings.",
+  syncErrorMessage: "Could not synchronize graph settings.",
+  update: mergeViewConfig,
+})
+
 export function useViewConfig() {
-  const [config, setConfig] = useState(() => parseViewConfig(localStorage.getItem(VIEW_CONFIG_KEY)))
-  const updateConfig = useCallback((change: Partial<ViewConfig>) => {
-    setConfig((current) => {
-      const next = { ...current, ...change }
-      localStorage.setItem(VIEW_CONFIG_KEY, JSON.stringify(next))
-      return next
-    })
-  }, [])
-  return [config, updateConfig] as const
+  return viewConfigSettingsStore.useSettings()
 }
 
 export type ChipContext = {
