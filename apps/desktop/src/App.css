@@ -110,7 +110,7 @@ body {
 
 /* Without this the panels hand their overscroll to the viewport, which pulls to refresh on touch. */
 .commit-graph-scroll,
-.diff-file-list,
+.diff-file-tree,
 .diff-view-container {
   overscroll-behavior: contain;
 }
@@ -785,13 +785,33 @@ button.commit-ref {
 
 .diff-file-list {
   border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
   height: 100%;
-  overflow: auto;
-  padding: 4px;
+  min-height: 0;
 }
 
 .diff-drawer .diff-file-list {
   border-right: 0;
+}
+
+.diff-file-total {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+}
+
+.diff-file-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
 }
 
 .diff-file {
@@ -843,6 +863,15 @@ button.commit-ref {
   .diff-folder-button {
     padding-block: 8px;
   }
+}
+
+.diff-file-stat {
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .diff-file-status {
@@ -897,14 +926,6 @@ button.commit-ref {
 .diff-file-card-path {
   font-size: 0.8125rem;
   min-width: 0;
-}
-
-.diff-file-card-stat {
-  display: flex;
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  gap: 6px;
-  margin-left: auto;
 }
 
 .diff-file-card-notice {
