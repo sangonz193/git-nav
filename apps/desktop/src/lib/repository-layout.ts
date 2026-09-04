@@ -1,5 +1,7 @@
 import type { SerializedDockview } from "dockview-react"
 
+import type { DiffPanelParams, DiffPanelUserPreferences, GraphPanelParams, GraphPanelUserPreferences } from "./panel-params"
+
 import { createUserWinningRestore } from "./pending-restore"
 import { WORKTREE_REF } from "./repository-constants"
 
@@ -23,12 +25,6 @@ type SerializedPanel = {
   params?: PanelParams
 }
 
-const GRAPH_PARAM_KEYS = new Set(["name", "path", "selectedCommitHashes", "userPreferences"])
-const DIFF_PARAM_KEYS = new Set(["name", "path", "baseRef", "baseLabel", "headRef", "headLabel", "mergeBase", "selectedFilePath", "userPreferences"])
-// A preference the panel writes but this does not know is a whole layout thrown away, so the two lists
-// are the same list.
-const DIFF_BOOLEAN_PREFERENCES = ["fileTreeOpen", "hideViewed", "ignoreWhitespace", "wrap"] as const
-const DIFF_PREFERENCE_KEYS = new Set<string>([...DIFF_BOOLEAN_PREFERENCES, "mode"])
 
 type RestorablePanel = { id: string, api: { setActive(): void } }
 type RestorableContainer<Panel extends RestorablePanel> = {
@@ -43,51 +39,72 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function validColumnWidths(value: unknown) {
-  return isObject(value) && Object.values(value).every((width) => typeof width === "number" && Number.isFinite(width) && width > 0)
+type Check<Value> = (value: unknown) => value is Value
+// A field the panel writes that this cannot read fails the panel, and a failed panel discards the whole
+// layout. Naming the checks after the type they read is what keeps a new field from being written before
+// it can be read back.
+type Checks<Fields> = { [Key in keyof Required<Fields>]: Check<Required<Fields>[Key]> }
+type RequiredKeys<Fields> = { [Key in keyof Fields]-?: object extends Pick<Fields, Key> ? never : Key }[keyof Fields]
+type Mandatory<Fields> = Record<RequiredKeys<Fields>, true>
+
+const isString: Check<string> = (value) => typeof value === "string"
+const isBoolean: Check<boolean> = (value) => typeof value === "boolean"
+
+const DIFF_PREFERENCE_MANDATORY = {} satisfies Mandatory<DiffPanelUserPreferences>
+const GRAPH_PREFERENCE_MANDATORY = {} satisfies Mandatory<GraphPanelUserPreferences>
+const DIFF_PARAM_MANDATORY = { baseRef: true, headRef: true, name: true, path: true } satisfies Mandatory<DiffPanelParams>
+const GRAPH_PARAM_MANDATORY = { name: true, path: true } satisfies Mandatory<GraphPanelParams>
+
+// A guard may narrow to less than the field allows and still satisfy it, so the values of a field that is
+// a union are listed against the union itself rather than repeated inside a guard.
+const DIFF_MODES = { split: true, unified: true } satisfies Record<NonNullable<DiffPanelUserPreferences["mode"]>, true>
+
+const DIFF_PREFERENCE_CHECKS = {
+  fileTreeOpen: isBoolean,
+  hideViewed: isBoolean,
+  ignoreWhitespace: isBoolean,
+  mode: (value): value is keyof typeof DIFF_MODES => typeof value === "string" && Object.hasOwn(DIFF_MODES, value),
+  wrap: isBoolean,
+} satisfies Checks<DiffPanelUserPreferences>
+
+const GRAPH_PREFERENCE_CHECKS = {
+  columnWidths: (value): value is Record<string, number> =>
+    isObject(value) && Object.values(value).every((width) => typeof width === "number" && Number.isFinite(width) && width > 0),
+} satisfies Checks<GraphPanelUserPreferences>
+
+const DIFF_PARAM_CHECKS = {
+  name: isString,
+  path: isString,
+  baseRef: isString,
+  baseLabel: isString,
+  headRef: isString,
+  headLabel: isString,
+  mergeBase: isBoolean,
+  selectedFilePath: (value): value is string | null => value === null || isString(value),
+  userPreferences: (value): value is DiffPanelUserPreferences => validFields(value, DIFF_PREFERENCE_CHECKS, DIFF_PREFERENCE_MANDATORY),
+} satisfies Checks<DiffPanelParams>
+
+const GRAPH_PARAM_CHECKS = {
+  name: isString,
+  path: isString,
+  selectedCommitHashes: (value): value is string[] => Array.isArray(value) && value.every(isString),
+  userPreferences: (value): value is GraphPanelUserPreferences => validFields(value, GRAPH_PREFERENCE_CHECKS, GRAPH_PREFERENCE_MANDATORY),
+} satisfies Checks<GraphPanelParams>
+
+function validFields(value: unknown, checks: Record<string, Check<unknown>>, mandatory: Record<string, true>) {
+  if (!isObject(value)) {
+    return false
+  }
+  return Object.keys(mandatory).every((key) => value[key] !== undefined)
+    && Object.entries(value).every(([key, field]) => Object.hasOwn(checks, key) && checks[key](field))
 }
 
 function validGraphParams(params: PanelParams, path: string) {
-  if (params.path !== path || !Object.keys(params).every((key) => GRAPH_PARAM_KEYS.has(key))) {
-    return false
-  }
-  if (params.selectedCommitHashes !== undefined && (!Array.isArray(params.selectedCommitHashes) || !params.selectedCommitHashes.every((hash) => typeof hash === "string"))) {
-    return false
-  }
-  if (params.userPreferences === undefined) {
-    return true
-  }
-  return isObject(params.userPreferences)
-    && Object.keys(params.userPreferences).every((key) => key === "columnWidths")
-    && (params.userPreferences.columnWidths === undefined || validColumnWidths(params.userPreferences.columnWidths))
+  return params.path === path && validFields(params, GRAPH_PARAM_CHECKS, GRAPH_PARAM_MANDATORY)
 }
 
 function validDiffParams(params: PanelParams) {
-  if (!Object.keys(params).every((key) => DIFF_PARAM_KEYS.has(key)) || typeof params.baseRef !== "string" || typeof params.headRef !== "string") {
-    return false
-  }
-  if (params.baseLabel !== undefined && typeof params.baseLabel !== "string") {
-    return false
-  }
-  if (params.headLabel !== undefined && typeof params.headLabel !== "string") {
-    return false
-  }
-  if (params.mergeBase !== undefined && typeof params.mergeBase !== "boolean") {
-    return false
-  }
-  if (params.selectedFilePath !== undefined && params.selectedFilePath !== null && typeof params.selectedFilePath !== "string") {
-    return false
-  }
-  if (params.userPreferences === undefined) {
-    return true
-  }
-  if (!isObject(params.userPreferences)) {
-    return false
-  }
-  const preferences = params.userPreferences
-  return Object.keys(preferences).every((key) => DIFF_PREFERENCE_KEYS.has(key))
-    && DIFF_BOOLEAN_PREFERENCES.every((key) => preferences[key] === undefined || typeof preferences[key] === "boolean")
-    && (preferences.mode === undefined || preferences.mode === "split" || preferences.mode === "unified")
+  return validFields(params, DIFF_PARAM_CHECKS, DIFF_PARAM_MANDATORY)
 }
 
 export function usableRepositoryLayout(value: unknown, path: string): SerializedDockview | null {

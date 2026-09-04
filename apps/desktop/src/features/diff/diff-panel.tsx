@@ -18,7 +18,7 @@ import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from 
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
 import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, rangeMarker, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
 import { changedFilesLabel, fileIdentity, fileName, initialDiffLayout, isFoldedFile, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
-import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
+import type { DiffPanelParams, DiffPanelUserPreferences } from "@/lib/panel-params"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
 const LARGE_DIFF_LINES = 1200
