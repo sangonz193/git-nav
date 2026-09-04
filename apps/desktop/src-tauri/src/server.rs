@@ -9,15 +9,16 @@ use axum::{
     routing::{get, post, MethodRouter},
     Json, Router,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::compression::{
     predicate::{NotForContentType, Predicate, SizeAbove},
@@ -46,7 +47,8 @@ fn asset(path: &str) -> Option<&'static [u8]> {
 
 const TOKEN_COOKIE: &str = "git_nav_token";
 
-pub struct Options {
+#[derive(Clone)]
+pub(crate) struct Options {
     pub host: IpAddr,
     pub port: u16,
     pub token: Option<String>,
@@ -54,7 +56,6 @@ pub struct Options {
 }
 
 struct ServerState {
-    // Server mode has no windows to track, so every worktree reports itself as closed.
     open_worktrees: OpenWorktrees,
     token: Option<String>,
 }
@@ -170,16 +171,59 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::set_setting => Exposure::Api(post(set_setting)),
         IpcCommand::repository_layout => Exposure::Api(post(repository_layout)),
         IpcCommand::save_repository_layout => Exposure::Api(post(save_repository_layout)),
+        IpcCommand::start_sharing | IpcCommand::stop_sharing | IpcCommand::sharing_state => {
+            Exposure::DesktopOnly
+        }
     }
 }
 
-pub async fn serve(options: Options) -> Result<(), String> {
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharingState {
+    pub sharing: bool,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub entry_urls: Vec<String>,
+}
+
+pub(crate) struct RunningServer {
+    options: Options,
+    state: SharingState,
+    shutdown: Option<oneshot::Sender<()>>,
+}
+
+impl RunningServer {
+    pub(crate) fn options(&self) -> &Options {
+        &self.options
+    }
+
+    pub(crate) fn state(&self) -> SharingState {
+        self.state.clone()
+    }
+
+    pub(crate) fn stop(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+}
+
+struct BoundServer {
+    options: Options,
+    state: SharingState,
+    listener: std::net::TcpListener,
+    router: Router,
+}
+
+// Binding synchronously lets the single-instance callback start a server from inside the async
+// runtime, where block_on panics.
+fn bind(options: Options, open_worktrees: OpenWorktrees) -> Result<BoundServer, String> {
     if asset("index.html").is_none() {
         return Err("The web assets are missing. Build the frontend before serving.".to_string());
     }
 
     let state = Arc::new(ServerState {
-        open_worktrees: OpenWorktrees::default(),
+        open_worktrees,
         token: options.token.clone(),
     });
 
@@ -191,7 +235,7 @@ pub async fn serve(options: Options) -> Result<(), String> {
         }
     }
 
-    let app = Router::new()
+    let router = Router::new()
         .nest("/api", api)
         .fallback(get(static_asset))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate))
@@ -205,19 +249,69 @@ pub async fn serve(options: Options) -> Result<(), String> {
         .with_state(state);
 
     let address = SocketAddr::new(options.host, options.port);
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .map_err(|error| format!("Could not bind {address}: {error}"))?;
+    let listener = std::net::TcpListener::bind(address).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AddrInUse {
+            format!("Port {} is already in use.", options.port)
+        } else {
+            format!("Could not bind port {}: {error}", options.port)
+        }
+    })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
     let address = listener.local_addr().map_err(|error| error.to_string())?;
+    let state = SharingState {
+        sharing: true,
+        host: Some(address.ip().to_string()),
+        port: Some(address.port()),
+        entry_urls: entry_urls(&address, options.token.as_deref(), options.public_url.as_deref()),
+    };
+    Ok(BoundServer {
+        options,
+        state,
+        listener,
+        router,
+    })
+}
 
-    for url in entry_urls(&address, options.token.as_deref(), options.public_url.as_deref()) {
+pub(crate) fn start(options: Options, open_worktrees: OpenWorktrees) -> Result<RunningServer, String> {
+    let BoundServer { options, state, listener, router } = bind(options, open_worktrees)?;
+    let (shutdown, stopped) = oneshot::channel();
+    let stopped = async { let _ = stopped.await; }.shared();
+    tauri::async_runtime::spawn(async move {
+        let result = match tokio::net::TcpListener::from_std(listener) {
+            Ok(listener) => {
+                let server = axum::serve(listener, router).with_graceful_shutdown(stopped.clone());
+                tokio::select! {
+                    result = server => result.map_err(|error| error.to_string()),
+                    _ = async move {
+                        stopped.await;
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    } => {
+                        log::warn!("Git Nav sharing server did not shut down within five seconds.");
+                        Ok(())
+                    }
+                }
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        if let Err(error) = result {
+            log::error!("Git Nav sharing server stopped unexpectedly: {error}");
+        }
+    });
+    Ok(RunningServer { options, state, shutdown: Some(shutdown) })
+}
+
+pub async fn serve(options: Options) -> Result<(), String> {
+    let BoundServer { state, listener, router, .. } = bind(options, OpenWorktrees::default())?;
+    for url in &state.entry_urls {
         println!("Git Nav is serving at {url}");
     }
-    if options.host == IpAddr::V4(Ipv4Addr::LOCALHOST) {
+    if state.host.as_deref() == Some("127.0.0.1") {
         println!("Pass --host 0.0.0.0 to reach it from other devices on your network.");
     }
-
-    axum::serve(listener, app)
+    let listener = tokio::net::TcpListener::from_std(listener).map_err(|error| error.to_string())?;
+    axum::serve(listener, router)
         .await
         .map_err(|error| error.to_string())
 }
@@ -673,6 +767,23 @@ mod tests {
         );
 
         assert_eq!(urls, vec!["http://[::1]:4300/?token=secret"]);
+    }
+
+    #[test]
+    fn ephemeral_port_keeps_the_requested_option_and_reports_the_bound_port() {
+        let bound = bind(
+            Options {
+                host: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                port: 0,
+                token: None,
+                public_url: None,
+            },
+            OpenWorktrees::default(),
+        )
+        .unwrap();
+
+        assert_eq!(bound.options.port, 0);
+        assert!(bound.state.port.is_some_and(|port| port != 0));
     }
 
     #[test]

@@ -9,11 +9,10 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[cfg(any(target_os = "macos", test))]
-use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_os = "windows")]
@@ -105,11 +104,15 @@ commands![
     set_setting,
     repository_layout,
     save_repository_layout,
+    start_sharing,
+    stop_sharing,
+    sharing_state,
 ];
 
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
 const SETTING_CHANGED_EVENT: &str = "setting-changed";
 const RECENT_PROJECTS_CLEARED_EVENT: &str = "recent-projects-cleared";
+const SHARING_CHANGED_EVENT: &str = "sharing-changed";
 #[cfg(target_os = "macos")]
 const CLOSE_TAB_EVENT: &str = "close-tab";
 #[cfg(target_os = "macos")]
@@ -541,8 +544,11 @@ struct OpenWorktree {
     worktree_path: String,
 }
 
+#[derive(Clone, Default)]
+struct OpenWorktrees(Arc<Mutex<HashMap<String, OpenWorktree>>>);
+
 #[derive(Default)]
-struct OpenWorktrees(Mutex<HashMap<String, OpenWorktree>>);
+struct SharingServer(Mutex<Option<server::RunningServer>>);
 
 /// Mirrors Tauri's `app_data_dir` so the desktop app and `git-nav serve` share one store.
 fn data_dir() -> Result<PathBuf, String> {
@@ -2248,6 +2254,11 @@ fn theme_background(theme: Theme) -> Color {
 }
 
 fn reveal_window(window: &WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    window
+        .app_handle()
+        .set_activation_policy(tauri::ActivationPolicy::Regular)
+        .map_err(|error| error.to_string())?;
     let theme = window.theme().unwrap_or(Theme::Light);
     window
         .set_background_color(Some(theme_background(theme)))
@@ -4498,6 +4509,150 @@ mod tests {
     }
 
     #[test]
+    fn serve_mode_keeps_configuration_flags_for_the_selected_runner() {
+        let arguments = vec![
+            "--foreground".to_string(),
+            "--host".to_string(),
+            "0.0.0.0".to_string(),
+            "--port".to_string(),
+            "4310".to_string(),
+        ];
+
+        let (mode, options) = parse_serve_mode(&arguments).unwrap();
+
+        assert_eq!(mode, ServeMode::Foreground);
+        assert_eq!(options, ["--host", "0.0.0.0", "--port", "4310"]);
+    }
+
+    #[test]
+    fn serve_mode_rejects_foreground_and_stop_together() {
+        let error = parse_serve_mode(&["--foreground".to_string(), "--stop".to_string()])
+            .unwrap_err();
+        assert!(error.contains("--stop cannot be combined with --foreground"));
+
+        let error = parse_serve_mode(&["--stop".to_string(), "--foreground".to_string()])
+            .unwrap_err();
+        assert!(error.contains("--foreground cannot be combined with --stop"));
+    }
+
+    #[test]
+    fn serve_mode_accepts_a_repeated_flag() {
+        let (mode, options) =
+            parse_serve_mode(&["--foreground".to_string(), "--foreground".to_string()]).unwrap();
+
+        assert_eq!(mode, ServeMode::Foreground);
+        assert!(options.is_empty());
+    }
+
+    #[test]
+    fn serve_mode_does_not_treat_option_values_as_modes() {
+        let arguments = vec![
+            "--host".to_string(),
+            "--foreground".to_string(),
+            "--port".to_string(),
+            "--stop".to_string(),
+            "--token".to_string(),
+            "--foreground".to_string(),
+        ];
+
+        let (mode, options) = parse_serve_mode(&arguments).unwrap();
+
+        assert_eq!(mode, ServeMode::App);
+        assert_eq!(options, arguments);
+    }
+
+    fn sharing_options(host: [u8; 4], port: u16, token: Option<&str>) -> server::Options {
+        server::Options {
+            host: std::net::IpAddr::V4(host.into()),
+            port,
+            token: token.map(str::to_owned),
+            public_url: None,
+        }
+    }
+
+    fn serve_arguments(host: [u8; 4], port: u16, token: Option<&str>) -> ServeArguments {
+        ServeArguments {
+            host: std::net::IpAddr::V4(host.into()),
+            port,
+            token: token.map(str::to_owned),
+            public_url: None,
+            persist_token: false,
+        }
+    }
+
+    #[test]
+    fn sharing_reports_the_running_state_when_the_requested_options_match() {
+        let running = sharing_options([127, 0, 0, 1], 4300, Some("token"));
+        let requested = serve_arguments([127, 0, 0, 1], 4300, Some("token"));
+
+        assert_eq!(sharing_configuration_conflict(&running, &requested), None);
+    }
+
+    #[test]
+    fn sharing_refuses_configuration_changes_while_running() {
+        let running = sharing_options([127, 0, 0, 1], 4300, Some("token"));
+        let requested = serve_arguments([0, 0, 0, 0], 4310, None);
+
+        let message = sharing_configuration_conflict(&running, &requested).unwrap();
+
+        assert!(message.contains("host 0.0.0.0 (currently 127.0.0.1)"));
+        assert!(message.contains("port 4310 (currently 4300)"));
+        assert!(message.contains("no authentication (currently required)"));
+        assert!(message.contains("git-nav serve --stop"));
+    }
+
+    #[test]
+    fn sharing_refuses_a_token_change_without_leaking_the_values() {
+        let running = sharing_options([127, 0, 0, 1], 4300, Some("running-token"));
+        let requested = serve_arguments([127, 0, 0, 1], 4300, Some("requested-token"));
+
+        let message = sharing_configuration_conflict(&running, &requested).unwrap();
+
+        assert!(message.contains("a different token"));
+        assert!(!message.contains("running-token"));
+        assert!(!message.contains("requested-token"));
+    }
+
+    #[test]
+    fn readiness_paths_are_confined_to_the_temporary_directory() {
+        assert!(is_expected_readiness_path(
+            &env::temp_dir().join("git-nav-serve-1-2-3.ready")
+        ));
+        if cfg!(unix) {
+            assert!(is_expected_readiness_path(Path::new("/tmp/git-nav-serve-1.ready")));
+        }
+        assert!(!is_expected_readiness_path(Path::new("/etc/git-nav-serve-1.ready")));
+        assert!(!is_expected_readiness_path(&env::temp_dir().join("other.ready")));
+        assert!(!is_expected_readiness_path(&env::temp_dir().join("git-nav-serve-1.txt")));
+        assert!(!is_expected_readiness_path(
+            &env::temp_dir().join("nested").join("git-nav-serve-1.ready")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn readiness_files_are_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = create_readiness_path().unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn internal_serve_requests_reject_unexpected_readiness_paths() {
+        let error = internal_serve_request(&[
+            "--internal-ready".to_string(),
+            "/etc/passwd".to_string(),
+        ])
+        .unwrap_err();
+
+        assert!(error.contains("--internal-ready"));
+    }
+
+    #[test]
     fn serve_flags_override_stored_values() {
         let settings = BTreeMap::from([
             (SERVE_HOST_SETTING.to_string(), serde_json::json!("0.0.0.0")),
@@ -6670,18 +6825,77 @@ const SERVE_USAGE: &str = "\
 Usage: git-nav serve [options]
 
 Options:
+      --foreground      Run the HTTP server without starting the desktop app
+      --stop            Stop sharing from the running desktop app
       --host <address>  Interface to bind (default 127.0.0.1; use 0.0.0.0 for other devices)
       --port <number>   Port to listen on (default 4300)
       --token <value>   Shared secret required to open the app (default: saved in application data settings.json or generated)
       --no-token        Serve without authentication
+
+Closing the last window keeps sharing active on macOS, where the Dock icon can reopen the app.
+On Linux and Windows, closing the last window stops sharing because there is no tray icon yet.
 ";
 
+#[derive(Debug, PartialEq)]
+enum ServeMode {
+    App,
+    Foreground,
+    Stop,
+}
+
+fn parse_serve_mode(args: &[String]) -> Result<(ServeMode, Vec<String>), String> {
+    let mut mode = ServeMode::App;
+    let mut options = Vec::new();
+    let mut index = 0;
+
+    while let Some(argument) = args.get(index) {
+        index += 1;
+        match argument.as_str() {
+            "--foreground" => {
+                if mode == ServeMode::Stop {
+                    return Err(format!("--foreground cannot be combined with --stop.\n\n{SERVE_USAGE}"));
+                }
+                mode = ServeMode::Foreground;
+            }
+            "--stop" => {
+                if mode == ServeMode::Foreground {
+                    return Err(format!("--stop cannot be combined with --foreground.\n\n{SERVE_USAGE}"));
+                }
+                mode = ServeMode::Stop;
+            }
+            "--host" | "--port" | "--token" => {
+                options.push(argument.clone());
+                if let Some(value) = args.get(index) {
+                    options.push(value.clone());
+                    index += 1;
+                }
+            }
+            _ => options.push(argument.clone()),
+        }
+    }
+    Ok((mode, options))
+}
+
+#[derive(Clone)]
 struct ServeArguments {
     host: std::net::IpAddr,
     port: u16,
     token: Option<String>,
     public_url: Option<String>,
     persist_token: bool,
+}
+
+fn load_serve_arguments(args: &[String]) -> Result<ServeArguments, String> {
+    let settings = load_settings().map_err(|error| format!("Could not load settings: {error}"))?;
+    let arguments = parse_serve_arguments(args, &settings)?;
+    if arguments.persist_token {
+        save_setting(
+            SERVE_TOKEN_SETTING.to_string(),
+            serde_json::Value::String(arguments.token.clone().expect("generated token missing")),
+        )
+        .map_err(|error| format!("Could not save the generated token: {error}"))?;
+    }
+    Ok(arguments)
 }
 
 fn parse_serve_arguments(
@@ -6787,32 +7001,7 @@ fn generated_token() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn serve(args: &[String]) {
-    let settings = match load_settings() {
-        Ok(settings) => settings,
-        Err(error) => {
-            eprintln!("Could not load settings: {error}");
-            std::process::exit(1);
-        }
-    };
-    let arguments = match parse_serve_arguments(args, &settings) {
-        Ok(arguments) => arguments,
-        Err(message) => {
-            eprintln!("{message}");
-            std::process::exit(1);
-        }
-    };
-
-    if arguments.persist_token {
-        if let Err(error) = save_setting(
-            SERVE_TOKEN_SETTING.to_string(),
-            serde_json::Value::String(arguments.token.clone().expect("generated token missing")),
-        ) {
-            eprintln!("Could not save the generated token: {error}");
-            std::process::exit(1);
-        }
-    }
-
+fn serve_foreground(arguments: ServeArguments) {
     let runtime = tokio::runtime::Runtime::new().expect("could not start the async runtime");
     if let Err(error) = runtime.block_on(server::serve(server::Options {
         host: arguments.host,
@@ -6825,27 +7014,407 @@ fn serve(args: &[String]) {
     }
 }
 
+fn inactive_sharing_state() -> server::SharingState {
+    server::SharingState { sharing: false, host: None, port: None, entry_urls: Vec::new() }
+}
+
+fn active_sharing_state(app: &AppHandle) -> server::SharingState {
+    app.state::<SharingServer>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|server| server.as_ref().map(server::RunningServer::state))
+        .unwrap_or_else(inactive_sharing_state)
+}
+
+fn sharing_configuration_conflict(
+    running: &server::Options,
+    requested: &ServeArguments,
+) -> Option<String> {
+    let mut changes = Vec::new();
+    if requested.host != running.host {
+        changes.push(format!("host {} (currently {})", requested.host, running.host));
+    }
+    if requested.port != running.port {
+        changes.push(format!("port {} (currently {})", requested.port, running.port));
+    }
+    if requested.token != running.token {
+        changes.push(match (&requested.token, &running.token) {
+            (None, _) => "no authentication (currently required)".to_string(),
+            (Some(_), None) => "authentication (currently disabled)".to_string(),
+            (Some(_), Some(_)) => "a different token".to_string(),
+        });
+    }
+    if requested.public_url != running.public_url {
+        changes.push("a different public URL".to_string());
+    }
+    (!changes.is_empty()).then(|| {
+        format!(
+            "Git Nav is already sharing and cannot switch to {} while it is running. Run git-nav serve --stop first, then serve again with the new settings.",
+            changes.join(", ")
+        )
+    })
+}
+
+fn start_sharing_with_arguments(
+    app: &AppHandle,
+    arguments: ServeArguments,
+) -> Result<server::SharingState, String> {
+    let sharing_server = app.state::<SharingServer>();
+    let mut sharing = sharing_server.0.lock().map_err(|error| error.to_string())?;
+    if let Some(server) = sharing.as_ref() {
+        if let Some(conflict) = sharing_configuration_conflict(server.options(), &arguments) {
+            return Err(conflict);
+        }
+        return Ok(server.state());
+    }
+
+    let server = server::start(
+        server::Options {
+            host: arguments.host,
+            port: arguments.port,
+            token: arguments.token,
+            public_url: arguments.public_url,
+        },
+        app.state::<OpenWorktrees>().inner().clone(),
+    )?;
+    let state = server.state();
+    *sharing = Some(server);
+    drop(sharing);
+    app.emit(SHARING_CHANGED_EVENT, &state)
+        .map_err(|error| error.to_string())?;
+    Ok(state)
+}
+
+fn stop_sharing_from_app(app: &AppHandle) -> Result<server::SharingState, String> {
+    let server = app.state::<SharingServer>().0.lock().map_err(|error| error.to_string())?.take();
+    let Some(server) = server else {
+        return Ok(inactive_sharing_state());
+    };
+    server.stop();
+    let state = inactive_sharing_state();
+    app.emit(SHARING_CHANGED_EVENT, &state)
+        .map_err(|error| error.to_string())?;
+    if !app
+        .webview_windows()
+        .values()
+        .any(|window| window.is_visible().unwrap_or(true))
+    {
+        app.exit(0);
+    }
+    Ok(state)
+}
+
+#[tauri::command]
+fn start_sharing(app: AppHandle) -> Result<server::SharingState, String> {
+    start_sharing_with_arguments(&app, load_serve_arguments(&[])?)
+}
+
+#[tauri::command]
+fn stop_sharing(app: AppHandle) -> Result<server::SharingState, String> {
+    stop_sharing_from_app(&app)
+}
+
+#[tauri::command]
+fn sharing_state(app: AppHandle) -> server::SharingState {
+    active_sharing_state(&app)
+}
+
+#[derive(Deserialize, Serialize)]
+struct ServeReadiness {
+    state: Option<server::SharingState>,
+    error: Option<String>,
+}
+
+/// The single-instance socket relays these requests from any local process, so only paths the
+/// `serve` CLI could have created are accepted.
+fn is_expected_readiness_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if !name.starts_with("git-nav-serve-") || !name.ends_with(".ready") {
+        return false;
+    }
+    let parent = path.parent();
+    // The CLI may run with a TMPDIR the app was not launched with, so /tmp stays accepted.
+    parent == Some(env::temp_dir().as_path()) || (cfg!(unix) && parent == Some(Path::new("/tmp")))
+}
+
+fn internal_serve_request(args: &[String]) -> Result<(Option<PathBuf>, Vec<String>), String> {
+    let mut readiness_path = None;
+    let mut options = Vec::new();
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        index += 1;
+        if argument == "--internal-ready" {
+            let path = args
+                .get(index)
+                .ok_or_else(|| "--internal-ready needs a value.".to_string())?;
+            index += 1;
+            let path = PathBuf::from(path);
+            if !is_expected_readiness_path(&path) {
+                return Err("--internal-ready must name a readiness file in the temporary directory.".to_string());
+            }
+            readiness_path = Some(path);
+        } else {
+            options.push(argument.clone());
+        }
+    }
+    Ok((readiness_path, options))
+}
+
+fn write_serve_readiness(path: &Path, result: Result<server::SharingState, String>) {
+    let readiness = match result {
+        Ok(state) => ServeReadiness { state: Some(state), error: None },
+        Err(error) => ServeReadiness { state: None, error: Some(error) },
+    };
+    let contents = match serde_json::to_vec(&readiness) {
+        Ok(contents) => contents,
+        Err(error) => {
+            log::error!("Could not encode sharing readiness: {error}");
+            return;
+        }
+    };
+    match open_readiness_file(path).and_then(|mut file| {
+        file.write_all(&contents).map_err(|error| error.to_string())
+    }) {
+        Ok(()) => {}
+        Err(error) => log::error!("Could not report sharing readiness: {error}"),
+    }
+}
+
+/// Never creates the file: the CLI owns it, and recreating it after the CLI timed out and removed
+/// it would leave a token-bearing file behind in temp. Refusing symlinks keeps a forged request
+/// from truncating another file.
+fn open_readiness_file(path: &Path) -> Result<fs::File, String> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path).map_err(|error| error.to_string())
+}
+
+fn handle_serve_request(app: &AppHandle, args: &[String]) -> Result<server::SharingState, String> {
+    let (mode, options) = parse_serve_mode(args)?;
+    match mode {
+        ServeMode::App => start_sharing_with_arguments(app, load_serve_arguments(&options)?),
+        ServeMode::Stop => {
+            if !options.is_empty() {
+                return Err(format!("--stop does not take other options.\n\n{SERVE_USAGE}"));
+            }
+            stop_sharing_from_app(app)
+        }
+        ServeMode::Foreground => Err("--foreground cannot run inside the desktop app.".to_string()),
+    }
+}
+
+fn create_readiness_path() -> Result<PathBuf, String> {
+    for nonce in 0..100 {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "git-nav-serve-{}-{timestamp}-{nonce}.ready",
+            std::process::id()
+        ));
+        let mut options = fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(_) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("Could not create a sharing readiness file.".to_string())
+}
+
+fn wait_for_serve_readiness(path: &Path) -> Result<server::SharingState, String> {
+    // A cold launch of the bundled app can take well over ten seconds, so allow thirty.
+    for _ in 0..1200 {
+        if let Ok(contents) = fs::read(path) {
+            if let Ok(readiness) = serde_json::from_slice::<ServeReadiness>(&contents) {
+                return match readiness {
+                    ServeReadiness { state: Some(state), error: None } => Ok(state),
+                    ServeReadiness { state: None, error: Some(error) } => Err(error),
+                    _ => Err("The desktop app returned an invalid sharing readiness response.".to_string()),
+                };
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Err("Timed out waiting for the desktop app to start sharing.".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_path() -> Option<PathBuf> {
+    let executable = env::current_exe().ok()?;
+    let bundle = executable.ancestors().nth(3)?;
+    (bundle.extension().and_then(|extension| extension.to_str()) == Some("app"))
+        .then(|| bundle.to_path_buf())
+}
+
+fn start_desktop_app_for_sharing(arguments: &[String], readiness_path: &Path) -> Result<(), String> {
+    let mut child_arguments = vec!["serve".to_string(), "--internal-ready".to_string()];
+    child_arguments.push(readiness_path.to_string_lossy().into_owned());
+    child_arguments.extend(arguments.iter().cloned());
+
+    #[cfg(target_os = "macos")]
+    let mut command = if let Some(app_path) = macos_app_path() {
+        let mut command = Command::new("open");
+        command.arg("-n").arg("-a").arg(app_path).arg("--args");
+        command
+    } else {
+        Command::new(env::current_exe().map_err(|error| error.to_string())?)
+    };
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let mut command = Command::new("setsid");
+        // An AppImage's current_exe lives in a mount that unwinds with this process, so relaunch
+        // the bundle itself.
+        let executable = match env::var_os("APPIMAGE") {
+            Some(bundle) => PathBuf::from(bundle),
+            None => env::current_exe().map_err(|error| error.to_string())?,
+        };
+        command.arg(executable);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new(env::current_exe().map_err(|error| error.to_string())?);
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let mut command = Command::new(env::current_exe().map_err(|error| error.to_string())?);
+
+    command
+        .args(&child_arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW | 0x0000_0008 | 0x0000_0200);
+    command.spawn().map(|_| ()).map_err(|error| error.to_string())
+}
+
+fn print_sharing_urls(state: &server::SharingState) {
+    for url in &state.entry_urls {
+        println!("Git Nav is serving at {url}");
+    }
+    if state.host.as_deref() == Some("127.0.0.1") {
+        println!("Pass --host 0.0.0.0 to reach it from other devices on your network.");
+    }
+}
+
+fn serve_in_desktop_app(args: &[String]) -> Result<(), String> {
+    let readiness_path = create_readiness_path()?;
+    let result = start_desktop_app_for_sharing(args, &readiness_path)
+        .and_then(|()| wait_for_serve_readiness(&readiness_path));
+    let _ = fs::remove_file(&readiness_path);
+    match result {
+        Ok(state) if state.sharing => {
+            print_sharing_urls(&state);
+            Ok(())
+        }
+        Ok(_) => {
+            println!("Git Nav is not sharing.");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<_> = env::args().collect();
 
-    if args.get(1).is_some_and(|argument| argument == "serve") {
-        serve(&args[2..]);
-        return;
-    }
+    let serve_request = if args.get(1).is_some_and(|argument| argument == "serve") {
+        let (readiness_path, options) = match internal_serve_request(&args[2..]) {
+            Ok(request) => request,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
+        if readiness_path.is_none() {
+            let (mode, serve_options) = match parse_serve_mode(&options) {
+                Ok(mode) => mode,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            };
+            match mode {
+                ServeMode::Foreground => match load_serve_arguments(&serve_options) {
+                    Ok(arguments) => serve_foreground(arguments),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                },
+                ServeMode::App => {
+                    // Answer --help and configuration mistakes here instead of launching the app
+                    // to relay them.
+                    if let Err(error) = load_serve_arguments(&serve_options) {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                    if let Err(error) = serve_in_desktop_app(&args[2..]) {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                }
+                ServeMode::Stop => {
+                    if serve_options.iter().any(|option| option == "--help" || option == "-h") {
+                        eprintln!("{SERVE_USAGE}");
+                        std::process::exit(1);
+                    }
+                    if !serve_options.is_empty() {
+                        eprintln!("--stop does not take other options.\n\n{SERVE_USAGE}");
+                        std::process::exit(1);
+                    }
+                    if let Err(error) = serve_in_desktop_app(&args[2..]) {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            return;
+        }
+        Some((readiness_path.expect("missing readiness path"), options))
+    } else {
+        None
+    };
 
     let cwd = env::current_dir()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     let repository_path = repository_path_from_args(&args, &cwd);
+    let startup_readiness = serve_request.as_ref().map(|(path, _)| path.clone());
 
     let mut builder = tauri::Builder::default();
 
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            if let Some(path) = repository_path_from_args(&args, &cwd) {
+            if args.get(1).is_some_and(|argument| argument == "serve") {
+                let Ok((readiness_path, options)) = internal_serve_request(&args[2..]) else {
+                    return;
+                };
+                let result = handle_serve_request(app, &options);
+                if let Some(path) = readiness_path {
+                    write_serve_readiness(&path, result);
+                }
+            } else if let Some(path) = repository_path_from_args(&args, &cwd) {
                 let _ = open_repository_window(app, &path);
+            } else {
+                // A serve-started app has no visible window, so a plain launch must bring one back.
+                let _ = reveal_launcher(app);
             }
         }));
         builder = builder.plugin(
@@ -6864,14 +7433,42 @@ pub fn run() {
         }
     }
 
-    builder
+    let app = match builder
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenWorktrees::default())
+        .manage(SharingServer::default())
         .invoke_handler(invoke_handler())
         .setup(move |app| {
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+            // A serve-started app needs the menu too: windows opened later through the
+            // single-instance socket rely on it.
             #[cfg(target_os = "macos")]
             if let Err(error) = install_app_menu(app.handle()) {
                 log::error!("Could not install the application menu: {error}");
+            }
+            if let Some((readiness_path, options)) = &serve_request {
+                #[cfg(target_os = "macos")]
+                update_recent_menu(Some(app.handle()));
+                #[cfg(target_os = "macos")]
+                if let Err(error) = app
+                    .handle()
+                    .set_activation_policy(tauri::ActivationPolicy::Accessory)
+                {
+                    log::error!("Could not hide the Dock icon while sharing: {error}");
+                }
+                let result = handle_serve_request(app.handle(), options);
+                let should_exit = result.is_err() || matches!(parse_serve_mode(options), Ok((ServeMode::Stop, _)));
+                write_serve_readiness(readiness_path, result);
+                if should_exit {
+                    app.handle().exit(0);
+                }
+                return Ok(());
             }
             if let Some(path) = &repository_path {
                 open_repository_window(app.handle(), path)?;
@@ -6880,18 +7477,36 @@ pub fn run() {
                 #[cfg(target_os = "macos")]
                 update_recent_menu(Some(app.handle()));
             }
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
+    {
+        Ok(app) => app,
+        Err(error) => {
+            if let Some(path) = startup_readiness {
+                write_serve_readiness(&path, Err(error.to_string()));
+            }
+            eprintln!("error while building tauri application: {error}");
+            std::process::exit(1);
+        }
+    };
+    app.run(|app, event| {
+            #[cfg(target_os = "macos")]
+            // macOS user-initiated exit requests have no code. While sharing is active, keep the
+            // app available for reopening from the Dock. Cmd+Q terminates through NSApp without
+            // emitting ExitRequested. Linux and Windows have no tray affordance yet, so their
+            // default exit also stops the server.
+            if let RunEvent::ExitRequested { code: None, api, .. } = &event {
+                if active_sharing_state(app).sharing {
+                    api.prevent_exit();
+                    return;
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if matches!(event, RunEvent::Reopen { has_visible_windows: false, .. }) {
+                let _ = reveal_launcher(app);
+                return;
+            }
             // macOS only grants the process activation once the run loop is going, so a shell-launched
             // app has to claim the foreground here rather than while its window is being built.
             if matches!(event, RunEvent::Ready) {

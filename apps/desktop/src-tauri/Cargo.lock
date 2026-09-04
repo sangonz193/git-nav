@@ -1470,6 +1470,7 @@ dependencies = [
  "getrandom 0.3.4",
  "git-nav-macros",
  "if-addrs",
+ "libc",
  "log",
  "mime_guess",
  "rusqlite",
