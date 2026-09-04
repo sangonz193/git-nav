@@ -1,4 +1,5 @@
 import type { DiffPanelParams, DiffPanelUserPreferences, RepositoryPanelParams } from "../repository/repository-window"
+import { WORKTREE_REF } from "@/lib/repository-constants"
 import type { SelectedRefs } from "./diff-title"
 
 export const NARROW_DIFF_PANEL_WIDTH = 620
@@ -24,12 +25,15 @@ export function fileName(file: ChangedFile) {
 
 // What the file is at, rather than where it sits, so a mark falls away the moment its contents move on.
 // A working tree file has no blob to be read at, which is why its mark is never written down.
-export function fileOid(file: ChangedFile) {
+export function fileOid(file: ChangedFile, headRef: string) {
+  if (headRef === WORKTREE_REF) {
+    return ""
+  }
   return file.newOid ?? file.oldOid ?? ""
 }
 
-export function isViewedFile(file: ChangedFile, viewed: ReadonlyMap<string, string>) {
-  return viewed.get(fileName(file)) === fileOid(file)
+export function isViewedFile(file: ChangedFile, headRef: string, viewed: ReadonlyMap<string, string>) {
+  return viewed.get(fileName(file)) === fileOid(file, headRef)
 }
 
 export function initialDiffLayout(width: number, preferences: DiffPanelUserPreferences) {

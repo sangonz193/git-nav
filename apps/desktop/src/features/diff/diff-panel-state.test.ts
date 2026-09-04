@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
+import { WORKTREE_REF } from "@/lib/repository-constants"
 import { initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, type ChangedFile } from "./diff-panel-state"
 
 describe("initialDiffLayout", () => {
@@ -52,17 +53,22 @@ describe("isViewedFile", () => {
 
   test("holds a mark only while the file is still the blob it was read at", () => {
     const viewed = new Map([["src/index.ts", "b".repeat(40)]])
-    expect(isViewedFile(file(), viewed)).toBe(true)
-    expect(isViewedFile(file({ newOid: "c".repeat(40) }), viewed)).toBe(false)
-    expect(isViewedFile(file({ newPath: "src/other.ts" }), viewed)).toBe(false)
+    expect(isViewedFile(file(), "feature", viewed)).toBe(true)
+    expect(isViewedFile(file({ newOid: "c".repeat(40) }), "feature", viewed)).toBe(false)
+    expect(isViewedFile(file({ newPath: "src/other.ts" }), "feature", viewed)).toBe(false)
   })
 
   test("reads a deleted file at the blob it was deleted from", () => {
-    expect(isViewedFile(file({ newPath: null, newOid: null }), new Map([["src/index.ts", "a".repeat(40)]]))).toBe(true)
+    expect(isViewedFile(file({ newPath: null, newOid: null }), "feature", new Map([["src/index.ts", "a".repeat(40)]]))).toBe(true)
+  })
+
+  test("keeps a working tree mark only in memory", () => {
+    expect(isViewedFile(file({ newOid: null }), WORKTREE_REF, new Map([["src/index.ts", ""]]))).toBe(true)
+    expect(isViewedFile(file({ newOid: null }), WORKTREE_REF, new Map([["src/index.ts", "a".repeat(40)]]))).toBe(false)
   })
 
   test("never carries a mark for a file with no blob behind it", () => {
-    expect(isViewedFile(file({ oldOid: null, newOid: null }), new Map())).toBe(false)
+    expect(isViewedFile(file({ oldOid: null, newOid: null }), "feature", new Map())).toBe(false)
   })
 })
 
