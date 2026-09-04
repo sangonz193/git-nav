@@ -1,10 +1,12 @@
 import {
+  DockviewDefaultTab,
   DockviewReact,
   type IDockviewHeaderActionsProps,
+  type IDockviewPanelHeaderProps,
   type IWatermarkPanelProps,
 } from "dockview-react"
-import { GitCompareArrows, GitGraph, Plus } from "lucide-react"
-import { createContext, useContext } from "react"
+import { FileDiff, GitGraph, Plus } from "lucide-react"
+import { createContext, useContext, type ComponentType } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
 import {
@@ -25,10 +27,29 @@ export type RepositoryPanelParams = {
 export type DiffPanelParams = RepositoryPanelParams & {
   baseRef: string
   headRef: string
+  mergeBase?: boolean
 }
 
 // Matches the sentinel the diff commands accept in place of a commit; not a legal ref name.
 export const WORKTREE_REF = ":worktree"
+
+// The icon names the panel, not what it is pointed at, which the selectors and the title already say.
+// It leaves the title free to be only the thing itself: a comparison, a worktree or a stash.
+function panelTab(Icon: ComponentType<{ className?: string }>) {
+  return function PanelTab(props: IDockviewPanelHeaderProps) {
+    return (
+      <div className="flex h-full w-full min-w-0 items-center gap-1.5">
+        <Icon className="pointer-events-none size-3.5 shrink-0" />
+        <DockviewDefaultTab {...props} />
+      </div>
+    )
+  }
+}
+
+const repositoryTabs = {
+  diff: panelTab(FileDiff),
+  graph: panelTab(GitGraph),
+}
 
 const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
 
@@ -38,6 +59,7 @@ function addGraphPanel(containerApi: IWatermarkPanelProps["containerApi"] | IDoc
     id: panelId("graph"),
     params,
     ...(referencePanel ? { position: { direction: "within" as const, referencePanel } } : {}),
+    tabComponent: "graph",
     title: "Graph",
   })
 }
@@ -48,7 +70,8 @@ function addDiffPanel(containerApi: IDockviewHeaderActionsProps["containerApi"],
     id: panelId("diff"),
     params: { ...params, baseRef: "HEAD~1", headRef: "HEAD" },
     position: { direction: "within", referencePanel },
-    title: "Diff",
+    tabComponent: "diff",
+    title: "HEAD~1..HEAD",
   })
 }
 
@@ -72,7 +95,7 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
           Graph
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => addDiffPanel(containerApi, params, activePanel)}>
-          <GitCompareArrows />
+          <FileDiff />
           Diff
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -127,10 +150,12 @@ export function RepositoryWindow({ path }: { path: string }) {
               component: "graph",
               id: "repository-graph",
               params,
+              tabComponent: "graph",
               title: "Graph",
             })
           }}
           rightHeaderActionsComponent={NewTabAction}
+          tabComponents={repositoryTabs}
           theme={repositoryDockviewTheme}
           watermarkComponent={EmptyRepository}
         />

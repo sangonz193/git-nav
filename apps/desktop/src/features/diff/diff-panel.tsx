@@ -13,7 +13,8 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
-import { WORKTREE_REF, type DiffPanelParams } from "../repository/repository-window"
+import { branchRangeTitle, diffTitle, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
+import type { DiffPanelParams } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
 const LARGE_DIFF_LINES = 1200
@@ -68,10 +69,8 @@ type Comparison = {
 }
 
 type BranchSelection = {
-  baseSha: string
-  headSha: string
-  baseLabel: string
-  headLabel: string
+  baseRef: string
+  headRef: string
 }
 
 type FileDiff = {
@@ -93,13 +92,6 @@ type DiffEntry =
   | { state: "loaded"; data: DiffData }
   | { state: "error"; message: string }
 
-type SelectedRefs = {
-  base: string
-  head: string
-  baseLabel: string
-  headLabel: string
-}
-
 type FileTreeNode = {
   name: string
   path: string
@@ -116,10 +108,6 @@ function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
       <TooltipContent>{hint}</TooltipContent>
     </Tooltip>
   )
-}
-
-function refLabel(reference: string) {
-  return reference === WORKTREE_REF ? "Working tree" : reference
 }
 
 function fileName(file: ChangedFile) {
@@ -220,6 +208,7 @@ function FileTreeNode({ level, node, onSelect, activeKey }: { level: number; nod
  */
 function useReferenceSources(path: string, enabled: boolean, version: number) {
   const [commits, setCommits] = useState<Commit[]>([])
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null)
   const [headDetail, setHeadDetail] = useState<string | null>(null)
   const [references, setReferences] = useState<Reference[]>([])
   const [remotes, setRemotes] = useState<string[]>()
@@ -236,8 +225,9 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
     invoke<CommitBatch>("reference_picker_commits", { repoPath: path })
       .then((batch) => settle(batch.map(commitFromTuple), setCommits))
       .catch(() => undefined)
-    invoke<{ currentBranch: string | null; remotes: string[] }>("repository_state", { repoPath: path })
+    invoke<{ currentBranch: string | null; defaultBranch: string | null; remotes: string[] }>("repository_state", { repoPath: path })
       .then((state) => {
+        settle(state.defaultBranch, setDefaultBranch)
         settle(state.remotes, setRemotes)
         settle(state.currentBranch ?? "Detached head", setHeadDetail)
       })
@@ -247,7 +237,10 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
     }
   }, [enabled, path, version])
 
-  return useMemo(() => ({ commits, headDetail, references, remotes, stashes }), [commits, headDetail, references, remotes, stashes])
+  return useMemo(
+    () => ({ commits, defaultBranch, headDetail, references, remotes, stashes }),
+    [commits, defaultBranch, headDetail, references, remotes, stashes]
+  )
 }
 
 function useDiffLoader(repoPath: string, comparison: Comparison | null) {
@@ -340,14 +333,9 @@ function FileDiffCard({ entry, expanded, file, mode, onExpand, theme, wrap }: { 
   )
 }
 
-export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
+export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>) {
   const theme = useTheme()
-  const [refs, setRefs] = useState<SelectedRefs>({
-    base: params.baseRef,
-    head: params.headRef,
-    baseLabel: refLabel(params.baseRef),
-    headLabel: refLabel(params.headRef),
-  })
+  const [refs, setRefs] = useState<SelectedRefs>(selectedRefs(params.baseRef, params.headRef, params.mergeBase ?? false))
   const [comparison, setComparison] = useState<Comparison | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState(DiffModeEnum.Split)
@@ -382,7 +370,7 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
 
   useEffect(() => {
     let cancelled = false
-    invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head })
+    invoke<Comparison>("compare_refs", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase })
       .then((nextComparison) => {
         if (!cancelled) {
           reset()
@@ -479,15 +467,14 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
   )
   const selectAheadRange = useCallback((reference: string) => {
     invoke<BranchSelection>("select_branch_range", { repoPath: params.path, reference })
-      .then((selection) => setRefs({
-        base: selection.baseSha,
-        head: selection.headSha,
-        baseLabel: selection.baseLabel,
-        headLabel: selection.headLabel,
-      }))
+      .then((selection) => {
+        const range = selectedRefs(selection.baseRef, selection.headRef, true)
+        setRefs(range)
+        api.setTitle(branchRangeTitle(range))
+      })
       .catch((message: unknown) => setError(String(message)))
     setPicker(null)
-  }, [params.path])
+  }, [api, params.path])
   const menuItems = useMemo(
     () => hits.map((hit, index): SearchMenuItem => ({
       action: hit.branch === null ? undefined : {
@@ -535,10 +522,14 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
     setHitIndex(0)
   }
 
+  // Where the ends sit cannot say whether a tab still carries the name it opened with, since a
+  // comparison can be pointed back at the ends it opened from. Moving an end is what retitles the tab.
   function selectHit(hit: ReferenceHit) {
-    setRefs((current) => picker === "base"
-      ? { ...current, base: hit.reference, baseLabel: hit.label }
-      : { ...current, head: hit.reference, headLabel: hit.label })
+    const moved = picker === "base"
+      ? { ...refs, base: hit.reference, baseLabel: hit.label, mergeBase: false }
+      : { ...refs, head: hit.reference, headLabel: hit.label }
+    setRefs(moved)
+    api.setTitle(diffTitle(moved, sources.defaultBranch, sources.remotes ?? []))
     setPicker(null)
   }
 
@@ -591,7 +582,9 @@ export function DiffPanel({ params }: IDockviewPanelProps<DiffPanelParams>) {
           <span className="truncate">{refs.baseLabel}</span>
           <ChevronDown />
         </Button>
-        <span className="shrink-0 text-muted-foreground">…</span>
+        <Hinted hint={refs.mergeBase ? `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}` : `Changes between ${refs.baseLabel} and ${refs.headLabel}`}>
+          <span className="shrink-0 text-muted-foreground">{rangeMarker(refs)}</span>
+        </Hinted>
         <Button aria-expanded={picker === "head"} className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} onClick={() => openPicker("head")} ref={(element) => { pickerButtons.current.head = element }} size="sm" type="button" variant="outline">
           <span className="truncate">{refs.headLabel}</span>
           <ChevronDown />

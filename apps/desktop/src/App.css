@@ -38,6 +38,22 @@
   overflow: hidden;
 }
 
+/* The icon naming what a tab holds sits beside the title, so the title takes the rest of the row
+   rather than the whole of it. */
+.git-nav-dockview-theme .dv-tab .dv-default-tab {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+/* A comparison names both of its ends, which is more than a tab can be allowed to grow to. */
+.git-nav-dockview-theme .dv-tab .dv-default-tab-content {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A tab that can be closed always shows how, so the width the action takes is accounted for rather than
    reserved and blank. */
 .git-nav-dockview-theme .dv-tab.dv-inactive-tab .dv-default-tab .dv-default-tab-action {
