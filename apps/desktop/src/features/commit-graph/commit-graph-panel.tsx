@@ -180,7 +180,6 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   const [searchQuery, setSearchQuery] = useState("")
   const [searchHitIndex, setSearchHitIndex] = useState(0)
   const scrollElement = useRef<HTMLDivElement>(null)
-  const graphSpace = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const searchField = useRef<HTMLInputElement>(null)
   const savedScrollTop = useRef(0)
@@ -368,9 +367,13 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
     overscan: 12,
+    scrollMargin: GRAPH_HEADER_HEIGHT,
+    scrollPaddingStart: GRAPH_HEADER_HEIGHT,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
   const virtualScrollTop = rowVirtualizer.scrollOffset ?? 0
+  const graphVirtualRows = useMemo(() => virtualRows.map((row) => ({ ...row, start: row.start - GRAPH_HEADER_HEIGHT })), [virtualRows])
+  const graphCanvasScrollTop = virtualScrollTop - GRAPH_HEADER_HEIGHT - GRAPH_CANVAS_OVERSCAN
   const currentCheckoutRow = currentCheckoutIndex === -1 ? -1 : rowOfCommit(currentCheckoutIndex)
   // The brackets are drawn on rows while the drag they adjust is anchored on commits, so an endpoint carries both.
   const selectionRowEdges = selectionEdges && {
@@ -381,9 +384,9 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   }
   const checkoutScrollDirection = currentCheckoutRow === -1 || scroll.height === 0
     ? null
-    : (currentCheckoutRow + 1) * rowHeight < scroll.top + GRAPH_HEADER_HEIGHT
+    : (currentCheckoutRow + 1) * rowHeight < scroll.top
       ? "up"
-      : currentCheckoutRow * rowHeight >= scroll.top + scroll.height
+      : currentCheckoutRow * rowHeight + GRAPH_HEADER_HEIGHT >= scroll.top + scroll.height
         ? "down"
         : null
   const squashMergeEdges = useMemo(() => {
@@ -765,9 +768,9 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
 
   useEffect(() => {
     if (canvas.current) {
-      drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: virtualScrollTop - GRAPH_CANVAS_OVERSCAN, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
+      drawCommitGraph({ canvas: canvas.current, commits, items: graphVirtualRows, scrollTop: graphCanvasScrollTop, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
     }
-  }, [commits, graphWidth, rowHeight, rows, scroll.height, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows, virtualScrollTop])
+  }, [commits, graphCanvasScrollTop, graphVirtualRows, graphWidth, rowHeight, rows, scroll.height, squashMergeEdges, unpushed, unpushedLaneMasks])
 
   function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
     const originX = "touches" in event ? event.touches[0].clientX : event.clientX
@@ -1019,8 +1022,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
 
   function startRangeDrag(event: ReactPointerEvent<HTMLElement>, index: number, anchorIndex?: number) {
     const scroll = scrollElement.current
-    const space = graphSpace.current
-    if (event.button !== 0 || !scroll || !space || (event.target as HTMLElement).closest(".commit-ref")) {
+    if (event.button !== 0 || !scroll || (event.target as HTMLElement).closest(".commit-ref")) {
       return
     }
     // A menu opened from this row renders in a portal, and React bubbles its events back through here,
@@ -1044,7 +1046,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     let frame: number | null = null
 
     const focusIndexAt = () => {
-      const offset = pointerY - space.getBoundingClientRect().top
+      const offset = scroll.scrollTop + pointerY - scroll.getBoundingClientRect().top - GRAPH_HEADER_HEIGHT
       return commitIndexAtRow(Math.max(0, Math.min(rowCount - 1, Math.floor(offset / rowHeight))))
     }
 
@@ -1603,7 +1605,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
             </div>
           </div>
         </div>
-        <div className="commit-graph-space" ref={graphSpace} style={{ "--commit-ref-budget": `${refBudget}px`, height: rowVirtualizer.getTotalSize(), minWidth: tableWidth } as CSSProperties}>
+        <div className="commit-graph-space" style={{ "--commit-ref-budget": `${refBudget}px`, height: rowVirtualizer.getTotalSize(), minWidth: tableWidth } as CSSProperties}>
           <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
           {virtualRows.map((row) => {
             const graphRow = rows?.[row.index]
@@ -1619,7 +1621,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
                   className="commit-graph-row commit-graph-row-collapsed"
                   key={commit.hash}
                   role="row"
-                  style={{ gridTemplateColumns: `${graphWidth}px ${columnTemplate}`, transform: `translateY(${row.start}px)` }}
+                  style={{ gridTemplateColumns: `${graphWidth}px ${columnTemplate}`, transform: `translateY(${row.start - GRAPH_HEADER_HEIGHT}px)` }}
                 >
                   <div className="commit-graph-graph-cell" />
                   <div role="gridcell">
@@ -1635,14 +1637,13 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
             const currentCheckout = isCurrentCheckout(commit.refs)
             const selected = selectedHashes.has(commit.hash)
             const edges = selectionRowEdges
-            const canSelectRange = selectionEndpointIndexes && selectionEndpointIndexes.anchor !== -1 && ancestryPath(commits, selectionEndpointIndexes.anchor, index).length > 0
             const chips = commitChips(commit, chipContext)
             const shown = visibleChipCount(chips, refBudget)
             const overflowChips = chips.slice(shown)
             return (
               <ContextMenu key={commit.hash}>
                 <ContextMenuTrigger asChild>
-                  <article aria-keyshortcuts="Enter Space Shift+Enter Shift+Space" aria-rowindex={row.index + 2} aria-selected={selected} className={`commit-graph-row${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onKeyDown={(event) => selectCommitFromKeyboard(event, index)} onPointerDown={(event) => startRangeDrag(event, index)} role="row" style={{ "--commit-ref-color": refColor, gridTemplateColumns: `${graphWidth}px ${columnTemplate}`, transform: `translateY(${row.start}px)` } as CSSProperties} tabIndex={0}>
+                  <article aria-keyshortcuts="Enter Space Shift+Enter Shift+Space" aria-rowindex={row.index + 2} aria-selected={selected} className={`commit-graph-row${currentCheckout ? " commit-graph-row-current" : ""}${selected ? " commit-graph-row-selected" : ""}`} onKeyDown={(event) => selectCommitFromKeyboard(event, index)} onPointerDown={(event) => startRangeDrag(event, index)} role="row" style={{ "--commit-ref-color": refColor, gridTemplateColumns: `${graphWidth}px ${columnTemplate}`, transform: `translateY(${row.start - GRAPH_HEADER_HEIGHT}px)` } as CSSProperties} tabIndex={0}>
                     <div className="commit-graph-graph-cell">
                       {edges?.top === row.index && (
                         <button aria-label="Adjust the newer end of the selected range" className="commit-graph-selection-handle commit-graph-selection-handle-start" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); startRangeDrag(event, index, edges.bottomCommit) }} type="button" />
