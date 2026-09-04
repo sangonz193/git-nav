@@ -38,6 +38,12 @@ export function isViewedFile(file: ChangedFile, headRef: string, viewed: Readonl
   return viewed.get(fileName(file)) === fileIdentity(file, headRef)
 }
 
+// A file that has been read is folded away, and the exceptions are the files whose fold was set by hand,
+// so a mark arriving after the comparison folds its file without a second pass over the list.
+export function isFoldedFile(file: ChangedFile, headRef: string, viewed: ReadonlyMap<string, string>, exceptions: ReadonlySet<string>, key: string) {
+  return isViewedFile(file, headRef, viewed) !== exceptions.has(key)
+}
+
 export function initialDiffLayout(width: number, preferences: DiffPanelUserPreferences) {
   return {
     fileTreeOpen: width >= NARROW_DIFF_PANEL_WIDTH && (preferences.fileTreeOpen ?? true),

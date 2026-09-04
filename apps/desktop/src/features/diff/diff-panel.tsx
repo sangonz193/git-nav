@@ -17,7 +17,7 @@ import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
 import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, rangeMarker, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
-import { fileIdentity, fileName, initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
+import { fileIdentity, fileName, initialDiffLayout, isFoldedFile, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
 import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
@@ -383,7 +383,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const [mode, setMode] = useState(params.userPreferences?.mode === "unified" ? DiffModeEnum.Unified : DiffModeEnum.Split)
   const [wrap, setWrap] = useState(false)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const [foldExceptions, setFoldExceptions] = useState<ReadonlySet<string>>(new Set())
   const [viewed, setViewed] = useState<ReadonlyMap<string, string>>(new Map())
   const [hideViewed, setHideViewed] = useState(false)
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(params.userPreferences?.ignoreWhitespace ?? false)
@@ -417,6 +417,11 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const files = useMemo(() => flattenTree(tree), [tree])
   const total = useMemo(() => changedLines(files), [files])
   const viewedCount = useMemo(() => (comparison?.files ?? []).filter((file) => isViewedFile(file, refs.head, viewed)).length, [comparison, refs.head, viewed])
+
+  const isFolded = useCallback(
+    (file: ChangedFile) => isFoldedFile(file, refs.head, viewed, foldExceptions, fileKey(file)),
+    [foldExceptions, refs.head, viewed]
+  )
 
   function toggleFileTree() {
     const next = toggledDiffFileTree(isSidebarOpen, isNarrow, userPreferencesRef.current)
@@ -455,7 +460,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const rowVirtualizer = useVirtualizer({
     count: files.length,
     getScrollElement: () => scrollElement.current,
-    estimateSize: (index) => FILE_HEADER_HEIGHT + estimatedBodyHeight(files[index], mode, collapsed.has(fileKey(files[index]))),
+    estimateSize: (index) => FILE_HEADER_HEIGHT + estimatedBodyHeight(files[index], mode, isFolded(files[index])),
     getItemKey: (index) => fileKey(files[index]),
     overscan: 2,
   })
@@ -508,7 +513,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
         if (!cancelled) {
           reset()
           setExpanded(new Set())
-          setCollapsed(new Set())
+          setFoldExceptions(new Set())
           setComparison(nextComparison)
           setError(null)
         }
@@ -575,11 +580,11 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     if (index !== -1) {
       rowVirtualizer.scrollToIndex(index, { align: "start" })
     }
-  }, [collapsed, files, mode, rowVirtualizer, wrap])
+  }, [files, isFolded, mode, rowVirtualizer, wrap])
 
   useEffect(() => {
-    request(virtualRows.map((row) => files[row.index]).filter((file) => !file.isBinary && !collapsed.has(fileKey(file)) && (!isLargeDiff(file) || expanded.has(fileKey(file)))))
-  }, [collapsed, expanded, files, request, virtualRows])
+    request(virtualRows.map((row) => files[row.index]).filter((file) => !file.isBinary && !isFolded(file) && (!isLargeDiff(file) || expanded.has(fileKey(file)))))
+  }, [expanded, files, isFolded, request, virtualRows])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setSearchQuery(searchInput), SEARCH_DEBOUNCE)
@@ -671,12 +676,12 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
 
   function toggleCollapsed(file: ChangedFile) {
     const key = fileKey(file)
-    const next = new Set(collapsed)
+    const next = new Set(foldExceptions)
     if (!next.delete(key)) {
       next.add(key)
     }
     anchorFold(file)
-    setCollapsed(next)
+    setFoldExceptions(next)
   }
 
   // Reading a file is what folding it away means here, so the two move together. Only a file with a blob
@@ -693,15 +698,11 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     }
     marksDuringLoad.current?.set(path, wasViewed ? null : identity)
     setViewed(nextViewed)
-    const key = fileKey(file)
-    const nextCollapsed = new Set(collapsed)
-    if (wasViewed) {
-      nextCollapsed.delete(key)
-    } else {
-      nextCollapsed.add(key)
-    }
+    // The mark decides the fold, so a fold that was set by hand has been answered.
+    const next = new Set(foldExceptions)
+    next.delete(fileKey(file))
     anchorFold(file)
-    setCollapsed(nextCollapsed)
+    setFoldExceptions(next)
     if (identity) {
       invoke("set_file_viewed", { repoPath: params.path, baseRef: refs.base, headRef: refs.head, mergeBase: refs.mergeBase, path, identity, viewed: !wasViewed })
         .catch((message: unknown) => toast.error("Could not save which files were viewed.", { description: String(message) }))
@@ -710,7 +711,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
 
   function collapseAll(collapse: boolean) {
     pendingAnchor.current = activeKey
-    setCollapsed(collapse ? new Set(files.map(fileKey)) : new Set())
+    setFoldExceptions(new Set(files.filter((file) => isViewedFile(file, refs.head, viewed) !== collapse).map(fileKey)))
   }
 
   const selectFile = useCallback((file: ChangedFile) => {
@@ -786,7 +787,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
           return (
             <div className="diff-file-row" data-index={row.index} key={row.key} ref={rowVirtualizer.measureElement} style={{ top: row.start }}>
               <FileDiffCard
-                collapsed={collapsed.has(fileKey(file))}
+                collapsed={isFolded(file)}
                 entry={entries[fileKey(file)]}
                 expanded={expanded.has(fileKey(file))}
                 file={file}
@@ -885,7 +886,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
                 <ChevronsDownUp />
                 Collapse all files
               </DropdownMenuItem>
-              <DropdownMenuItem disabled={collapsed.size === 0} onSelect={() => collapseAll(false)}>
+              <DropdownMenuItem disabled={files.length === 0} onSelect={() => collapseAll(false)}>
                 <ChevronsUpDown />
                 Expand all files
               </DropdownMenuItem>
