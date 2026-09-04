@@ -2,17 +2,24 @@ name: Pull Request
 
 on:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit SHA to check
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.ref }}
   cancel-in-progress: true
 
 jobs:
   checks:
-    runs-on: macos-15
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
@@ -33,14 +40,26 @@ jobs:
 
       - run: bun run test
 
+  macos-check:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
       - run: cargo test
         working-directory: apps/desktop/src-tauri
 
   linux-check:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
 
       - run: |
           sudo apt-get update
@@ -59,10 +78,13 @@ jobs:
         working-directory: apps/desktop/src-tauri
 
   windows-check:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
 
       - run: cargo check --target x86_64-pc-windows-msvc
         working-directory: apps/desktop/src-tauri
