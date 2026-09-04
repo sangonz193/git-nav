@@ -31,6 +31,7 @@
   },
   "scripts": {
     "build:package": "bun run --cwd ../../apps/desktop tauri build && bun scripts/package-platform.ts",
+    "bootstrap:platform-packages": "bun scripts/bootstrap-platform-packages.ts",
     "format": "prettier --no-config --write \"**/*.{js,ts}\"",
     "lint": "eslint bin",
     "test": "bun test",
