@@ -149,6 +149,15 @@ describe("usableRepositoryLayout", () => {
       layout: {
         ...value.layout,
         panels: {
+          diff: serializedPanel("diff", "diff", { headRef: "feature", name: "git-nav", path }),
+        },
+      },
+    }, path)).toBeNull()
+    expect(usableRepositoryLayout({
+      ...value,
+      layout: {
+        ...value.layout,
+        panels: {
           diff: serializedPanel("diff", "diff", { baseRef: "main", headRef: "feature", mode: "split", name: "git-nav", path }),
         },
       },

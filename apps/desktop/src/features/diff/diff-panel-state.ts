@@ -1,4 +1,4 @@
-import type { DiffPanelParams, DiffPanelUserPreferences, RepositoryPanelParams } from "../repository/repository-window"
+import type { DiffPanelParams, DiffPanelUserPreferences, RepositoryPanelParams } from "@/lib/panel-params"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 import type { SelectedRefs } from "./diff-title"
 

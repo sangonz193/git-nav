@@ -22,7 +22,7 @@ import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowInde
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
-import type { GraphPanelParams } from "../repository/repository-window"
+import type { GraphPanelParams } from "@/lib/panel-params"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type { Project, Worktree as ProjectWorktree } from "../repository/project"
 

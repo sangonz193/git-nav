@@ -26,38 +26,7 @@ import { invoke, isDesktop } from "../../lib/ipc"
 import { closeRepositoryWindowAfterSaving, listenForRepositoryLayoutPageHide, repositoryLayoutRestoreController, repositoryLayoutSaveScheduler, REPOSITORY_LAYOUT_VERSION, restoreRepositoryLayout, unresolvablePanelIds, usableRepositoryLayout } from "../../lib/repository-layout"
 import { settingsClientId } from "../../lib/settings"
 import { dockTitleBarGroups } from "../../lib/macos-window-chrome"
-
-export type RepositoryPanelParams = {
-  name: string
-  path: string
-}
-
-export type DiffPanelUserPreferences = {
-  fileTreeOpen?: boolean
-  hideViewed?: boolean
-  ignoreWhitespace?: boolean
-  mode?: "split" | "unified"
-  wrap?: boolean
-}
-
-export type DiffPanelParams = RepositoryPanelParams & {
-  baseRef: string
-  baseLabel?: string
-  headRef: string
-  headLabel?: string
-  mergeBase?: boolean
-  selectedFilePath?: string | null
-  userPreferences?: DiffPanelUserPreferences
-}
-
-export type GraphPanelUserPreferences = {
-  columnWidths?: Record<string, number>
-}
-
-export type GraphPanelParams = RepositoryPanelParams & {
-  selectedCommitHashes?: string[]
-  userPreferences?: GraphPanelUserPreferences
-}
+import type { RepositoryPanelParams } from "../../lib/panel-params"
 
 // The icon names the panel, not what it is pointed at, which the selectors and the title already say.
 // It leaves the title free to be only the thing itself: a comparison, a worktree or a stash.
