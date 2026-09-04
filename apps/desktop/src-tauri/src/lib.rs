@@ -1464,14 +1464,8 @@ fn squash_candidates(repo_path: &str, range: &str) -> Vec<SquashCandidate> {
 
 // A squash merge replaces a branch with a single commit holding the same net change, so the branch
 // never becomes an ancestor and the graph has no edge to draw without reconstructing one.
-fn squash_merge_target(repo_path: &str, tip: &str, primary: &str) -> Option<String> {
-    if git_succeeds(repo_path, &["merge-base", "--is-ancestor", tip, primary]) {
-        return None;
-    }
-    let base = git_output(repo_path, &["merge-base", tip, primary])?;
-    let range = format!("{base}..{primary}");
+fn squash_merge_target_from_candidates(repo_path: &str, tip: &str, base: &str, candidates: &[SquashCandidate]) -> Option<String> {
     let tip_tree = git_output(repo_path, &["rev-parse", &format!("{tip}^{{tree}}")])?;
-    let candidates = squash_candidates(repo_path, &range);
 
     // The squash landed straight onto the branch point, so it carries the branch tip's tree verbatim.
     if let Some(candidate) = candidates.iter().find(|candidate| candidate.tree == tip_tree) {
@@ -1493,7 +1487,7 @@ fn squash_merge_target(repo_path: &str, tip: &str, primary: &str) -> Option<Stri
         .into_iter()
         .filter(|candidate| candidate.paths == branch_paths)
         .find(|candidate| patch_id(repo_path, &["show", &candidate.hash]).as_deref() == Some(branch_patch.as_str()))
-        .map(|candidate| candidate.hash)
+        .map(|candidate| candidate.hash.clone())
 }
 
 // A squash that has not been pushed yet lives only on the local counterpart of the primary branch, so the
@@ -1512,13 +1506,23 @@ fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
     let Ok(primary) = squash_search_reference(repo_path) else {
         return Vec::new();
     };
-    let Ok(branches) = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads"]) else {
+    let Ok(branches) = git_output_allow_empty(repo_path, &["for-each-ref", "--no-merged", &primary, "--format=%(objectname)", "refs/heads"]) else {
         return Vec::new();
     };
+    let mut candidates_by_base = HashMap::new();
+    let mut seen_tips = HashSet::new();
     branches
         .lines()
         .filter(|tip| !tip.is_empty())
-        .filter_map(|tip| squash_merge_target(repo_path, tip, &primary).map(|target| (tip.to_string(), target)))
+        .filter(|tip| seen_tips.insert(*tip))
+        .filter_map(|tip| {
+            let base = git_output(repo_path, &["merge-base", tip, &primary])?;
+            let candidates = candidates_by_base
+                .entry(base.clone())
+                .or_insert_with(|| squash_candidates(repo_path, &format!("{base}..{primary}")));
+            squash_merge_target_from_candidates(repo_path, tip, &base, candidates)
+                .map(|target| (tip.to_string(), target))
+        })
         .collect()
 }
 
@@ -5327,14 +5331,11 @@ mod tests {
         let still_open = sha("HEAD");
         run(&["checkout", "--quiet", "main"]);
 
-        let primary = squash_search_reference(&path).unwrap();
         let edges: HashMap<_, _> = local_squash_merges(&path).into_iter().collect();
-        let open_target = squash_merge_target(&path, &still_open, &primary);
         fs::remove_dir_all(&path).unwrap();
 
         assert_eq!(edges.get(&onto_tip), Some(&onto_tip_target), "tree match failed");
         assert_eq!(edges.get(&after_drift), Some(&after_drift_target), "patch id fallback failed");
-        assert_eq!(open_target, None);
         assert!(!edges.contains_key(&still_open));
     }
 
