@@ -15,7 +15,7 @@ import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import { commitFromTuple, type Commit, type CommitBatch, type StashEntry } from "../commit-graph/commit-graph"
 import { isRevisionExpression, searchReferences, type HitKind, type Reference, type ReferenceHit, type ResolvedRevision } from "./reference-search"
-import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, rangeMarker, selectedRefs, type SelectedRefs } from "./diff-title"
+import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, rangeMarker, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
 import { fileName, fileOid, initialDiffLayout, isViewedFile, NARROW_DIFF_PANEL_WIDTH, persistedDiffPanelParams, toggledDiffFileTree, WIDE_DIFF_PANEL_WIDTH, type ChangedFile } from "./diff-panel-state"
 import type { DiffPanelParams, DiffPanelUserPreferences } from "../repository/repository-window"
 
@@ -101,6 +101,16 @@ function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent>{hint}</TooltipContent>
     </Tooltip>
+  )
+}
+
+function HeadPickerLabel({ label, reference }: { label: string; reference: string }) {
+  const shortRef = refLabel(reference)
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+      <span className="truncate">{label || "(no subject)"}</span>
+      {shortRef !== reference && shortRef !== label && <code className="shrink-0 text-xs text-muted-foreground">{shortRef}</code>}
+    </span>
   )
 }
 
@@ -775,7 +785,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
           </Button>
         </Hinted>
         <Button aria-expanded={picker === "head"} className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} onClick={() => openPicker("head")} ref={(element) => { pickerButtons.current.head = element }} size="sm" type="button" variant="outline">
-          <span className="truncate">{refs.headLabel}</span>
+          <HeadPickerLabel label={refs.headLabel} reference={refs.head} />
           <ChevronDown />
         </Button>
         <div className="ml-auto flex shrink-0 items-center gap-1">
