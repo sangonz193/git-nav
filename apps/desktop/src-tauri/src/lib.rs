@@ -4,13 +4,12 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::ffi::{OsStr, OsString};
 #[cfg(all(unix, not(test)))]
 use std::os::unix::ffi::OsStringExt;
+#[cfg(any(unix, test))]
+use std::io::{ErrorKind, Read};
 #[cfg(unix)]
 use std::sync::OnceLock;
 #[cfg(all(unix, not(test)))]
-use std::{
-    io::{ErrorKind, Read},
-    time::Instant,
-};
+use std::time::Instant;
 use std::{
     collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet},
     env, fs,
@@ -165,6 +164,8 @@ const APPIMAGE_PATH_ENVIRONMENT: [&str; 6] = [
 const SHELL_PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(all(unix, not(test)))]
 const SHELL_PATH_PROBE_OUTPUT_LIMIT: u64 = 64 * 1024;
+#[cfg(any(unix, test))]
+const SHELL_PATH_PROBE_MARKER: &str = "GITNAV_LOGIN_ENVIRONMENT";
 
 #[cfg(unix)]
 static EFFECTIVE_PATH: OnceLock<OsString> = OnceLock::new();
@@ -211,26 +212,25 @@ fn merged_path_list(
 }
 
 #[cfg(any(unix, test))]
-fn shell_path_payload(output: &[u8]) -> Option<&[u8]> {
-    let start = output.iter().position(|byte| *byte == 0)? + 1;
-    let end = output[start..].iter().position(|byte| *byte == 0)? + start;
-    let payload = &output[start..end];
-    (!payload.is_empty()).then_some(payload)
+fn shell_path_from_environment(output: &[u8]) -> Option<&[u8]> {
+    let mut lines = output.split_inclusive(|byte| *byte == b'\n');
+    lines.find(|line| line.strip_suffix(b"\n") == Some(SHELL_PATH_PROBE_MARKER.as_bytes()))?;
+    lines.next()?.strip_suffix(b"\n")
 }
 
 #[cfg(any(unix, test))]
-fn shell_path_frame_is_complete(output: &[u8]) -> bool {
-    output.iter().filter(|byte| **byte == 0).count() >= 2
-}
-
-#[cfg(any(unix, test))]
-fn validated_shell_paths(payload: &OsStr) -> Option<Vec<PathBuf>> {
-    // A shell that prints $PATH in some other shape than a separator-joined list must read as a
-    // failed probe, not contribute unusable components.
-    let paths: Vec<_> = env::split_paths(payload)
-        .filter(|path| path.is_absolute() && path.is_dir())
-        .collect();
-    (!paths.is_empty()).then_some(paths)
+fn read_shell_path_probe_output(reader: &mut impl Read) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    while shell_path_from_environment(&output).is_none() {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => output.extend_from_slice(&chunk[..count]),
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    output
 }
 
 #[cfg(target_os = "linux")]
@@ -254,7 +254,11 @@ fn shell_path_from_login_shell(inherited: &OsStr) -> Option<OsString> {
     #[cfg(target_os = "linux")]
     sanitize_appimage_environment(&mut command);
     command
-        .args(["-l", "-i", "-c", "printf '\\000%s\\000' \"$PATH\""])
+        .args(["-l", "-i", "-c"])
+        .arg(format!(
+            "printf '\\n{}\\n'; exec /usr/bin/printenv PATH",
+            SHELL_PATH_PROBE_MARKER
+        ))
         .env("PATH", inherited)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -263,20 +267,10 @@ fn shell_path_from_login_shell(inherited: &OsStr) -> Option<OsString> {
     let stdout = child.stdout.take()?;
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     thread::spawn(move || {
-        // Stop at the closing NUL: rc files can leave background children holding the pipe open,
-        // so waiting for EOF would outlive the shell and hit the probe deadline.
+        // Stop at the completed PATH line: rc files can leave background children holding the
+        // pipe open, so waiting for EOF would outlive the shell and hit the probe deadline.
         let mut reader = stdout.take(SHELL_PATH_PROBE_OUTPUT_LIMIT);
-        let mut output = Vec::new();
-        let mut chunk = [0_u8; 1024];
-        while !shell_path_frame_is_complete(&output) {
-            match reader.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(count) => output.extend_from_slice(&chunk[..count]),
-                Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                Err(_) => break,
-            }
-        }
-        let _ = sender.send(output);
+        let _ = sender.send(read_shell_path_probe_output(&mut reader));
     });
 
     let deadline = Instant::now() + SHELL_PATH_PROBE_TIMEOUT;
@@ -309,7 +303,9 @@ fn shell_path_from_login_shell(inherited: &OsStr) -> Option<OsString> {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .ok()
         })
-        .and_then(|output| shell_path_payload(&output).map(|payload| OsString::from_vec(payload.to_vec())))
+        .and_then(|output| {
+            shell_path_from_environment(&output).map(|path| OsString::from_vec(path.to_vec()))
+        })
 }
 
 #[cfg(unix)]
@@ -321,12 +317,12 @@ fn effective_path() -> OsString {
             let discovered: Option<OsString> = shell_path_from_login_shell(&inherited);
             #[cfg(test)]
             let discovered: Option<OsString> = None;
-            let discovered = discovered
-                .as_deref()
-                .and_then(validated_shell_paths)
-                .unwrap_or_default();
             let fallbacks = fallback_path_prefixes(env::var_os("HOME").as_deref().map(Path::new));
-            merged_path_list(discovered, fallbacks, &inherited)
+            merged_path_list(
+                discovered.as_deref().map(env::split_paths).into_iter().flatten(),
+                fallbacks,
+                &inherited,
+            )
         })
         .clone()
 }
@@ -5199,92 +5195,82 @@ mod tests {
     }
 
     #[test]
-    fn parses_shell_path_payload() {
+    fn reads_path_from_the_marked_environment() {
         assert_eq!(
-            shell_path_payload(b"shell banner\n\0/opt/homebrew/bin:/usr/bin\0"),
+            shell_path_from_environment(
+                b"shell banner\nGITNAV_LOGIN_ENVIRONMENT\n/opt/homebrew/bin:/usr/bin\n"
+            ),
             Some(&b"/opt/homebrew/bin:/usr/bin"[..])
         );
     }
 
     #[test]
-    fn rejects_shell_path_payload_without_complete_nul_framing() {
-        assert_eq!(shell_path_payload(b"/usr/bin"), None);
-        assert_eq!(shell_path_payload(b"\0/usr/bin"), None);
+    fn reads_path_when_a_partial_line_precedes_the_marker() {
+        assert_eq!(
+            shell_path_from_environment(
+                b"shell title\nGITNAV_LOGIN_ENVIRONMENT\n/opt/homebrew/bin:/usr/bin\n"
+            ),
+            Some(&b"/opt/homebrew/bin:/usr/bin"[..])
+        );
     }
 
     #[test]
-    fn rejects_empty_shell_path_payload() {
-        assert_eq!(shell_path_payload(b"\0\0"), None);
+    fn requires_a_terminated_path_line() {
+        assert_eq!(
+            shell_path_from_environment(
+                b"GITNAV_LOGIN_ENVIRONMENT\n/opt/homebrew/bin:/usr"
+            ),
+            None
+        );
     }
 
     #[test]
-    fn detects_a_complete_shell_path_frame() {
-        assert!(shell_path_frame_is_complete(b"banner\n\0/usr/bin\0"));
-        assert!(shell_path_frame_is_complete(b"\0\0trailing chatter"));
-        assert!(!shell_path_frame_is_complete(b"banner\n\0/usr/bin"));
-        assert!(!shell_path_frame_is_complete(b""));
-    }
+    fn reads_a_path_line_split_across_chunks() {
+        let path = format!("/opt/{}", "x".repeat(1024));
+        let mut output = format!("{SHELL_PATH_PROBE_MARKER}\n").into_bytes();
+        output.extend_from_slice(path.as_bytes());
+        output.push(b'\n');
 
-    fn shell_path_scratch_directory() -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory =
-            env::temp_dir().join(format!("git-nav-shell-path-{}-{nonce}", std::process::id()));
-        fs::create_dir_all(&directory).unwrap();
-        directory
+        let mut reader = std::io::Cursor::new(output.clone());
+        let read = read_shell_path_probe_output(&mut reader);
+
+        assert_eq!(read, output);
+        assert_eq!(shell_path_from_environment(&read), Some(path.as_bytes()));
     }
 
     #[test]
-    fn accepts_shell_path_entries_that_are_existing_absolute_directories() {
-        let directory = shell_path_scratch_directory();
-        let first = directory.join("first");
-        let second = directory.join("second");
-        fs::create_dir_all(&first).unwrap();
-        fs::create_dir_all(&second).unwrap();
+    fn stops_reading_when_the_probe_output_limit_is_reached_without_a_marker() {
+        let mut reader = std::io::Cursor::new(b"output without a marker").take(6);
 
-        let payload = env::join_paths([&first, &second]).unwrap();
-
-        assert_eq!(validated_shell_paths(&payload), Some(vec![first, second]));
-
-        fs::remove_dir_all(directory).unwrap();
+        assert_eq!(read_shell_path_probe_output(&mut reader), b"output");
     }
 
     #[test]
-    fn rejects_a_space_joined_shell_path_answer() {
-        let directory = shell_path_scratch_directory();
-        let first = directory.join("first");
-        let second = directory.join("second");
-        fs::create_dir_all(&first).unwrap();
-        fs::create_dir_all(&second).unwrap();
-
-        let payload = OsString::from(format!("{} {}", first.display(), second.display()));
-
-        assert_eq!(validated_shell_paths(&payload), None);
-
-        fs::remove_dir_all(directory).unwrap();
+    fn reads_path_before_continuing_output() {
+        assert_eq!(
+            shell_path_from_environment(
+                b"GITNAV_LOGIN_ENVIRONMENT\n/opt/homebrew/bin:/usr/bin\nSHELL=/bin/zsh\n"
+            ),
+            Some(&b"/opt/homebrew/bin:/usr/bin"[..])
+        );
     }
 
     #[test]
-    fn drops_shell_path_entries_that_do_not_exist() {
-        let directory = shell_path_scratch_directory();
-        let existing = directory.join("existing");
-        fs::create_dir_all(&existing).unwrap();
-        let missing = directory.join("missing");
-
-        let payload = env::join_paths([&existing, &missing]).unwrap();
-
-        assert_eq!(validated_shell_paths(&payload), Some(vec![existing]));
-
-        fs::remove_dir_all(directory).unwrap();
+    fn ignores_path_output_before_the_marker() {
+        assert_eq!(
+            shell_path_from_environment(
+                b"/usr/bin\nGITNAV_LOGIN_ENVIRONMENT\n/opt/homebrew/bin:/usr/bin\n"
+            ),
+            Some(&b"/opt/homebrew/bin:/usr/bin"[..])
+        );
     }
 
     #[test]
-    fn rejects_a_shell_path_answer_with_no_usable_entries() {
-        let payload = env::join_paths(["not-a-directory", "also relative"]).unwrap();
-
-        assert_eq!(validated_shell_paths(&payload), None);
+    fn requires_path_in_the_marked_environment() {
+        assert_eq!(
+            shell_path_from_environment(b"GITNAV_LOGIN_ENVIRONMENT\n"),
+            None
+        );
     }
 
     #[test]
