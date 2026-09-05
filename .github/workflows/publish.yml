@@ -72,14 +72,14 @@ jobs:
           test "$version" = "$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
         shell: bash
 
-      - if: runner.os != 'Windows'
-        run: bun run build:package
+      - run: bun run build:package
 
-      - if: runner.os == 'Windows'
-        run: bun --filter=desktop run tauri build --no-bundle
-
-      - if: runner.os == 'Windows'
-        run: bun packages/cli/scripts/package-platform.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}
+          path: apps/desktop/src-tauri/target/release/bundle
+          if-no-files-found: error
+          retention-days: 1
 
       - run: npm publish --access public
         working-directory: packages/cli/dist/packages/${{ matrix.platform }}
