@@ -35,7 +35,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg", "appimage", "deb", "rpm", "nsis"],
     "category": "DeveloperTool",
     "copyright": "Copyright 2026 Santiago González",
     "homepage": "https://github.com/sangonz193/git-nav",
@@ -49,6 +49,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "nsis-path.nsh"
+      }
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
