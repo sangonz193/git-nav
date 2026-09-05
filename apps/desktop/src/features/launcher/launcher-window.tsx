@@ -12,7 +12,7 @@ import { FolderPicker } from "./folder-picker"
 import { NetworkSharingRow } from "../sharing/sharing-controls"
 import type { Project } from "../repository/project"
 
-export function LauncherWindow({ macOSWindowChrome }: { macOSWindowChrome: boolean }) {
+export function LauncherWindow() {
   const [projects, setProjects] = useState<Project[]>([])
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
@@ -94,16 +94,14 @@ export function LauncherWindow({ macOSWindowChrome }: { macOSWindowChrome: boole
   }
 
   return (
-    <main className={`launcher-window relative flex min-h-svh items-center justify-center bg-background p-8${macOSWindowChrome ? " macos-window-chrome" : ""}`}>
-      <div className="macos-launcher-drag-region" data-tauri-drag-region />
-      <div className={`absolute right-4 ${macOSWindowChrome ? "top-1" : "top-4"}`}>
+    <main className="relative flex min-h-svh items-center justify-center bg-background p-8">
+      <div className="absolute top-4 right-4">
         <AppMenuButton
           loadRecentProjects={loadProjects}
           onRecentProjectsChange={setProjects}
         />
       </div>
-      <div className="launcher-window-content">
-        <section className="w-full max-w-lg space-y-7">
+      <section className="w-full max-w-lg space-y-7">
           <div className="space-y-2">
             <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               <GitBranch className="size-5" />
@@ -177,16 +175,15 @@ export function LauncherWindow({ macOSWindowChrome }: { macOSWindowChrome: boole
           </Button>
           {isDesktop && <NetworkSharingRow />}
           {error && <p className="text-sm text-destructive">{error}</p>}
-        </section>
-        <FolderPicker
+      </section>
+      <FolderPicker
           onCancel={() => setIsPickerOpen(false)}
           onChoose={(path) => {
             setIsPickerOpen(false)
             openRepository(path).catch((message: unknown) => setError(String(message)))
           }}
           open={isPickerOpen}
-        />
-      </div>
+      />
     </main>
   )
 }
