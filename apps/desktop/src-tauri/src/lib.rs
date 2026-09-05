@@ -4581,6 +4581,7 @@ async fn stash_action(repo_path: String, name: String, sha: String, action: Stri
 #[cfg(test)]
 mod tests {
 
+    #[cfg(unix)]
     fn command_line_test_directory(name: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -4595,6 +4596,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn reports_a_command_line_link_that_is_not_there() {
         let directory = command_line_test_directory("reports_a_command_line_link_that_is_not_there");
         let link = directory.join("git-nav");
@@ -4603,6 +4605,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn reports_a_command_line_link_that_points_at_this_executable() {
         let directory = command_line_test_directory("reports_a_command_line_link_that_points_at_this_executable");
         let link = directory.join("git-nav");
@@ -4614,6 +4617,7 @@ mod tests {
 
     // An app that moved leaves the old link behind, and installing again is what repairs it.
     #[test]
+    #[cfg(unix)]
     fn reports_a_command_line_link_left_by_another_copy() {
         let directory = command_line_test_directory("reports_a_command_line_link_left_by_another_copy");
         let link = directory.join("git-nav");
@@ -7355,7 +7359,7 @@ fn read_command_line_link() -> CommandLineLink {
 
 /// A link that points anywhere but here is reported as its own state, because an app that moved
 /// leaves one behind and the menu has to offer to write it again rather than call it installed.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(unix, test)))]
 fn command_line_link_at(link: &Path, executable: &Path) -> CommandLineLink {
     let found = CommandLineLink { path: Some(link.to_string_lossy().into_owned()), state: "missing" };
     match fs::read_link(link) {
