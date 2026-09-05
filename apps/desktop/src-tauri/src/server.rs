@@ -255,7 +255,9 @@ struct BoundServer {
 // Binding synchronously lets the single-instance callback start a server from inside the async
 // runtime, where block_on panics.
 fn bind(options: Options, open_worktrees: OpenWorktrees) -> Result<BoundServer, String> {
-    if asset("index.html").is_none() {
+    // The assets are embedded from a frontend build that a bare `cargo test` never runs, and the
+    // tests that bind a server are about the listener rather than what it serves.
+    if !cfg!(test) && asset("index.html").is_none() {
         return Err("The web assets are missing. Build the frontend before serving.".to_string());
     }
 
