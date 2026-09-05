@@ -1,6 +1,6 @@
 {
   "name": "git-nav",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "Read Git history, worktrees and diffs",
   "type": "module",
   "bin": {
@@ -24,12 +24,12 @@
     "node": ">=20"
   },
   "optionalDependencies": {
-    "@git-nav/darwin-arm64": "0.0.15",
-    "@git-nav/darwin-x64": "0.0.15",
-    "@git-nav/linux-arm64": "0.0.15",
-    "@git-nav/linux-x64": "0.0.15",
-    "@git-nav/win32-arm64": "0.0.15",
-    "@git-nav/win32-x64": "0.0.15"
+    "@git-nav/darwin-arm64": "0.0.16",
+    "@git-nav/darwin-x64": "0.0.16",
+    "@git-nav/linux-arm64": "0.0.16",
+    "@git-nav/linux-x64": "0.0.16",
+    "@git-nav/win32-arm64": "0.0.16",
+    "@git-nav/win32-x64": "0.0.16"
   },
   "scripts": {
     "build:package": "bun run --cwd ../../apps/desktop tauri build && bun scripts/package-platform.ts",
