@@ -32,7 +32,7 @@ for (const [platform, target] of Object.entries(platformTargets)) {
       throw new Error(`Missing updater signature for ${updaterTarget}.`)
     }
 
-    const releaseName = `${platform}-${basename(updaterArtifact)}`
+    const releaseName = assetName(`${platform}-${basename(updaterArtifact)}`)
     await cp(
       join(bundleDirectory, updaterArtifact),
       join(releaseDirectory, releaseName)
@@ -41,7 +41,7 @@ for (const [platform, target] of Object.entries(platformTargets)) {
       signature: (
         await readFile(join(bundleDirectory, signature), "utf8")
       ).trim(),
-      url: `https://github.com/sangonz193/git-nav/releases/download/${tag}/${encodeURIComponent(releaseName)}`,
+      url: `https://github.com/sangonz193/git-nav/releases/download/${tag}/${releaseName}`,
     }
   }
 
@@ -52,7 +52,7 @@ for (const [platform, target] of Object.entries(platformTargets)) {
   )) {
     await cp(
       join(bundleDirectory, file),
-      join(releaseDirectory, `${platform}-${basename(file)}`)
+      join(releaseDirectory, assetName(`${platform}-${basename(file)}`))
     )
   }
 }
@@ -69,6 +69,12 @@ await writeFile(
     2
   )}\n`
 )
+
+// GitHub rewrites anything outside this set when it takes an asset, so a name that survives the
+// upload unchanged is the only one the manifest can point at.
+function assetName(name) {
+  return name.replace(/[^A-Za-z0-9._-]/g, ".")
+}
 
 async function bundledFiles(directory) {
   const files = []
