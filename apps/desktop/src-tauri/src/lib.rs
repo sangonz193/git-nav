@@ -170,7 +170,7 @@ const SHELL_PATH_PROBE_MARKER: &str = "GITNAV_LOGIN_ENVIRONMENT";
 #[cfg(unix)]
 static EFFECTIVE_PATH: OnceLock<OsString> = OnceLock::new();
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn fallback_path_prefixes(home: Option<&Path>) -> Vec<PathBuf> {
     let mut prefixes = vec![
         PathBuf::from("/opt/homebrew/bin"),
@@ -186,7 +186,7 @@ fn fallback_path_prefixes(home: Option<&Path>) -> Vec<PathBuf> {
     prefixes
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn merged_path_list(
     discovered: impl IntoIterator<Item = PathBuf>,
     fallbacks: impl IntoIterator<Item = PathBuf>,
@@ -5073,6 +5073,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merges_inherited_discovered_and_fallback_paths_without_duplicates() {
         let inherited = joined_paths(["/usr/bin", "/opt/homebrew/bin", "/usr/local/bin"]);
         let merged = merged_path_list(
@@ -5103,6 +5104,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn keeps_inherited_entries_ahead_of_fallback_prefixes_when_the_probe_fails() {
         let inherited = joined_paths(["/home/user/.asdf/shims", "/usr/bin", "/bin"]);
         let merged = merged_path_list(
@@ -5127,6 +5129,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn keeps_an_inherited_version_manager_shim_ahead_of_its_discovered_duplicate() {
         let inherited = joined_paths(["/home/user/.local/share/mise/shims", "/usr/bin"]);
         let merged = merged_path_list(
@@ -5150,6 +5153,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn drops_empty_path_components() {
         let inherited = env::join_paths([PathBuf::new(), PathBuf::from("/usr/bin"), PathBuf::new()])
             .unwrap();
@@ -5167,6 +5171,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn drops_only_the_home_fallback_that_cannot_be_joined() {
         let inherited = joined_paths(["/usr/bin", "/bin"]);
         let merged = merged_path_list(
@@ -5189,6 +5194,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn uses_well_known_fallback_path_prefixes() {
         assert_eq!(
             fallback_path_prefixes(Some(Path::new("/home/user"))),
@@ -5205,6 +5211,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn adds_fallback_paths_after_a_successful_shell_probe() {
         let inherited = joined_paths(["/usr/bin"]);
         let merged = merged_path_list(
@@ -5548,6 +5555,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merges_fallback_paths_after_sanitizing_an_appimage_path() {
         let app_dir = Path::new("/tmp/.mount_gitnav");
         let inherited = joined_paths([

@@ -86,5 +86,5 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      - run: cargo check --target x86_64-pc-windows-msvc
+      - run: cargo test --target x86_64-pc-windows-msvc
         working-directory: apps/desktop/src-tauri
