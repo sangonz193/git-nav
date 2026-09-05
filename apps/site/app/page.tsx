@@ -83,7 +83,7 @@ export default async function Home() {
 
         <Shot
           alt="Git Nav showing Git's own repository, with runs of unreferenced commits collapsed into single rows"
-          caption="Eighty-two thousand commits of Git's own history, in the ten rows something points at. Every run opens where it sits."
+          caption="Two thousand commits of Git's own history, in the ten rows something points at. Every run opens where it sits."
           height={1280}
           priority
           src="/screenshots/graph-collapsed.png"
