@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@eslint/js": "^10",
     "@tailwindcss/postcss": "^4",
+    "@types/bun": "^1.4.0",
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",

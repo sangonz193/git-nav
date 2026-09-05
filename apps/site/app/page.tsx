@@ -1,8 +1,9 @@
 import { CopyCommand } from "@/components/copy-command"
+import { DownloadCta } from "@/components/download-cta"
 import { Shot } from "@/components/shot"
+import { latestDownloads, RELEASES } from "@/lib/downloads"
 
 const REPOSITORY = "https://github.com/sangonz193/git-nav"
-const RELEASES = `${REPOSITORY}/releases/latest`
 const PACKAGE = "https://www.npmjs.com/package/git-nav"
 
 const features = [
@@ -32,7 +33,9 @@ const features = [
   },
 ]
 
-export default function Home() {
+export default async function Home() {
+  const platforms = await latestDownloads()
+
   return (
     <div className="mx-auto max-w-[1440px] px-6">
       <header className="flex items-center justify-between py-6">
@@ -66,18 +69,14 @@ export default function Home() {
             points at.
           </p>
 
-          <div className="mt-10 max-w-xl space-y-3">
-            <CopyCommand command="npm install --global git-nav" />
-            <CopyCommand command="git nav ." />
-            <p className="text-sm text-muted-foreground">
-              Or{" "}
-              <a
-                className="text-accent underline-offset-4 hover:underline"
-                href={RELEASES}
-              >
-                download the installer
-              </a>{" "}
-              for macOS, Windows or Linux. Free and open source.
+          <div className="mt-10 max-w-xl space-y-5">
+            <DownloadCta platforms={platforms} />
+            <p className="text-sm text-pretty text-muted-foreground">
+              Or install it from npm with{" "}
+              <code className="font-mono text-foreground">
+                npm install --global git-nav
+              </code>
+              , which skips the unsigned app warning.
             </p>
           </div>
         </section>
@@ -211,34 +210,34 @@ export default function Home() {
           </h2>
           <div className="mt-10 grid gap-10 sm:grid-cols-2">
             <div>
-              <h3 className="font-medium">From npm</h3>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Installs the launcher and the binary for your platform, and puts{" "}
-                <code className="font-mono">git nav</code> on your path.
-              </p>
-              <div className="mt-4 space-y-3">
-                <CopyCommand command="npm install --global git-nav" />
-                <CopyCommand command="git nav ." />
-              </div>
-            </div>
-            <div>
               <h3 className="font-medium">As an installer</h3>
-              <p className="mt-2 text-sm text-muted-foreground">
+              <p className="mt-2 text-sm text-pretty text-muted-foreground">
                 A .dmg for macOS, a .exe for Windows, and .AppImage, .deb and
-                .rpm for Linux, on both x64 and arm64.
+                .rpm for Linux, on both x64 and arm64. Once installed, the app
+                updates itself from signed releases.
               </p>
-              <a
-                className="mt-4 inline-flex items-center rounded-xl bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"
-                href={RELEASES}
-              >
-                Download the latest release
-              </a>
+              <div className="mt-4">
+                <DownloadCta platforms={platforms} />
+              </div>
               <p className="mt-4 text-sm text-pretty text-muted-foreground">
                 The builds are not code signed yet. macOS blocks the first
                 launch: open System Settings, then Privacy &amp; Security, and
                 choose Open Anyway. Windows shows a SmartScreen warning: choose
                 More info, then Run anyway.
               </p>
+            </div>
+            <div>
+              <h3 className="font-medium">From npm</h3>
+              <p className="mt-2 text-sm text-pretty text-muted-foreground">
+                Installs the launcher and the binary for your platform, puts{" "}
+                <code className="font-mono">git nav</code> on your path, and
+                arrives without the quarantine flag a download carries, so
+                nothing blocks the first launch.
+              </p>
+              <div className="mt-4 space-y-3">
+                <CopyCommand command="npm install --global git-nav" />
+                <CopyCommand command="git nav ." />
+              </div>
             </div>
           </div>
         </section>

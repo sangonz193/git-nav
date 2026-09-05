@@ -17,6 +17,7 @@
     "isolatedModules": true,
     "incremental": true,
     "skipLibCheck": true,
+    "types": ["bun"],
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
