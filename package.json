@@ -11,7 +11,7 @@
     "dev:web": "bun --filter=desktop run dev:web",
     "lint": "bun run --workspaces lint",
     "format": "bun run --workspaces format",
-    "test": "bun run --workspaces --if-present test",
+    "test": "bun test scripts/create-update-release.test.ts && bun run --workspaces --if-present test",
     "tauri": "bun --filter=desktop run tauri",
     "typecheck": "tsc -b && tsc -b apps/desktop/tsconfig.node.json",
     "update-ts-references": "update-ts-references --configName tsconfig.app.json",

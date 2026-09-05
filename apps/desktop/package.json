@@ -20,6 +20,7 @@
     "@tanstack/react-table": "^9.1.2",
     "@tanstack/react-virtual": "^3.14.10",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-updater": "2.11.0",
     "@workspace/shadcn": "workspace:*",
     "dockview-react": "^8.2.0",
     "lucide-react": "^1.33.0",
