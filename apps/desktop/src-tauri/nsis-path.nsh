@@ -3,6 +3,7 @@
 
 ${StrStr}
 ${StrRep}
+${UnStrRep}
 
 !macro BroadcastEnvironmentChange
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
@@ -27,9 +28,9 @@ ${StrRep}
 
 !macro NSIS_HOOK_PREUNINSTALL
   ReadRegStr $0 HKCU "Environment" "Path"
-  ${StrRep} $0 $0 "$INSTDIR;" ""
-  ${StrRep} $0 $0 ";$INSTDIR" ""
-  ${StrRep} $0 $0 "$INSTDIR" ""
+  ${UnStrRep} $0 $0 "$INSTDIR;" ""
+  ${UnStrRep} $0 $0 ";$INSTDIR" ""
+  ${UnStrRep} $0 $0 "$INSTDIR" ""
   WriteRegExpandStr HKCU "Environment" "Path" "$0"
   !insertmacro BroadcastEnvironmentChange
 !macroend
