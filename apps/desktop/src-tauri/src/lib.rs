@@ -1,7 +1,16 @@
 use serde::{Deserialize, Serialize};
 use rusqlite::{params, Connection, OptionalExtension};
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(unix, test))]
 use std::ffi::{OsStr, OsString};
+#[cfg(all(unix, not(test)))]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
+use std::sync::OnceLock;
+#[cfg(all(unix, not(test)))]
+use std::{
+    io::{ErrorKind, Read},
+    time::Instant,
+};
 use std::{
     collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet},
     env, fs,
@@ -152,12 +161,198 @@ const APPIMAGE_PATH_ENVIRONMENT: [&str; 6] = [
     "GIO_EXTRA_MODULES",
 ];
 
+#[cfg(all(unix, not(test)))]
+const SHELL_PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(all(unix, not(test)))]
+const SHELL_PATH_PROBE_OUTPUT_LIMIT: u64 = 64 * 1024;
+
+#[cfg(unix)]
+static EFFECTIVE_PATH: OnceLock<OsString> = OnceLock::new();
+
+#[cfg(any(unix, test))]
+fn fallback_path_prefixes(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut prefixes = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Some(home) = home {
+        prefixes.push(home.join(".local/bin"));
+    }
+    prefixes.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin"));
+    prefixes.push(PathBuf::from("/usr/bin"));
+    prefixes.push(PathBuf::from("/bin"));
+    prefixes
+}
+
+#[cfg(any(unix, test))]
+fn merged_path_list(
+    discovered: impl IntoIterator<Item = PathBuf>,
+    fallbacks: impl IntoIterator<Item = PathBuf>,
+    inherited: &OsStr,
+) -> OsString {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    // The inherited PATH is the process's actual environment (a terminal or direnv launch already
+    // enriched it), the login-shell answer only fills in what a Dock launch lacks, and the
+    // fallbacks are a guess, so the guess goes last.
+    for path in env::split_paths(inherited)
+        .chain(discovered)
+        .chain(fallbacks)
+    {
+        if !path.as_os_str().is_empty()
+            && env::join_paths([&path]).is_ok()
+            && seen.insert(path.clone())
+        {
+            paths.push(path);
+        }
+    }
+    env::join_paths(paths).expect("individually joinable paths must join together")
+}
+
+#[cfg(any(unix, test))]
+fn shell_path_payload(output: &[u8]) -> Option<&[u8]> {
+    let start = output.iter().position(|byte| *byte == 0)? + 1;
+    let end = output[start..].iter().position(|byte| *byte == 0)? + start;
+    let payload = &output[start..end];
+    (!payload.is_empty()).then_some(payload)
+}
+
+#[cfg(any(unix, test))]
+fn shell_path_frame_is_complete(output: &[u8]) -> bool {
+    output.iter().filter(|byte| **byte == 0).count() >= 2
+}
+
+#[cfg(any(unix, test))]
+fn validated_shell_paths(payload: &OsStr) -> Option<Vec<PathBuf>> {
+    // A shell that prints $PATH in some other shape than a separator-joined list must read as a
+    // failed probe, not contribute unusable components.
+    let paths: Vec<_> = env::split_paths(payload)
+        .filter(|path| path.is_absolute() && path.is_dir())
+        .collect();
+    (!paths.is_empty()).then_some(paths)
+}
+
+#[cfg(target_os = "linux")]
+fn inherited_command_path() -> OsString {
+    let path = env::var_os("PATH").unwrap_or_default();
+    let (Some(app_dir), Some(_)) = (env::var_os("APPDIR"), env::var_os("APPIMAGE")) else {
+        return path;
+    };
+    sanitized_appimage_path_list(&path, Path::new(&app_dir)).unwrap_or_default()
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn inherited_command_path() -> OsString {
+    env::var_os("PATH").unwrap_or_default()
+}
+
+#[cfg(all(unix, not(test)))]
+fn shell_path_from_login_shell(inherited: &OsStr) -> Option<OsString> {
+    let shell = env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/sh"));
+    let mut command = Command::new(shell);
+    #[cfg(target_os = "linux")]
+    sanitize_appimage_environment(&mut command);
+    command
+        .args(["-l", "-i", "-c", "printf '\\000%s\\000' \"$PATH\""])
+        .env("PATH", inherited)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        // Stop at the closing NUL: rc files can leave background children holding the pipe open,
+        // so waiting for EOF would outlive the shell and hit the probe deadline.
+        let mut reader = stdout.take(SHELL_PATH_PROBE_OUTPUT_LIMIT);
+        let mut output = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        while !shell_path_frame_is_complete(&output) {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&chunk[..count]),
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        let _ = sender.send(output);
+    });
+
+    let deadline = Instant::now() + SHELL_PATH_PROBE_TIMEOUT;
+    loop {
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        };
+        match status {
+            Some(status) if status.success() => break,
+            Some(_) => return None,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    }
+
+    receiver
+        .try_recv()
+        .ok()
+        .or_else(|| {
+            receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .ok()
+        })
+        .and_then(|output| shell_path_payload(&output).map(|payload| OsString::from_vec(payload.to_vec())))
+}
+
+#[cfg(unix)]
+fn effective_path() -> OsString {
+    EFFECTIVE_PATH
+        .get_or_init(|| {
+            let inherited = inherited_command_path();
+            #[cfg(not(test))]
+            let discovered: Option<OsString> = shell_path_from_login_shell(&inherited);
+            #[cfg(test)]
+            let discovered: Option<OsString> = None;
+            let discovered = discovered
+                .as_deref()
+                .and_then(validated_shell_paths)
+                .unwrap_or_default();
+            let fallbacks = fallback_path_prefixes(env::var_os("HOME").as_deref().map(Path::new));
+            merged_path_list(discovered, fallbacks, &inherited)
+        })
+        .clone()
+}
+
+#[cfg(unix)]
+fn apply_effective_path(command: &mut Command) {
+    command.env("PATH", effective_path());
+}
+
+#[cfg(unix)]
+fn warm_effective_path() {
+    // A slow shell rc holds the probe for up to its deadline, so start resolving off the main
+    // thread before the first window's git commands need the PATH.
+    thread::spawn(|| {
+        effective_path();
+    });
+}
+
 fn external_command(program: &str) -> Command {
     let command = Command::new(program);
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(unix, target_os = "windows"))]
     let mut command = command;
     #[cfg(target_os = "linux")]
     sanitize_appimage_environment(&mut command);
+    #[cfg(unix)]
+    apply_effective_path(&mut command);
     #[cfg(target_os = "windows")]
     command.creation_flags(CREATE_NO_WINDOW);
     command
@@ -169,6 +364,7 @@ fn desktop_process(program: &str) -> Command {
     {
         let mut command = Command::new(program);
         sanitize_appimage_environment(&mut command);
+        apply_effective_path(&mut command);
         command
     }
     #[cfg(target_os = "windows")]
@@ -4848,6 +5044,250 @@ mod tests {
     }
 
     #[test]
+    fn merges_inherited_discovered_and_fallback_paths_without_duplicates() {
+        let inherited = joined_paths(["/usr/bin", "/opt/homebrew/bin", "/usr/local/bin"]);
+        let merged = merged_path_list(
+            [
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/home/user/.local/bin"),
+                PathBuf::from("/usr/bin"),
+            ],
+            [
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/opt/homebrew/sbin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/home/user/.local/bin"),
+            ],
+            &inherited,
+        );
+
+        assert_eq!(
+            merged,
+            joined_paths([
+                "/usr/bin",
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/home/user/.local/bin",
+                "/opt/homebrew/sbin",
+            ])
+        );
+    }
+
+    #[test]
+    fn keeps_inherited_entries_ahead_of_fallback_prefixes_when_the_probe_fails() {
+        let inherited = joined_paths(["/home/user/.asdf/shims", "/usr/bin", "/bin"]);
+        let merged = merged_path_list(
+            [],
+            fallback_path_prefixes(Some(Path::new("/home/user"))),
+            &inherited,
+        );
+
+        assert_eq!(
+            merged,
+            joined_paths([
+                "/home/user/.asdf/shims",
+                "/usr/bin",
+                "/bin",
+                "/opt/homebrew/bin",
+                "/opt/homebrew/sbin",
+                "/usr/local/bin",
+                "/home/user/.local/bin",
+                "/home/linuxbrew/.linuxbrew/bin",
+            ])
+        );
+    }
+
+    #[test]
+    fn keeps_an_inherited_version_manager_shim_ahead_of_its_discovered_duplicate() {
+        let inherited = joined_paths(["/home/user/.local/share/mise/shims", "/usr/bin"]);
+        let merged = merged_path_list(
+            [
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/home/user/.local/share/mise/shims"),
+                PathBuf::from("/usr/bin"),
+            ],
+            [],
+            &inherited,
+        );
+
+        assert_eq!(
+            merged,
+            joined_paths([
+                "/home/user/.local/share/mise/shims",
+                "/usr/bin",
+                "/opt/homebrew/bin",
+            ])
+        );
+    }
+
+    #[test]
+    fn drops_empty_path_components() {
+        let inherited = env::join_paths([PathBuf::new(), PathBuf::from("/usr/bin"), PathBuf::new()])
+            .unwrap();
+        let merged = merged_path_list(
+            [PathBuf::new(), PathBuf::from("/shell/bin")],
+            [PathBuf::new(), PathBuf::from("/fallback/bin")],
+            &inherited,
+        );
+
+        assert_eq!(
+            merged,
+            joined_paths(["/usr/bin", "/shell/bin", "/fallback/bin"])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drops_only_the_home_fallback_that_cannot_be_joined() {
+        let inherited = joined_paths(["/usr/bin", "/bin"]);
+        let merged = merged_path_list(
+            [],
+            fallback_path_prefixes(Some(Path::new("/tmp/dev:profile"))),
+            &inherited,
+        );
+
+        assert_eq!(
+            merged,
+            joined_paths([
+                "/usr/bin",
+                "/bin",
+                "/opt/homebrew/bin",
+                "/opt/homebrew/sbin",
+                "/usr/local/bin",
+                "/home/linuxbrew/.linuxbrew/bin",
+            ])
+        );
+    }
+
+    #[test]
+    fn uses_well_known_fallback_path_prefixes() {
+        assert_eq!(
+            fallback_path_prefixes(Some(Path::new("/home/user"))),
+            vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/opt/homebrew/sbin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/home/user/.local/bin"),
+                PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn adds_fallback_paths_after_a_successful_shell_probe() {
+        let inherited = joined_paths(["/usr/bin"]);
+        let merged = merged_path_list(
+            [PathBuf::from("/usr/bin")],
+            fallback_path_prefixes(Some(Path::new("/home/user"))),
+            &inherited,
+        );
+
+        assert_eq!(
+            merged,
+            joined_paths([
+                "/usr/bin",
+                "/opt/homebrew/bin",
+                "/opt/homebrew/sbin",
+                "/usr/local/bin",
+                "/home/user/.local/bin",
+                "/home/linuxbrew/.linuxbrew/bin",
+                "/bin",
+            ])
+        );
+    }
+
+    #[test]
+    fn parses_shell_path_payload() {
+        assert_eq!(
+            shell_path_payload(b"shell banner\n\0/opt/homebrew/bin:/usr/bin\0"),
+            Some(&b"/opt/homebrew/bin:/usr/bin"[..])
+        );
+    }
+
+    #[test]
+    fn rejects_shell_path_payload_without_complete_nul_framing() {
+        assert_eq!(shell_path_payload(b"/usr/bin"), None);
+        assert_eq!(shell_path_payload(b"\0/usr/bin"), None);
+    }
+
+    #[test]
+    fn rejects_empty_shell_path_payload() {
+        assert_eq!(shell_path_payload(b"\0\0"), None);
+    }
+
+    #[test]
+    fn detects_a_complete_shell_path_frame() {
+        assert!(shell_path_frame_is_complete(b"banner\n\0/usr/bin\0"));
+        assert!(shell_path_frame_is_complete(b"\0\0trailing chatter"));
+        assert!(!shell_path_frame_is_complete(b"banner\n\0/usr/bin"));
+        assert!(!shell_path_frame_is_complete(b""));
+    }
+
+    fn shell_path_scratch_directory() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            env::temp_dir().join(format!("git-nav-shell-path-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn accepts_shell_path_entries_that_are_existing_absolute_directories() {
+        let directory = shell_path_scratch_directory();
+        let first = directory.join("first");
+        let second = directory.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+
+        let payload = env::join_paths([&first, &second]).unwrap();
+
+        assert_eq!(validated_shell_paths(&payload), Some(vec![first, second]));
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_space_joined_shell_path_answer() {
+        let directory = shell_path_scratch_directory();
+        let first = directory.join("first");
+        let second = directory.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+
+        let payload = OsString::from(format!("{} {}", first.display(), second.display()));
+
+        assert_eq!(validated_shell_paths(&payload), None);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn drops_shell_path_entries_that_do_not_exist() {
+        let directory = shell_path_scratch_directory();
+        let existing = directory.join("existing");
+        fs::create_dir_all(&existing).unwrap();
+        let missing = directory.join("missing");
+
+        let payload = env::join_paths([&existing, &missing]).unwrap();
+
+        assert_eq!(validated_shell_paths(&payload), Some(vec![existing]));
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_shell_path_answer_with_no_usable_entries() {
+        let payload = env::join_paths(["not-a-directory", "also relative"]).unwrap();
+
+        assert_eq!(validated_shell_paths(&payload), None);
+    }
+
+    #[test]
     fn preserves_malformed_settings_before_starting_a_new_store() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5085,6 +5525,35 @@ mod tests {
         assert_eq!(
             sanitized_appimage_path_list(&value, app_dir),
             Some(joined_paths(["/home/user/bin", "/usr/local/bin", "/usr/bin"]))
+        );
+    }
+
+    #[test]
+    fn merges_fallback_paths_after_sanitizing_an_appimage_path() {
+        let app_dir = Path::new("/tmp/.mount_gitnav");
+        let inherited = joined_paths([
+            "/tmp/.mount_gitnav/usr/bin",
+            "/usr/bin",
+            "/opt/homebrew/bin",
+        ]);
+        let sanitized = sanitized_appimage_path_list(&inherited, app_dir).unwrap();
+        let merged = merged_path_list(
+            [],
+            fallback_path_prefixes(Some(Path::new("/home/user"))),
+            &sanitized,
+        );
+
+        assert_eq!(
+            merged,
+            joined_paths([
+                "/usr/bin",
+                "/opt/homebrew/bin",
+                "/opt/homebrew/sbin",
+                "/usr/local/bin",
+                "/home/user/.local/bin",
+                "/home/linuxbrew/.linuxbrew/bin",
+                "/bin",
+            ])
         );
     }
 
@@ -7704,6 +8173,8 @@ pub fn run() {
         .manage(SharingServer::default())
         .invoke_handler(invoke_handler())
         .setup(move |app| {
+            #[cfg(unix)]
+            warm_effective_path();
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
