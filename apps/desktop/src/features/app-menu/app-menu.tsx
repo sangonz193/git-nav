@@ -1,6 +1,7 @@
 import {
   Download,
   Ellipsis,
+  SquareTerminal,
   FolderOpen,
   Maximize,
   RefreshCw,
@@ -38,6 +39,11 @@ import {
   usesNativeMenu,
   type DesktopAppCommand,
 } from "./app-menu-shortcuts"
+
+type CommandLineLink = {
+  path: string | null
+  state: "elsewhere" | "installed" | "missing" | "unsupported"
+}
 
 type AppMenuButtonProps = {
   loadRecentProjects?: () => Promise<Project[]>
@@ -103,6 +109,7 @@ export function AppMenuButton({
   const [isPickerOpen, setIsPickerOpen] = useState(false)
   const availableUpdate = useAvailableUpdate()
   const version = useAppVersion()
+  const [commandLine, setCommandLine] = useState<CommandLineLink | null>(null)
   const shortcutPrefix =
     isDesktop && usesNativeMenu(navigator.userAgent) ? "⌘" : "Ctrl+"
   const shiftShortcutPrefix = shortcutPrefix === "⌘" ? "⇧⌘" : "Ctrl+Shift+"
@@ -136,6 +143,20 @@ export function AppMenuButton({
     openRepository(path).catch(reportCommandError)
   }
 
+  async function installCommandLineTool() {
+    try {
+      const link = await invoke<CommandLineLink>("install_command_line_link")
+      setCommandLine(link)
+      toast("Command line tool installed", {
+        description: `Run git nav . from ${link.path ?? "your shell"}.`,
+      })
+    } catch (error) {
+      toast("Could not install the command line tool", {
+        description: String(error),
+      })
+    }
+  }
+
   function clearRecentProjects() {
     invoke<void>("clear_recent_projects")
       .then(() => {
@@ -147,7 +168,17 @@ export function AppMenuButton({
 
   return (
     <>
-      <DropdownMenu onOpenChange={(open) => open && void refreshProjects()}>
+      <DropdownMenu
+        onOpenChange={(open) => {
+          if (!open) return
+          void refreshProjects()
+          if (isDesktop) {
+            invoke<CommandLineLink>("command_line_link")
+              .then(setCommandLine)
+              .catch(() => setCommandLine(null))
+          }
+        }}
+      >
         <DropdownMenuTrigger
           aria-label={
             availableUpdate
@@ -264,6 +295,17 @@ export function AppMenuButton({
                 >
                   <Download />
                   Install Update {availableUpdate}
+                </DropdownMenuItem>
+              )}
+              {commandLine && commandLine.state !== "unsupported" && (
+                <DropdownMenuItem
+                  disabled={commandLine.state === "installed"}
+                  onSelect={() => void installCommandLineTool()}
+                >
+                  <SquareTerminal />
+                  {commandLine.state === "installed"
+                    ? "Command Line Tool Installed"
+                    : "Install Command Line Tool"}
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onSelect={() => void checkForUpdateNow()}>
