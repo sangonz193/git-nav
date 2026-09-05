@@ -3,7 +3,6 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { cn } from "@workspace/shadcn/lib/utils"
 import { Button } from "@workspace/shadcn/components/button"
-import { MacOSWindowDragRegion } from "@workspace/shadcn/components/macos-window-chrome"
 import { XIcon } from "lucide-react"
 
 function Dialog({
@@ -57,7 +56,6 @@ function DialogContent({
   return (
     <DialogPortal>
       <DialogOverlay />
-      <MacOSWindowDragRegion />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(

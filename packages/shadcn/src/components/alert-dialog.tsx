@@ -2,7 +2,6 @@ import * as React from "react"
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
 
 import { buttonVariants } from "@workspace/shadcn/components/button"
-import { MacOSWindowDragRegion } from "@workspace/shadcn/components/macos-window-chrome"
 import { cn } from "@workspace/shadcn/lib/utils"
 
 const AlertDialog = AlertDialogPrimitive.Root
@@ -19,7 +18,6 @@ function AlertDialogContent({ className, ...props }: React.ComponentProps<typeof
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
-      <MacOSWindowDragRegion />
       <AlertDialogPrimitive.Content
         className={cn("fixed top-1/2 left-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-popover p-6 shadow-(--overlay-shadow)", className)}
         {...props}
