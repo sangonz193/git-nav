@@ -5,7 +5,7 @@ use std::ffi::{OsStr, OsString};
 #[cfg(all(unix, not(test)))]
 use std::os::unix::ffi::OsStringExt;
 #[cfg(any(unix, test))]
-use std::io::{ErrorKind, Read};
+use std::io::Read;
 #[cfg(unix)]
 use std::sync::OnceLock;
 #[cfg(all(unix, not(test)))]
@@ -14,7 +14,7 @@ use std::{
     collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet},
     env, fs,
     hash::{Hash, Hasher},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, ErrorKind, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{Arc, Mutex},
@@ -1315,27 +1315,60 @@ fn github_repository(remote: &str) -> Option<(String, String)> {
     (!owner.is_empty() && !repository.is_empty()).then_some((host.to_string(), format!("{owner}/{repository}")))
 }
 
-fn github_pull_request_page(host: &str, repository: &str, state: &str) -> Option<Vec<GithubPullRequest>> {
+enum GithubPullRequestFailure<'a> {
+    Spawn(ErrorKind),
+    Exit { code: Option<i32>, stderr: &'a [u8] },
+    UnreadableResponse,
+}
+
+fn github_pull_request_failure_message(failure: GithubPullRequestFailure<'_>) -> String {
+    match failure {
+        GithubPullRequestFailure::Spawn(ErrorKind::NotFound) => {
+            "GitHub CLI was not found; install it to enable pull request information.".to_string()
+        }
+        GithubPullRequestFailure::Spawn(_) => "Could not start GitHub CLI.".to_string(),
+        GithubPullRequestFailure::Exit { code: Some(4), .. } => {
+            "GitHub CLI is not signed in; run gh auth login.".to_string()
+        }
+        GithubPullRequestFailure::Exit { stderr, .. } => String::from_utf8_lossy(stderr)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(|line| line.strip_prefix("gh: ").unwrap_or(line).to_string())
+            .unwrap_or_else(|| "Could not load pull requests from GitHub.".to_string()),
+        GithubPullRequestFailure::UnreadableResponse => {
+            "Could not read the pull request response from GitHub.".to_string()
+        }
+    }
+}
+
+fn github_pull_request_page(host: &str, repository: &str, state: &str) -> Result<Vec<GithubPullRequest>, String> {
     let endpoint = format!("repos/{repository}/pulls?state={state}&sort=updated&direction=desc&per_page=100");
     let mut command = external_command("gh");
     command.args(["api", "--method", "GET", "--header", "Accept: application/vnd.github+json"]);
     if host != "github.com" {
         command.args(["--hostname", host]);
     }
-    let output = command.arg(endpoint).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| serde_json::from_slice(&output.stdout).ok())
-        .flatten()
+    let output = command
+        .arg(endpoint)
+        .output()
+        .map_err(|error| github_pull_request_failure_message(GithubPullRequestFailure::Spawn(error.kind())))?;
+    if !output.status.success() {
+        return Err(github_pull_request_failure_message(GithubPullRequestFailure::Exit {
+            code: output.status.code(),
+            stderr: &output.stderr,
+        }));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| github_pull_request_failure_message(GithubPullRequestFailure::UnreadableResponse))
 }
 
 // Closed pull requests are what a merge is recognised by, and open ones are what a branch is marked with, and
 // each page only reaches as far back as its own state, so both are read.
-fn github_pull_requests(host: &str, repository: &str) -> Option<Vec<GithubPullRequest>> {
+fn github_pull_requests(host: &str, repository: &str) -> Result<Vec<GithubPullRequest>, String> {
     let mut pull_requests = github_pull_request_page(host, repository, "closed")?;
     pull_requests.extend(github_pull_request_page(host, repository, "open")?);
-    Some(pull_requests)
+    Ok(pull_requests)
 }
 
 fn git_succeeds(path: &str, arguments: &[&str]) -> bool {
@@ -1428,7 +1461,7 @@ fn should_sync_pull_requests(connection: &Connection, host: &str, repository: &s
 }
 
 fn sync_pull_requests(connection: &mut Connection, host: &str, repository: &str) -> Result<(), String> {
-    let pull_requests = github_pull_requests(host, repository).ok_or_else(|| "Could not load pull requests.".to_string())?;
+    let pull_requests = github_pull_requests(host, repository)?;
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     for pull_request in pull_requests {
         // A pull request raised from a fork names a branch in that fork, and names like "patch-1" are common
@@ -5821,6 +5854,74 @@ mod tests {
         assert_eq!(
             github_repository("https://github.com/octocat/hello-world.git"),
             Some(("github.com".to_string(), "octocat/hello-world".to_string()))
+        );
+    }
+
+    #[test]
+    fn github_pull_request_failures_explain_missing_cli() {
+        assert_eq!(
+            github_pull_request_failure_message(GithubPullRequestFailure::Spawn(ErrorKind::NotFound)),
+            "GitHub CLI was not found; install it to enable pull request information."
+        );
+    }
+
+    #[test]
+    fn github_pull_request_failures_explain_sign_in() {
+        assert_eq!(
+            github_pull_request_failure_message(GithubPullRequestFailure::Exit {
+                code: Some(4),
+                stderr: b"To get started with GitHub CLI, please run: gh auth login\n",
+            }),
+            "GitHub CLI is not signed in; run gh auth login."
+        );
+    }
+
+    #[test]
+    fn github_pull_request_failures_include_credentials_error() {
+        assert_eq!(
+            github_pull_request_failure_message(GithubPullRequestFailure::Exit {
+                code: Some(1),
+                stderr: b"gh: Bad credentials (HTTP 401)\n",
+            }),
+            "Bad credentials (HTTP 401)"
+        );
+    }
+
+    #[test]
+    fn github_pull_request_failures_include_repository_access_error() {
+        assert_eq!(
+            github_pull_request_failure_message(GithubPullRequestFailure::Exit {
+                code: Some(1),
+                stderr: b"gh: Not Found (HTTP 404)\n",
+            }),
+            "Not Found (HTTP 404)"
+        );
+    }
+
+    #[test]
+    fn github_pull_request_failures_fall_back_when_stderr_is_empty() {
+        assert_eq!(
+            github_pull_request_failure_message(GithubPullRequestFailure::Exit { code: Some(1), stderr: b"" }),
+            "Could not load pull requests from GitHub."
+        );
+    }
+
+    #[test]
+    fn github_pull_request_failures_include_connectivity_host() {
+        assert_eq!(
+            github_pull_request_failure_message(GithubPullRequestFailure::Exit {
+                code: Some(1),
+                stderr: b"error connecting to does-not-resolve.invalid\ncheck your internet connection or https://githubstatus.com\n",
+            }),
+            "error connecting to does-not-resolve.invalid"
+        );
+    }
+
+    #[test]
+    fn github_pull_request_failures_explain_unreadable_responses() {
+        assert_eq!(
+            github_pull_request_failure_message(GithubPullRequestFailure::UnreadableResponse),
+            "Could not read the pull request response from GitHub."
         );
     }
 
