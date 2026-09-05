@@ -7676,7 +7676,9 @@ fn stop_sharing_from_app(app: &AppHandle) -> Result<server::SharingState, String
     let Some(server) = server else {
         return Ok(inactive_sharing_state());
     };
-    server.stop();
+    if !server.stop() {
+        log::warn!("Git Nav sharing server did not release its port within five seconds.");
+    }
     let state = inactive_sharing_state();
     app.emit(SHARING_CHANGED_EVENT, &state)
         .map_err(|error| error.to_string())?;
@@ -7745,7 +7747,11 @@ fn restart_sharing_with(
         server,
         previous,
         options,
-        server::RunningServer::stop,
+        |server: server::RunningServer| {
+            if !server.stop() {
+                log::warn!("Git Nav sharing server did not release its port within five seconds.");
+            }
+        },
         |options| server::start(options, open_worktrees.clone()),
         persist,
     ) {

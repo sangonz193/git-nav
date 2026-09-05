@@ -206,14 +206,22 @@ impl RunningServer {
         self.state.clone()
     }
 
-    /// Returns once the listener socket has closed, so the caller can rebind the port immediately.
-    pub(crate) fn stop(mut self) {
+    /// Waits for the listener socket to close, reporting whether it did. A false return leaves the
+    /// port bound; the kernel can still refuse a rebind for a few milliseconds after a true one.
+    #[must_use]
+    pub(crate) fn stop(mut self) -> bool {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
-        if let Some(released) = self.released.take() {
-            let _ = released.recv_timeout(std::time::Duration::from_secs(5));
-        }
+        let Some(released) = self.released.take() else {
+            return true;
+        };
+        // A disconnect means the server task ended without ever serving, which drops the listener
+        // just the same.
+        !matches!(
+            released.recv_timeout(std::time::Duration::from_secs(5)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        )
     }
 }
 
@@ -837,23 +845,19 @@ mod tests {
     }
 
     #[test]
-    fn stopping_frees_the_port_for_an_immediate_rebind() {
+    fn stopping_waits_for_the_listener_to_close() {
         let server = start(local_options(0), OpenWorktrees::default()).unwrap();
-        let port = server.state().port.unwrap();
 
-        // Jam every runtime worker so the server task cannot close its listener promptly; only a
-        // stop() that truly waits for the release makes the rebind below safe.
+        // Jam every runtime worker so the server task cannot close its listener promptly; a stop()
+        // that gave up on the release instead of waiting for it would report false here.
         for _ in 0..64 {
             tauri::async_runtime::spawn(async {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             });
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
-        server.stop();
 
-        let rebound = start(local_options(port), OpenWorktrees::default())
-            .unwrap_or_else(|error| panic!("could not rebind port {port}: {error}"));
-        rebound.stop();
+        assert!(server.stop());
     }
 
     #[test]
