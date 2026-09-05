@@ -4,7 +4,7 @@ import type { ReactNode } from "react"
 import "./globals.css"
 
 const description =
-  "A desktop app for reading Git: a commit graph carrying branches, tags, worktrees and pull request state, a diff between any two references, and a switch that folds away every commit nothing points at."
+  "A desktop app for reading Git: a commit graph that hides the commits nobody points at, a diff between any two references, and branch cleanup that recognises a squash merge by content."
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://git-nav.dev"),

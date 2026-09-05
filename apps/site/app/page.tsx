@@ -168,15 +168,17 @@ export default async function Home() {
 
         <section className="pt-24">
           <h2 className="max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
-            Delete the branches that already landed
+            Delete the branches a squash merge left behind
           </h2>
           <p className="mt-5 max-w-2xl text-pretty text-muted-foreground">
-            Three signals, previewed and grouped by reason before anything is
-            deleted: a merged pull request whose head matches your local tip, a
-            branch with no commits ahead of the default branch, and a branch
-            whose changes already sit on the default branch as one squashed
-            commit, matched by content because a squash merge leaves no ancestry
-            behind.
+            <code className="font-mono">git branch --merged</code> never lists
+            them. A squash merge rewrites the branch into one commit and leaves
+            no ancestry to follow, so the branch reads as unmerged forever. Git
+            Nav matches by content instead, and previews what it would delete
+            grouped by reason: a merged pull request whose head matches your
+            local tip, a branch with no commits ahead of the default branch, and
+            a branch whose changes already sit on the default branch as one
+            squashed commit.
           </p>
           <div className="mt-10">
             <Shot
