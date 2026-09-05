@@ -27,8 +27,8 @@ const features = [
     body: "Find a branch, tag or commit and land on it, including inside a collapsed run, which opens where it sits.",
   },
   {
-    title: "Updates that arrive on their own",
-    body: "Releases are signed and the app checks for them on launch, on macOS, Windows and Linux.",
+    title: "Updates that find you",
+    body: "The app looks for a new version in the background. An installed build updates itself from a signed release; an npm install tells you the command to run.",
   },
 ]
 

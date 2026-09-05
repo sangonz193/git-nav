@@ -19,7 +19,7 @@ Prefer an installer? Every release ships a `.dmg` for macOS, an `.exe` for Windo
 
 The builds are not code signed yet. macOS blocks the first launch: open System Settings, then
 Privacy & Security, and choose Open Anyway. Windows shows a SmartScreen warning: choose More info,
-then Run anyway. Updates are signed and the app checks for them on launch.
+then Run anyway. Once installed, the app updates itself from signed releases.
 
 ## What it does
 
