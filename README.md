@@ -17,9 +17,9 @@ Prefer an installer? Every release ships a `.dmg` for macOS, an `.exe` for Windo
 `.deb` and `.rpm` for Linux, on both x64 and arm64:
 [the latest release](https://github.com/sangonz193/git-nav/releases/latest).
 
-The builds are not code signed yet. macOS blocks the first launch: open System Settings, then
-Privacy & Security, and choose Open Anyway. Windows shows a SmartScreen warning: choose More info,
-then Run anyway. Once installed, the app updates itself from signed releases.
+The macOS build is signed and notarized, so it opens straight away. Windows is not signed yet, and
+SmartScreen warns on the first launch: choose More info, then Run anyway. Once installed, the app
+updates itself from signed releases.
 
 ## What it does
 

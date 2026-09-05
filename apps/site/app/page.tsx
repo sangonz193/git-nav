@@ -76,7 +76,7 @@ export default async function Home() {
               <code className="font-mono text-foreground">
                 npm install --global git-nav
               </code>
-              , which skips the unsigned app warning.
+              .
             </p>
           </div>
         </section>
@@ -222,19 +222,18 @@ export default async function Home() {
                 <DownloadCta platforms={platforms} />
               </div>
               <p className="mt-4 text-sm text-pretty text-muted-foreground">
-                The builds are not code signed yet. macOS blocks the first
-                launch: open System Settings, then Privacy &amp; Security, and
-                choose Open Anyway. Windows shows a SmartScreen warning: choose
-                More info, then Run anyway.
+                The macOS build is signed and notarized, so it opens straight
+                away. Windows is not signed yet, and SmartScreen warns on the
+                first launch: choose More info, then Run anyway.
               </p>
             </div>
             <div>
               <h3 className="font-medium">From npm</h3>
               <p className="mt-2 text-sm text-pretty text-muted-foreground">
                 Installs the launcher and the binary for your platform, puts{" "}
-                <code className="font-mono">git nav</code> on your path, and
-                arrives without the quarantine flag a download carries, so
-                nothing blocks the first launch.
+                <code className="font-mono">git nav</code> on your path, and on
+                Windows arrives without the mark a download carries, so
+                SmartScreen stays out of the way.
               </p>
               <div className="mt-4 space-y-3">
                 <CopyCommand command="npm install --global git-nav" />
