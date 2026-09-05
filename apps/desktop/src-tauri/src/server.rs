@@ -123,6 +123,10 @@ fn exposure(command: &IpcCommand) -> Exposure {
             Exposure::DesktopOnly
         }
         IpcCommand::update_command => Exposure::DesktopOnly,
+        // A browser cannot put anything on the path of the machine it is reading.
+        IpcCommand::command_line_link | IpcCommand::install_command_line_link => {
+            Exposure::DesktopOnly
+        }
         IpcCommand::open_worktree => Exposure::Api(post(open_worktree)),
         IpcCommand::open_url => Exposure::DesktopOnly,
         IpcCommand::project_snapshot => Exposure::Api(post(project_snapshot)),

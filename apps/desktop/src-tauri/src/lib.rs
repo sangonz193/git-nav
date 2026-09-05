@@ -64,6 +64,8 @@ commands![
     choose_repository,
     zoom,
     update_command,
+    command_line_link,
+    install_command_line_link,
     open_worktree,
     open_url,
     project_snapshot,
@@ -4578,6 +4580,51 @@ async fn stash_action(repo_path: String, name: String, sha: String, action: Stri
 
 #[cfg(test)]
 mod tests {
+
+    fn command_line_test_directory(name: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = env::temp_dir().join(format!(
+            "git-nav-command-line-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn reports_a_command_line_link_that_is_not_there() {
+        let directory = command_line_test_directory("reports_a_command_line_link_that_is_not_there");
+        let link = directory.join("git-nav");
+
+        assert_eq!(command_line_link_at(&link, Path::new("/apps/git-nav")).state, "missing");
+    }
+
+    #[test]
+    fn reports_a_command_line_link_that_points_at_this_executable() {
+        let directory = command_line_test_directory("reports_a_command_line_link_that_points_at_this_executable");
+        let link = directory.join("git-nav");
+        let executable = directory.join("Git Nav.app/Contents/MacOS/git-nav");
+        std::os::unix::fs::symlink(&executable, &link).unwrap();
+
+        assert_eq!(command_line_link_at(&link, &executable).state, "installed");
+    }
+
+    // An app that moved leaves the old link behind, and installing again is what repairs it.
+    #[test]
+    fn reports_a_command_line_link_left_by_another_copy() {
+        let directory = command_line_test_directory("reports_a_command_line_link_left_by_another_copy");
+        let link = directory.join("git-nav");
+        std::os::unix::fs::symlink(directory.join("elsewhere/git-nav"), &link).unwrap();
+
+        assert_eq!(
+            command_line_link_at(&link, &directory.join("Git Nav.app/Contents/MacOS/git-nav")).state,
+            "elsewhere"
+        );
+    }
+
     use super::*;
     use std::cell::RefCell;
 
@@ -7286,6 +7333,99 @@ fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
 #[tauri::command]
 fn update_command() -> Option<String> {
     env::var("GIT_NAV_UPDATE_COMMAND").ok()
+}
+
+/// Where `git nav` has to be for a shell to find it: first on the default macOS path, and owned by
+/// root, so linking it asks for an administrator once.
+#[cfg(target_os = "macos")]
+const COMMAND_LINE_LINK: &str = "/usr/local/bin/git-nav";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandLineLink {
+    path: Option<String>,
+    state: &'static str,
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_command_line_link() -> CommandLineLink {
+    // Every other installer puts the executable on the path itself.
+    CommandLineLink { path: None, state: "unsupported" }
+}
+
+/// A link that points anywhere but here is reported as its own state, because an app that moved
+/// leaves one behind and the menu has to offer to write it again rather than call it installed.
+#[cfg(any(target_os = "macos", test))]
+fn command_line_link_at(link: &Path, executable: &Path) -> CommandLineLink {
+    let found = CommandLineLink { path: Some(link.to_string_lossy().into_owned()), state: "missing" };
+    match fs::read_link(link) {
+        Ok(target) if target == executable => CommandLineLink { state: "installed", ..found },
+        Ok(_) => CommandLineLink { state: "elsewhere", ..found },
+        Err(_) if link.exists() => CommandLineLink { state: "elsewhere", ..found },
+        Err(_) => found,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_command_line_link() -> CommandLineLink {
+    let Ok(executable) = env::current_exe() else {
+        return CommandLineLink {
+            path: Some(COMMAND_LINE_LINK.to_string()),
+            state: "missing",
+        };
+    };
+    command_line_link_at(Path::new(COMMAND_LINE_LINK), &executable)
+}
+
+#[tauri::command]
+fn command_line_link() -> CommandLineLink {
+    read_command_line_link()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command(async)]
+fn install_command_line_link() -> Result<CommandLineLink, String> {
+    Err("Git Nav is already on the path on this platform.".to_string())
+}
+
+/// Links without asking first, because a path a user can write needs no administrator, and only
+/// falls back to the prompt when the link is refused.
+#[cfg(target_os = "macos")]
+#[tauri::command(async)]
+fn install_command_line_link() -> Result<CommandLineLink, String> {
+    let executable = env::current_exe().map_err(|error| error.to_string())?;
+    // The path reaches a shell through osascript, where a quote of its own would end the argument.
+    if executable.to_string_lossy().contains('\'') {
+        return Err("Move Git Nav somewhere without a quote in its path.".to_string());
+    }
+
+    let _ = fs::remove_file(COMMAND_LINE_LINK);
+    match std::os::unix::fs::symlink(&executable, COMMAND_LINE_LINK) {
+        Ok(()) => return Ok(read_command_line_link()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+        Err(error) => return Err(error.to_string()),
+    }
+
+    let script = format!(
+        "do shell script \"mkdir -p /usr/local/bin && ln -sf '{}' '{}'\" with administrator privileges",
+        executable.display(),
+        COMMAND_LINE_LINK,
+    );
+    let output = external_command("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr);
+        return Err(if message.contains("User canceled") {
+            "Installing the command line tool needs an administrator.".to_string()
+        } else {
+            message.trim().to_string()
+        });
+    }
+
+    Ok(read_command_line_link())
 }
 
 #[derive(Debug, PartialEq)]
