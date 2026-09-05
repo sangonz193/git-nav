@@ -1,0 +1,40 @@
+name: Installer smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-nsis:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win32-x64
+            runner: windows-2025
+          - platform: win32-arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run build:package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}
+          path: apps/desktop/src-tauri/target/release/bundle/nsis
+          if-no-files-found: error
+          retention-days: 7
