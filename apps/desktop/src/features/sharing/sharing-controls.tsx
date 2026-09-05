@@ -3,7 +3,6 @@ import {
   LoaderCircle,
   MonitorSmartphone,
   QrCode,
-  RadioTower,
   Settings,
   SquarePen,
   X,
@@ -519,7 +518,7 @@ export function SharingIndicator() {
               type="button"
               variant="ghost"
             >
-              <RadioTower className="size-7" />
+              <MonitorSmartphone className="size-4" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Sharing on the network</TooltipContent>
