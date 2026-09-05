@@ -2268,7 +2268,7 @@ fn watch_sharing_close(window: &WebviewWindow) {
 #[cfg(not(target_os = "macos"))]
 fn watch_sharing_close(_: &WebviewWindow) {}
 
-#[tauri::command]
+#[tauri::command(async)]
 fn show_launcher(app: AppHandle) -> Result<(), String> {
     reveal_launcher(&app)
 }
@@ -2425,6 +2425,8 @@ fn install_app_menu(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// Windows deadlocks when a webview is built on the main thread, which is where a synchronous
+// command runs, so every command that reaches this is declared async.
 fn open_repository_window(app: &AppHandle, path: &str) -> Result<(), String> {
     let project = remember_repository(path, &app.state::<OpenWorktrees>(), Some(app))?;
     let worktree_path = worktree_path(path)?;
@@ -6712,7 +6714,7 @@ mod tests {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_repository(app: AppHandle, path: String) -> Result<(), String> {
     open_repository_window(&app, &path)
 }
@@ -6908,7 +6910,7 @@ fn is_https_url(url: &str) -> bool {
     url.starts_with("https://")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_worktree(app: AppHandle, path: String, target: String) -> Result<(), String> {
     if target == "git-nav" {
         return open_repository_window(&app, &path);
