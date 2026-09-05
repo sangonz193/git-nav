@@ -60,13 +60,13 @@ export default async function Home() {
       <main>
         <section className="flex flex-col items-center pt-16 pb-14 text-center sm:pt-24">
           <h1 className="max-w-4xl text-4xl font-semibold tracking-tight text-balance sm:text-6xl">
-            Read your repository, not its noise.
+            A Git client that hides the commits nobody points at.
           </h1>
           <p className="mt-6 max-w-2xl text-lg text-pretty text-muted-foreground">
-            Git Nav is a desktop app for reading Git. A commit graph carrying
-            branches, tags, worktrees and pull request state, a diff between any
-            two references, and a switch that folds away every commit nothing
-            points at.
+            Everything something points at keeps its row: branches, tags,
+            worktrees, stashes and pull request state. Beside the graph, a diff
+            between any two references and seventeen operations that predict
+            their conflicts before they run.
           </p>
 
           <div className="mt-10 flex max-w-xl flex-col items-center space-y-5">
