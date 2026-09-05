@@ -190,7 +190,7 @@ export function unpushedHashes(commits: Commit[], remotes: string[] = DEFAULT_RE
 // opening it, and only the commit that opens a lane draws the segment leaving it.
 export function startsLane(commits: Commit[], index: number, lane: number) {
   const commit = commits[index]
-  return commit.parentLanes.includes(lane) && (lane === commit.lane || !commits[index - 1]?.activeLanes[lane])
+  return commit.parentLanes.includes(lane) && (lane === commit.lane || commit.incomingLanes?.includes(lane) || !commits[index - 1]?.activeLanes[lane])
 }
 
 // A lane keeps drawing the edge of the commit that last claimed it, so the rows it merely passes through

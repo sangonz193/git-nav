@@ -852,6 +852,16 @@ describe("startsLane", () => {
     expect(startsLane(opening, 1, 3)).toBe(true)
   })
 
+  test("counts a parent lane reused after it reaches the merge", () => {
+    const reused = [
+      laned("above", 1, [1], [false, true, true]),
+      { ...laned("merge", 0, [0, 1], [true, true]), incomingLanes: [1, 2] },
+      laned("parent", 1, [1], [true, true]),
+    ]
+
+    expect(startsLane(reused, 1, 1)).toBe(true)
+  })
+
   test("leaves a joined lane with the state of the line it belongs to", () => {
     const masks = unpushedLanes(joining, new Set(["merge"]))
 
