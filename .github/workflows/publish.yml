@@ -83,6 +83,25 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      # Tauri notarizes and staples the app it bundles, leaving the disk image around it unnotarized,
+      # which is what a download is assessed as when it is opened.
+      - if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for image in apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg; do
+            xcrun notarytool submit "$image" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$image"
+            xcrun stapler validate "$image"
+          done
+        shell: bash
+
       - uses: actions/upload-artifact@v6
         with:
           name: installer-${{ matrix.platform }}
