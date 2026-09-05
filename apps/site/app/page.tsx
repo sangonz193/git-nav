@@ -58,7 +58,7 @@ export default async function Home() {
       </header>
 
       <main>
-        <section className="pt-16 pb-14 sm:pt-24">
+        <section className="flex flex-col items-center pt-16 pb-14 text-center sm:pt-24">
           <h1 className="max-w-4xl text-4xl font-semibold tracking-tight text-balance sm:text-6xl">
             Read your repository, not its noise.
           </h1>
@@ -69,7 +69,7 @@ export default async function Home() {
             points at.
           </p>
 
-          <div className="mt-10 max-w-xl space-y-5">
+          <div className="mt-10 flex max-w-xl flex-col items-center space-y-5">
             <DownloadCta platforms={platforms} />
             <p className="text-sm text-pretty text-muted-foreground">
               Or install it from npm with{" "}
