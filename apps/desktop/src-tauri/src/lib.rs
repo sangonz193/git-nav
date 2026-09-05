@@ -7859,6 +7859,7 @@ pub fn run() {
                 )
                 .build(),
         );
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
         #[cfg(target_os = "macos")]
         {
             builder = builder.plugin(macos_window_chrome_plugin());

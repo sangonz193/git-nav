@@ -73,6 +73,8 @@ jobs:
         shell: bash
 
       - run: bun run build:package
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -103,3 +105,25 @@ jobs:
 
       - run: npm publish --access public
         working-directory: packages/cli
+
+  publish-release:
+    if: github.event.repository.private == false
+    needs: [publish-platform, publish-cli]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - run: bun scripts/create-update-release.ts artifacts release "$GITHUB_REF_NAME"
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes release/*

@@ -1,5 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app"
 import { invoke } from "@tauri-apps/api/core"
+import { check, type Update } from "@tauri-apps/plugin-updater"
 import { useEffect } from "react"
 import { toast } from "@workspace/shadcn/components/sonner"
 import { compareVersions } from "./version-comparison"
@@ -24,7 +25,10 @@ async function checkForUpdate() {
   } catch {
     return
   }
-  if (!command) return
+  if (!command) {
+    await checkForInstallerUpdate()
+    return
+  }
 
   try {
     const [currentVersion, response] = await Promise.all([
@@ -55,6 +59,53 @@ async function checkForUpdate() {
     })
   } catch {
     return
+  }
+}
+
+async function checkForInstallerUpdate() {
+  let update: Update | null = null
+  try {
+    update = await check()
+    localStorage.setItem(LAST_CHECK_KEY, String(Date.now()))
+    if (!update) return
+    const availableUpdate = update
+
+    let updateClaimed = false
+    const closeUnclaimedUpdate = () => {
+      if (updateClaimed) return
+      updateClaimed = true
+      void availableUpdate.close().catch(() => undefined)
+    }
+
+    toast("Update available", {
+      description: `Git Nav ${availableUpdate.version} is ready to install.`,
+      action: {
+        label: "Install update",
+        onClick: () => {
+          if (updateClaimed) return
+          updateClaimed = true
+          void installUpdate(availableUpdate)
+        },
+      },
+      onDismiss: closeUnclaimedUpdate,
+      onAutoClose: closeUnclaimedUpdate,
+    })
+  } catch {
+    await update?.close().catch(() => undefined)
+  }
+}
+
+async function installUpdate(update: Update) {
+  try {
+    toast("Downloading update")
+    await update.downloadAndInstall()
+    toast("Update installed", {
+      description: "Restart Git Nav to finish updating.",
+    })
+  } catch {
+    toast("Could not install update")
+  } finally {
+    await update.close().catch(() => undefined)
   }
 }
 
