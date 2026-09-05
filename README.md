@@ -2,7 +2,7 @@
 
 Read Git history, worktrees and diffs. A desktop app for macOS, Windows and Linux.
 
-![The Git Nav commit graph, with runs of unreferenced commits collapsed into single rows](apps/site/public/screenshots/graph-collapsed.png)
+![Git Nav showing Git's own repository, with runs of unreferenced commits collapsed into single rows](apps/site/public/screenshots/graph-collapsed.png)
 
 ## Install
 

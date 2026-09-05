@@ -82,8 +82,8 @@ export default async function Home() {
         </section>
 
         <Shot
-          alt="The Git Nav commit graph, with runs of unreferenced commits collapsed into single rows"
-          caption="Four weeks of history in ten rows. Every run opens where it sits."
+          alt="Git Nav showing Git's own repository, with runs of unreferenced commits collapsed into single rows"
+          caption="Eighty-two thousand commits of Git's own history, in the ten rows something points at. Every run opens where it sits."
           height={1280}
           priority
           src="/screenshots/graph-collapsed.png"
@@ -102,14 +102,14 @@ export default async function Home() {
           </p>
           <div className="mt-10 grid gap-8 lg:grid-cols-2">
             <Shot
-              alt="The commit graph with every commit listed"
+              alt="Git's own history with every commit listed, one topic branch per lane"
               caption="Every commit, in order."
               height={1280}
               src="/screenshots/collapse-before.png"
               width={1520}
             />
             <Shot
-              alt="The same commit graph with unreferenced commits collapsed"
+              alt="The same history with every unreferenced commit collapsed into a run"
               caption="Only what something points at."
               height={1280}
               src="/screenshots/collapse-after.png"
