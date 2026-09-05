@@ -1,7 +1,9 @@
 import {
+  Download,
   Ellipsis,
   FolderOpen,
   Maximize,
+  RefreshCw,
   RotateCcw,
   Rows3,
   X,
@@ -25,6 +27,12 @@ import { invoke, isDesktop } from "@/lib/ipc"
 import { openRepository } from "@/lib/navigation"
 import { FolderPicker } from "../launcher/folder-picker"
 import type { Project } from "../repository/project"
+import {
+  checkForUpdateNow,
+  installAvailableUpdate,
+  useAppVersion,
+  useAvailableUpdate,
+} from "../updates"
 import {
   desktopAppShortcut,
   usesNativeMenu,
@@ -93,6 +101,8 @@ export function AppMenuButton({
 }: AppMenuButtonProps) {
   const [projects, setProjects] = useState<Project[]>([])
   const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const availableUpdate = useAvailableUpdate()
+  const version = useAppVersion()
   const shortcutPrefix =
     isDesktop && usesNativeMenu(navigator.userAgent) ? "⌘" : "Ctrl+"
   const shiftShortcutPrefix = shortcutPrefix === "⌘" ? "⇧⌘" : "Ctrl+Shift+"
@@ -139,10 +149,17 @@ export function AppMenuButton({
     <>
       <DropdownMenu onOpenChange={(open) => open && void refreshProjects()}>
         <DropdownMenuTrigger
-          aria-label="Application menu"
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
+          aria-label={
+            availableUpdate
+              ? `Application menu, update to ${availableUpdate} available`
+              : "Application menu"
+          }
+          className="relative flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
         >
           <Ellipsis className="size-4" />
+          {availableUpdate && (
+            <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" />
+          )}
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {isDesktop && (
@@ -235,6 +252,26 @@ export function AppMenuButton({
                 <Maximize />
                 Actual Size
                 <Shortcut>{shortcutPrefix}0</Shortcut>
+              </DropdownMenuItem>
+            </>
+          )}
+          {isDesktop && (
+            <>
+              <DropdownMenuSeparator />
+              {availableUpdate && (
+                <DropdownMenuItem
+                  onSelect={() => void installAvailableUpdate()}
+                >
+                  <Download />
+                  Install Update {availableUpdate}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => void checkForUpdateNow()}>
+                <RefreshCw />
+                Check for Updates…
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled>
+                {version ? `Version ${version}` : "Git Nav"}
               </DropdownMenuItem>
             </>
           )}
