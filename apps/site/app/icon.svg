@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="body" gradientUnits="userSpaceOnUse" x1="512" x2="512" y1="100" y2="924">
+      <stop offset="0" stop-color="#242424" />
+      <stop offset="1" stop-color="#0f0f0f" />
+    </linearGradient>
+  </defs>
+  <!-- 824 square inset in a 1024 canvas is the macOS icon grid, which the generator only resizes. -->
+  <rect fill="url(#body)" height="824" rx="185.4" width="824" x="100" y="100" />
+  <g
+    fill="none"
+    stroke="#fafafa"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="2.5"
+    transform="translate(512 512) scale(20) translate(-12 -12)"
+  >
+    <path d="M15 6a9 9 0 0 0-9 9V3" />
+    <circle cx="18" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+  </g>
+</svg>

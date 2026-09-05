@@ -3,6 +3,9 @@
   "references": [
     {
       "path": "apps/desktop/tsconfig.app.json"
+    },
+    {
+      "path": "apps/site"
     }
   ]
 }

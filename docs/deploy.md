@@ -39,3 +39,13 @@ Create a release tag after the version change is merged:
 git tag v0.0.2
 git push origin v0.0.2
 ```
+
+## The site
+
+`apps/site` is the Next.js app behind [git-nav.dev](https://git-nav.dev), deployed on Vercel from
+`main`. The Vercel project sets Root Directory to `apps/site`; the framework preset is Next.js and
+the workspace install runs from the repository root. `git-nav.dev` and `www.git-nav.dev` point at
+it.
+
+Screenshots under `apps/site/public/screenshots` are captured from the app itself, at a 1440 pixel
+wide viewport and a device pixel ratio of 2, against a repository with tags and open pull requests.
