@@ -809,7 +809,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     if (canvas.current) {
       drawCommitGraph({ canvas: canvas.current, commits, items: virtualRows, scrollTop: graphScrollTop, height: graphCanvasHeight(scroll.height), rows, squashMergeEdges, unpushed, unpushedLanes: unpushedLaneMasks, width: graphWidth, rowHeight })
     }
-  }, [commits, graphScrollTop, graphWidth, rowHeight, rows, scroll.height, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows])
+  }, [commits, graphScrollTop, graphWidth, rowHeight, rows, scroll.height, squashMergeEdges, unpushed, unpushedLaneMasks, virtualRows, drawCommitGraph])
 
   function startGraphResize(event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) {
     const originX = "touches" in event ? event.touches[0].clientX : event.clientX
