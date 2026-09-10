@@ -669,7 +669,6 @@ struct OpenWorktrees(Arc<Mutex<HashMap<String, OpenWorktree>>>);
 #[derive(Default)]
 struct SharingServer {
     server: Mutex<Option<server::RunningServer>>,
-    operation: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -8690,7 +8689,9 @@ fn handle_sharing_tray_menu_event(app: &AppHandle, event: MenuEvent) {
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn install_sharing_tray(app: &AppHandle) -> Result<(), String> {
-    if app.tray_by_id("sharing").is_some() {
+    if let Some(_tray) = app.tray_by_id("sharing") {
+        #[cfg(target_os = "linux")]
+        _tray.set_visible(true).map_err(|error| error.to_string())?;
         return Ok(());
     }
     #[cfg(target_os = "linux")]
@@ -8727,7 +8728,18 @@ fn install_sharing_tray(_: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn remove_sharing_tray(app: &AppHandle) {
+    // AppIndicator teardown does not unexport its D-Bus object synchronously, so reuse the same
+    // registered tray and make it passive while sharing is stopped.
+    if let Some(tray) = app.tray_by_id("sharing") {
+        if let Err(error) = tray.set_visible(false) {
+            log::error!("Could not hide the sharing tray: {error}");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn remove_sharing_tray(app: &AppHandle) {
     // The icon only leaves the tray once the last handle to it is dropped.
     drop(app.remove_tray_by_id("sharing"));
@@ -8736,18 +8748,44 @@ fn remove_sharing_tray(app: &AppHandle) {
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn remove_sharing_tray(_: &AppHandle) {}
 
+fn run_sharing_transition<T>(
+    app: &AppHandle,
+    transition: impl FnOnce(AppHandle) -> Result<T, String> + Send + 'static,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let transition_app = app.clone();
+    // Wry runs this inline when already on the UI thread and queues it otherwise. Callers hold no
+    // sharing locks while waiting, and the UI thread orders server and tray lifecycle together.
+    app.run_on_main_thread(move || {
+        let _ = sender.send(transition(transition_app));
+    })
+    .map_err(|error| error.to_string())?;
+    receiver.recv().map_err(|error| error.to_string())?
+}
+
 fn start_sharing_with_arguments(
     app: &AppHandle,
     arguments: ServeArguments,
 ) -> Result<server::SharingState, String> {
+    run_sharing_transition(app, move |app| start_sharing_on_main_thread(&app, arguments))
+}
+
+fn start_sharing_on_main_thread(
+    app: &AppHandle,
+    arguments: ServeArguments,
+) -> Result<server::SharingState, String> {
     let sharing_server = app.state::<SharingServer>();
-    let _operation = sharing_server.operation.lock().map_err(|error| error.to_string())?;
-    let mut sharing = sharing_server.server.lock().map_err(|error| error.to_string())?;
-    if let Some(server) = sharing.as_ref() {
-        if let Some(conflict) = sharing_configuration_conflict(server.options(), &arguments) {
-            return Err(conflict);
+    {
+        let sharing = sharing_server.server.lock().map_err(|error| error.to_string())?;
+        if let Some(server) = sharing.as_ref() {
+            if let Some(conflict) = sharing_configuration_conflict(server.options(), &arguments) {
+                return Err(conflict);
+            }
+            return Ok(server.state());
         }
-        return Ok(server.state());
     }
 
     let server = server::start(
@@ -8766,16 +8804,18 @@ fn start_sharing_with_arguments(
         }
         return Err(error);
     }
-    *sharing = Some(server);
-    drop(sharing);
+    *sharing_server.server.lock().map_err(|error| error.to_string())? = Some(server);
     app.emit(SHARING_CHANGED_EVENT, &state)
         .map_err(|error| error.to_string())?;
     Ok(state)
 }
 
 fn stop_sharing_from_app(app: &AppHandle) -> Result<server::SharingState, String> {
+    run_sharing_transition(app, |app| stop_sharing_on_main_thread(&app))
+}
+
+fn stop_sharing_on_main_thread(app: &AppHandle) -> Result<server::SharingState, String> {
     let sharing_server = app.state::<SharingServer>();
-    let _operation = sharing_server.operation.lock().map_err(|error| error.to_string())?;
     let server = sharing_server.server.lock().map_err(|error| error.to_string())?.take();
     let Some(server) = server else {
         return Ok(inactive_sharing_state());
@@ -8836,11 +8876,18 @@ fn replace_sharing_server<T>(
 
 fn restart_sharing_with(
     app: &AppHandle,
+    change: impl FnOnce(&server::Options) -> Result<server::Options, String> + Send + 'static,
+    persist: impl FnOnce() -> Result<(), String> + Send + 'static,
+) -> Result<server::SharingState, String> {
+    run_sharing_transition(app, move |app| restart_sharing_on_main_thread(&app, change, persist))
+}
+
+fn restart_sharing_on_main_thread(
+    app: &AppHandle,
     change: impl FnOnce(&server::Options) -> Result<server::Options, String>,
     persist: impl FnOnce() -> Result<(), String>,
 ) -> Result<server::SharingState, String> {
     let sharing_server = app.state::<SharingServer>();
-    let _operation = sharing_server.operation.lock().map_err(|error| error.to_string())?;
     let (server, options) = {
         let mut sharing = sharing_server.server.lock().map_err(|error| error.to_string())?;
         // The running configuration wins over persisted settings: only the requested change applies.
