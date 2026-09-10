@@ -16,7 +16,7 @@ use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -28,6 +28,8 @@ use tauri::{
     ipc::Channel, window::Color, AppHandle, Emitter, Manager, RunEvent, Theme, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use tauri::{menu::Menu, menu::MenuEvent, menu::MenuItem, tray::TrayIconBuilder};
 #[cfg(target_os = "macos")]
 use tauri::menu::{IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
 use tauri_plugin_dialog::DialogExt;
@@ -118,6 +120,8 @@ commands![
     sharing_state,
     rotate_sharing_token,
     update_sharing_setting,
+    set_autostart,
+    autostart_enabled,
 ];
 
 const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
@@ -135,8 +139,14 @@ const SERVE_TOKEN_SETTING: &str = "serve.token";
 const SERVE_PUBLIC_URL_SETTING: &str = "serve.publicUrl";
 const SERVE_START_SHARING_SETTING: &str = "serve.startSharing";
 const MINIMUM_SERVE_PORT: u16 = 1024;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 const SERVE_CLOSE_NOTICE_SETTING: &str = "serve.closeNoticeShown";
+#[cfg(target_os = "macos")]
+const SHARING_CLOSE_NOTICE: &str =
+    "Git Nav is still sharing on the network. Reopen it from the Dock to manage sharing.";
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const SHARING_CLOSE_NOTICE: &str =
+    "Git Nav is still sharing on the network. Use the tray icon to manage sharing.";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MINIMUM_ZOOM_FACTOR: f64 = 0.5;
 const MAXIMUM_ZOOM_FACTOR: f64 = 2.0;
@@ -661,6 +671,9 @@ struct SharingServer {
     server: Mutex<Option<server::RunningServer>>,
     operation: Mutex<()>,
 }
+
+#[derive(Default)]
+struct TrayExit(AtomicBool);
 
 /// Mirrors Tauri's `app_data_dir` so the desktop app and `git-nav serve` share one store.
 fn data_dir() -> Result<PathBuf, String> {
@@ -2785,13 +2798,51 @@ fn reveal_launcher(app: &AppHandle) -> Result<(), String> {
     reveal_window(&window)
 }
 
+fn should_keep_sharing_without_windows(
+    sharing: bool,
+    has_reachable_control: bool,
+    exiting_from_tray: bool,
+) -> bool {
+    sharing && has_reachable_control && !exiting_from_tray
+}
+
+/// Whether closing the last window leaves a way back to the app while sharing: the Dock on
+/// macOS, the sharing tray icon on Linux and Windows. Without one the app must stop with the
+/// window instead of keeping repository access on the network with nothing visible.
 #[cfg(target_os = "macos")]
+fn sharing_survives_window_close(_: &AppHandle) -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn sharing_survives_window_close(app: &AppHandle) -> bool {
+    app.tray_by_id("sharing").is_some() && status_notifier_host_available()
+}
+
+#[cfg(target_os = "windows")]
+fn sharing_survives_window_close(app: &AppHandle) -> bool {
+    app.tray_by_id("sharing").is_some()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn sharing_survives_window_close(_: &AppHandle) -> bool {
+    false
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn watch_sharing_close(window: &WebviewWindow) {
     let app = window.app_handle().clone();
     window.on_window_event(move |event| {
         if !matches!(event, WindowEvent::CloseRequested { .. })
-            || app.webview_windows().len() != 1
+            || app
+                .webview_windows()
+                .values()
+                .filter(|window| window.is_visible().unwrap_or(true))
+                .count()
+                != 1
             || !active_sharing_state(&app).sharing
+            || !sharing_survives_window_close(&app)
+            || app.state::<TrayExit>().0.load(std::sync::atomic::Ordering::Relaxed)
         {
             return;
         }
@@ -2810,13 +2861,13 @@ fn watch_sharing_close(window: &WebviewWindow) {
             return;
         }
         app.dialog()
-            .message("Git Nav is still sharing on the network. Reopen it from the Dock to manage sharing.")
+            .message(SHARING_CLOSE_NOTICE)
             .title("Sharing is still on")
             .show(|_| {});
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn watch_sharing_close(_: &WebviewWindow) {}
 
 #[tauri::command(async)]
@@ -4990,6 +5041,13 @@ mod tests {
 
         assert_eq!(error, "invalid change");
         assert!(sharing.is_some());
+    }
+
+    #[test]
+    fn sharing_only_survives_without_windows_when_a_control_remains_reachable() {
+        assert!(should_keep_sharing_without_windows(true, true, false));
+        assert!(!should_keep_sharing_without_windows(true, false, false));
+        assert!(!should_keep_sharing_without_windows(true, true, true));
     }
 
     /// Stands in for the running server: replacements are identified by the port they listen on.
@@ -7964,6 +8022,51 @@ mod tests {
         assert_eq!(completed.updates[0].before, "");
         assert_eq!(branches.lines().collect::<Vec<_>>(), vec!["main"]);
     }
+
+    #[test]
+    fn quotes_desktop_entry_exec_arguments() {
+        assert_eq!(
+            desktop_entry_exec_argument("/home/user/Git Nav/git-nav"),
+            r#""/home/user/Git Nav/git-nav""#
+        );
+        assert_eq!(
+            desktop_entry_exec_argument(r#"/tmp/a"b`c$d\e%f"#),
+            r#""/tmp/a\\"b\\`c\\$d\\\\e%%f""#
+        );
+    }
+
+    #[test]
+    fn linux_autostart_runs_an_appimage_the_way_the_cli_launcher_does() {
+        let entry = linux_autostart_entry(Some("/opt/my apps/git-nav.AppImage"), "/proc/self/exe");
+
+        assert!(entry.contains(
+            "Exec=env APPIMAGE_EXTRACT_AND_RUN=1 \"/opt/my apps/git-nav.AppImage\"\n"
+        ));
+    }
+
+    #[test]
+    fn linux_autostart_runs_the_executable_when_there_is_no_appimage() {
+        let entry = linux_autostart_entry(None, "/usr/local/bin/git-nav");
+
+        assert!(entry.contains("Exec=\"/usr/local/bin/git-nav\"\n"));
+    }
+
+    #[test]
+    fn windows_autostart_quotes_the_executable() {
+        assert_eq!(
+            windows_autostart_command(r"C:\Program Files\Git Nav\git-nav.exe"),
+            r#""C:\Program Files\Git Nav\git-nav.exe""#
+        );
+    }
+
+    #[test]
+    fn macos_autostart_escapes_the_executable_for_the_plist() {
+        let plist = macos_autostart_plist("/Applications/Git <&> Nav.app/Contents/MacOS/git-nav");
+
+        assert!(plist.contains(
+            "<string>/Applications/Git &lt;&amp;&gt; Nav.app/Contents/MacOS/git-nav</string>"
+        ));
+    }
 }
 
 #[tauri::command(async)]
@@ -8274,8 +8377,8 @@ Options:
       --token <value>   Shared secret required to open the app (default: saved in application data settings.json or generated)
       --no-token        Serve without authentication
 
-Closing the last window keeps sharing active on macOS, where the Dock icon can reopen the app.
-On Linux and Windows, closing the last window stops sharing because there is no tray icon yet.
+Closing the last window keeps sharing active while Git Nav stays in the macOS Dock or in the
+tray on Linux and Windows. Run git-nav serve --stop to stop sharing.
 ";
 
 #[derive(Debug, PartialEq)]
@@ -8514,6 +8617,125 @@ fn sharing_configuration_conflict(
     })
 }
 
+/// The tray backend loads one of these on the main thread and panics when none of them is there,
+/// which would take the whole process down instead of failing tray creation. The handle stays open
+/// because that same library is the one the tray backend loads later.
+#[cfg(target_os = "linux")]
+fn has_appindicator_library() -> bool {
+    [
+        "libayatana-appindicator3.so.1\0",
+        "libappindicator3.so.1\0",
+        "libayatana-appindicator3.so\0",
+        "libappindicator3.so\0",
+    ]
+    .iter()
+    .any(|name| !unsafe { libc::dlopen(name.as_ptr().cast(), libc::RTLD_LAZY) }.is_null())
+}
+
+#[cfg(target_os = "linux")]
+fn status_notifier_host_available() -> bool {
+    use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
+
+    let Ok(connection) = dbus::blocking::Connection::new_session() else {
+        return false;
+    };
+    let proxy = connection.with_proxy(
+        "org.kde.StatusNotifierWatcher",
+        "/StatusNotifierWatcher",
+        Duration::from_millis(100),
+    );
+    proxy
+        .get("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered")
+        .unwrap_or(false)
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn exit_after_closing_windows(app: &AppHandle) {
+    let windows = app.webview_windows();
+    if windows.is_empty() {
+        app.exit(0);
+        return;
+    }
+    app.state::<TrayExit>().0.store(true, std::sync::atomic::Ordering::Relaxed);
+    for window in windows.values() {
+        if let Err(error) = window.close() {
+            log::error!("Could not close {} before exiting: {error}", window.label());
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const SHARING_TRAY_SHOW: &str = "sharing-show";
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const SHARING_TRAY_QUIT: &str = "sharing-quit";
+
+/// Menu handlers are app-wide and outlive the tray they were built with, so this one is
+/// registered once at startup and serves every tray created while sharing restarts.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn handle_sharing_tray_menu_event(app: &AppHandle, event: MenuEvent) {
+    match event.id().as_ref() {
+        SHARING_TRAY_SHOW => {
+            // Windows deadlocks when a webview is built from the main thread's menu handler.
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = reveal_launcher(&app) {
+                    log::error!("Could not show the launcher from the tray: {error}");
+                }
+            });
+        }
+        SHARING_TRAY_QUIT => exit_after_closing_windows(app),
+        _ => {}
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn install_sharing_tray(app: &AppHandle) -> Result<(), String> {
+    if app.tray_by_id("sharing").is_some() {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if !has_appindicator_library() {
+        log::warn!(
+            "Sharing without a tray icon: this desktop has no appindicator library. Run git-nav again to bring the window back; closing the last window stops sharing."
+        );
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if !status_notifier_host_available() {
+        log::warn!(
+            "Sharing without a tray icon: this desktop has no status notifier host. Closing the last window stops sharing."
+        );
+        return Ok(());
+    }
+    let show = MenuItem::with_id(app, SHARING_TRAY_SHOW, "Show Git Nav", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let quit = MenuItem::with_id(app, SHARING_TRAY_QUIT, "Quit Git Nav", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let menu = Menu::with_items(app, &[&show, &quit]).map_err(|error| error.to_string())?;
+    let icon = app.default_window_icon().ok_or_else(|| "Could not load the application icon.".to_string())?;
+    TrayIconBuilder::with_id("sharing")
+        .menu(&menu)
+        .icon(icon.clone())
+        .tooltip("Git Nav is sharing on the network")
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn install_sharing_tray(_: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn remove_sharing_tray(app: &AppHandle) {
+    // The icon only leaves the tray once the last handle to it is dropped.
+    drop(app.remove_tray_by_id("sharing"));
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn remove_sharing_tray(_: &AppHandle) {}
+
 fn start_sharing_with_arguments(
     app: &AppHandle,
     arguments: ServeArguments,
@@ -8538,6 +8760,12 @@ fn start_sharing_with_arguments(
         app.state::<OpenWorktrees>().inner().clone(),
     )?;
     let state = server.state();
+    if let Err(error) = install_sharing_tray(app) {
+        if !server.stop() {
+            log::warn!("Git Nav sharing server did not release its port within five seconds.");
+        }
+        return Err(error);
+    }
     *sharing = Some(server);
     drop(sharing);
     app.emit(SHARING_CHANGED_EVENT, &state)
@@ -8556,6 +8784,7 @@ fn stop_sharing_from_app(app: &AppHandle) -> Result<server::SharingState, String
         log::warn!("Git Nav sharing server did not release its port within five seconds.");
     }
     let state = inactive_sharing_state();
+    remove_sharing_tray(app);
     app.emit(SHARING_CHANGED_EVENT, &state)
         .map_err(|error| error.to_string())?;
     if !app
@@ -8637,6 +8866,10 @@ fn restart_sharing_with(
     let state = running
         .as_ref()
         .map_or_else(inactive_sharing_state, server::RunningServer::state);
+    // When restoring the previous server also failed, sharing ended here.
+    if running.is_none() {
+        remove_sharing_tray(app);
+    }
     *sharing_server.server.lock().map_err(|error| error.to_string())? = running;
     match error {
         Some(error) => {
@@ -8737,6 +8970,208 @@ fn sharing_state(app: AppHandle) -> server::SharingState {
 fn rotate_sharing_token(app: AppHandle) -> Result<server::SharingState, String> {
     let token = generated_token();
     restart_sharing_with_token(&app, token)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn xml_escaped(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// ProgramArguments entries are not shell-parsed, so a path with spaces needs no quoting.
+#[cfg(any(target_os = "macos", test))]
+fn macos_autostart_plist(executable: &str) -> String {
+    let executable = xml_escaped(executable);
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{APPLICATION_IDENTIFIER}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{executable}</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>
+"#
+    )
+}
+
+/// Quotes an Exec argument per the Desktop Entry Specification: reserved characters are escaped
+/// once for the quoted argument and once more for the string value, and % is doubled so it cannot
+/// start a field code.
+#[cfg(any(target_os = "linux", test))]
+fn desktop_entry_exec_argument(path: &str) -> String {
+    let mut argument = String::from("\"");
+    for character in path.chars() {
+        match character {
+            '\\' => argument.push_str(r"\\\\"),
+            '"' => argument.push_str(r#"\\""#),
+            '`' => argument.push_str(r"\\`"),
+            '$' => argument.push_str(r"\\$"),
+            '%' => argument.push_str("%%"),
+            _ => argument.push(character),
+        }
+    }
+    argument.push('"');
+    argument
+}
+
+/// An AppImage is started through its bundle path, since the mount current_exe points into
+/// unwinds with this process, and with APPIMAGE_EXTRACT_AND_RUN=1 so it also starts where FUSE is
+/// unavailable, the same way the CLI launcher starts it.
+#[cfg(any(target_os = "linux", test))]
+fn linux_autostart_entry(appimage: Option<&str>, executable: &str) -> String {
+    let exec = match appimage {
+        Some(bundle) => format!(
+            "env APPIMAGE_EXTRACT_AND_RUN=1 {}",
+            desktop_entry_exec_argument(bundle)
+        ),
+        None => desktop_entry_exec_argument(executable),
+    };
+    format!("[Desktop Entry]\nType=Application\nName=Git Nav\nExec={exec}\nTerminal=false\n")
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_entry_path() -> Result<PathBuf, String> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| "Could not find the home directory.".to_string())?
+        .join("Library/LaunchAgents")
+        .join(format!("{APPLICATION_IDENTIFIER}.plist")))
+}
+
+#[cfg(target_os = "linux")]
+fn autostart_entry_path() -> Result<PathBuf, String> {
+    Ok(dirs::config_dir()
+        .ok_or_else(|| "Could not find the configuration directory.".to_string())?
+        .join("autostart")
+        .join(format!("{APPLICATION_IDENTIFIER}.desktop")))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn autostart_entry_contents() -> Result<String, String> {
+    let executable = env::current_exe().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos_autostart_plist(&executable.to_string_lossy()))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let appimage = env::var_os("APPIMAGE");
+        let appimage = appimage.as_ref().map(|bundle| bundle.to_string_lossy());
+        Ok(linux_autostart_entry(
+            appimage.as_deref(),
+            &executable.to_string_lossy(),
+        ))
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn enable_autostart_entry() -> Result<(), String> {
+    let path = autostart_entry_path()?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| "Could not find the autostart directory.".to_string())?;
+    fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    fs::write(&path, autostart_entry_contents()?).map_err(|error| error.to_string())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn disable_autostart_entry() -> Result<(), String> {
+    match fs::remove_file(autostart_entry_path()?) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn autostart_entry_enabled() -> Result<bool, String> {
+    Ok(autostart_entry_path()?.exists())
+}
+
+/// Quotes keep a path with spaces from being read as a program plus arguments.
+#[cfg(any(target_os = "windows", test))]
+fn windows_autostart_command(executable: &str) -> String {
+    format!("\"{executable}\"")
+}
+
+#[cfg(target_os = "windows")]
+const AUTOSTART_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(target_os = "windows")]
+const AUTOSTART_RUN_VALUE: &str = "Git Nav";
+
+#[cfg(target_os = "windows")]
+fn enable_autostart_entry() -> Result<(), String> {
+    let executable = env::current_exe().map_err(|error| error.to_string())?;
+    windows_registry::CURRENT_USER
+        .create(AUTOSTART_RUN_KEY)
+        .and_then(|key| {
+            key.set_string(
+                AUTOSTART_RUN_VALUE,
+                windows_autostart_command(&executable.to_string_lossy()),
+            )
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn disable_autostart_entry() -> Result<(), String> {
+    let key = windows_registry::CURRENT_USER
+        .create(AUTOSTART_RUN_KEY)
+        .map_err(|error| error.to_string())?;
+    if key.get_string(AUTOSTART_RUN_VALUE).is_err() {
+        return Ok(());
+    }
+    key.remove_value(AUTOSTART_RUN_VALUE)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn autostart_entry_enabled() -> Result<bool, String> {
+    Ok(windows_registry::CURRENT_USER
+        .open(AUTOSTART_RUN_KEY)
+        .and_then(|key| key.get_string(AUTOSTART_RUN_VALUE))
+        .is_ok())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+const AUTOSTART_UNSUPPORTED: &str =
+    "Starting at login is currently supported on macOS, Linux, and Windows only.";
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn enable_autostart_entry() -> Result<(), String> {
+    Err(AUTOSTART_UNSUPPORTED.to_string())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn disable_autostart_entry() -> Result<(), String> {
+    Err(AUTOSTART_UNSUPPORTED.to_string())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn autostart_entry_enabled() -> Result<bool, String> {
+    Err(AUTOSTART_UNSUPPORTED.to_string())
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    if enabled {
+        enable_autostart_entry()
+    } else {
+        disable_autostart_entry()
+    }
+}
+
+#[tauri::command]
+fn autostart_enabled() -> Result<bool, String> {
+    autostart_entry_enabled()
 }
 
 #[derive(Deserialize, Serialize)]
@@ -9049,11 +9484,16 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_process::init());
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        builder = builder.on_menu_event(handle_sharing_tray_menu_event);
+    }
 
     let app = match builder
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenWorktrees::default())
         .manage(SharingServer::default())
+        .manage(TrayExit::default())
         .invoke_handler(invoke_handler())
         .setup(move |app| {
             #[cfg(unix)]
@@ -9122,13 +9562,14 @@ pub fn run() {
         }
     };
     app.run(|app, event| {
-            #[cfg(target_os = "macos")]
-            // macOS user-initiated exit requests have no code. While sharing is active, keep the
-            // app available for reopening from the Dock. Cmd+Q terminates through NSApp without
-            // emitting ExitRequested. Linux and Windows have no tray affordance yet, so their
-            // default exit also stops the server.
+            // User-initiated window closes have no code. Keep the app alive while sharing so
+            // macOS can reopen from the Dock and Linux/Windows can use the tray menu.
             if let RunEvent::ExitRequested { code: None, api, .. } = &event {
-                if active_sharing_state(app).sharing {
+                if should_keep_sharing_without_windows(
+                    active_sharing_state(app).sharing,
+                    sharing_survives_window_close(app),
+                    app.state::<TrayExit>().0.load(std::sync::atomic::Ordering::Relaxed),
+                ) {
                     api.prevent_exit();
                     return;
                 }

@@ -179,7 +179,9 @@ fn exposure(command: &IpcCommand) -> Exposure {
         | IpcCommand::stop_sharing
         | IpcCommand::sharing_state
         | IpcCommand::rotate_sharing_token
-        | IpcCommand::update_sharing_setting => {
+        | IpcCommand::update_sharing_setting
+        | IpcCommand::set_autostart
+        | IpcCommand::autostart_enabled => {
             Exposure::DesktopOnly
         }
     }

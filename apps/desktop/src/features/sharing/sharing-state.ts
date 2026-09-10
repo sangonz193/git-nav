@@ -39,9 +39,6 @@ export function sharingSettings(
   const host = settings["serve.host"]
   const storedPort = settings["serve.port"]
   const port = sharingPort(storedPort)
-  if (storedPort !== undefined && port === null) {
-    throw new Error("The saved port must be a number between 1024 and 65535.")
-  }
   return {
     host: host === "0.0.0.0" ? host : "127.0.0.1",
     port: port ?? defaultSharingSettings.port,
@@ -51,6 +48,24 @@ export function sharingSettings(
         : "",
     startSharing: settings["serve.startSharing"] === true,
   }
+}
+
+// A stored port the backend rejects is displayed as the default one, so the dialog can only
+// repair it by saving that default even though nothing on screen changed.
+export function storedPortNeedsRepair(settings: Record<string, unknown>) {
+  return (
+    "serve.port" in settings && sharingPort(settings["serve.port"]) === null
+  )
+}
+
+// The running port may be one only the command line can use, such as a privileged one.
+export function repairedSharingPort(
+  settings: Record<string, unknown>,
+  state: SharingState | null
+) {
+  if (!storedPortNeedsRepair(settings)) return null
+  const runningPort = state?.sharing === true ? sharingPort(state.port) : null
+  return runningPort ?? defaultSharingSettings.port
 }
 
 function reachableFrom(host: string | null): SharingSettings["host"] | null {
