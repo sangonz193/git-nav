@@ -46,6 +46,7 @@ type RangeDrag = { anchorIndex: number, focusIndex: number }
 type SelectedRef = { ref: DisplayRef, sha: string }
 type SelectionRange = { anchorHash: string, focusHash: string }
 type WorktreeStatus = { path: string, branch: string, head: string, isDetached: boolean, changedFiles: number, untrackedFiles: number, pendingOperation: PendingOperation | null }
+type WorktreeStatusScope = "all" | "current"
 type GraphWindowComplete = { hasMore: boolean }
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Label: ContextMenuLabel, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
@@ -228,10 +229,32 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     setGraphVersion((version) => version + 1)
   }, [rowHeight])
   // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
-  const refreshWorktreeStatus = useCallback(() => {
+  const refreshWorktreeStatus = useCallback((scope: WorktreeStatusScope = "all", isDisposed?: () => boolean) => {
     return Promise.all([
-      invoke<WorktreeStatus[]>("worktree_status", { repoPath: params.path })
-        .then(setWorktreeStatuses)
+      invoke<Project>("project_snapshot", { path: params.path })
+        .then((project) => {
+          if (!isDisposed?.()) {
+            setProjectWorktrees(project.worktrees.filter((worktree) => !worktree.isPrunable))
+          }
+        })
+        .catch((message: unknown) => {
+          if (!isDisposed?.()) {
+            setError(String(message))
+          }
+        }),
+      invoke<WorktreeStatus[]>("worktree_status", { repoPath: params.path, worktreePaths: scope === "current" ? [params.path] : undefined })
+        .then((statuses) => {
+          setWorktreeStatuses((current) => {
+            if (scope === "all") {
+              return statuses
+            }
+            const merged = new Map(current.map((status) => [status.path, status]))
+            for (const status of statuses) {
+              merged.set(status.path, status)
+            }
+            return [...merged.values()]
+          })
+        })
         .catch(() => undefined),
       invoke<RepositoryState>("repository_state", { repoPath: params.path })
         .then(setRepository)
@@ -268,7 +291,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       return {
         branch: worktree.isDetached ? null : worktree.branch,
         changedFiles: status?.changedFiles ?? 0,
-        head: status?.head ?? worktree.head,
+        head: worktree.head,
         isCurrent: worktree.path === params.path,
         isOpen: worktree.isOpen,
         name: worktree.name,
@@ -781,41 +804,31 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   useEffect(() => {
     let disposed = false
     let isRefreshing = false
-    const refresh = () => {
+    let intervalTicks = 0
+    const refresh = (isInterval = false) => {
       if (isRefreshing || document.hidden) {
         return
       }
+      const scope = isInterval && ++intervalTicks % 6 !== 0 ? "current" : "all"
       isRefreshing = true
-      return Promise.all([
-        invoke<Project>("project_snapshot", { path: params.path })
-          .then((project) => {
-            if (!disposed) {
-              setProjectWorktrees(project.worktrees.filter((worktree) => !worktree.isPrunable))
-            }
-          })
-          .catch((message: unknown) => {
-            if (!disposed) {
-              setError(String(message))
-            }
-          }),
-        refreshWorktreeStatus(),
-      ]).finally(() => {
+      return refreshWorktreeStatus(scope, () => disposed).finally(() => {
         isRefreshing = false
       })
     }
 
     refresh()
-    window.addEventListener("focus", refresh)
+    const refreshOnFocus = () => refresh()
+    window.addEventListener("focus", refreshOnFocus)
     const refreshOnVisibility = () => {
       if (!document.hidden) {
         refresh()
       }
     }
     document.addEventListener("visibilitychange", refreshOnVisibility)
-    const interval = window.setInterval(refresh, 10_000)
+    const interval = window.setInterval(() => refresh(true), 10_000)
     return () => {
       disposed = true
-      window.removeEventListener("focus", refresh)
+      window.removeEventListener("focus", refreshOnFocus)
       document.removeEventListener("visibilitychange", refreshOnVisibility)
       window.clearInterval(interval)
     }
