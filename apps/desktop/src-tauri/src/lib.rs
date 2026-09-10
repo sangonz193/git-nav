@@ -3975,11 +3975,16 @@ fn parse_status_counts(output: &str) -> (u32, u32) {
 
 #[git_nav_macros::http_command]
 #[tauri::command(async)]
-fn worktree_status(repo_path: String) -> Result<Vec<WorktreeStatus>, String> {
+fn worktree_status(repo_path: String, worktree_paths: Option<Vec<String>>) -> Result<Vec<WorktreeStatus>, String> {
     let output = git_output_allow_empty(&repo_path, &["worktree", "list", "--porcelain", "-z"])?;
     Ok(parse_worktree_records(&output)
         .into_iter()
         .filter(|worktree| !worktree.is_prunable)
+        .filter(|worktree| {
+            worktree_paths
+                .as_ref()
+                .map_or(true, |paths| paths.iter().any(|path| same_path(&worktree.path, path)))
+        })
         .filter_map(|worktree| {
             let status = git_output_allow_empty(
                 &worktree.path,
@@ -7414,12 +7419,13 @@ mod tests {
         write(&path, "untracked.txt", "new\n");
         write(&linked, "tracked.txt", "changed in the linked worktree\n");
 
-        let statuses = worktree_status(path.clone()).unwrap();
+        let statuses = worktree_status(path.clone(), None).unwrap();
+        let scoped = worktree_status(path.clone(), Some(vec![linked.clone()])).unwrap();
         let clean = {
             write(&path, "tracked.txt", "base\n");
             fs::remove_file(Path::new(&path).join("untracked.txt")).unwrap();
             write(&linked, "tracked.txt", "base\n");
-            worktree_status(path.clone()).unwrap()
+            worktree_status(path.clone(), None).unwrap()
         };
         let _ = fs::remove_dir_all(&linked);
         fs::remove_dir_all(&path).unwrap();
@@ -7429,6 +7435,8 @@ mod tests {
         assert_eq!((main.changed_files, main.untracked_files), (1, 1));
         let feature = statuses.iter().find(|status| status.branch == "feature").unwrap();
         assert_eq!((feature.changed_files, feature.untracked_files), (1, 0));
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].branch, "feature");
         assert!(clean.iter().all(|status| status.changed_files == 0 && status.untracked_files == 0));
     }
 
