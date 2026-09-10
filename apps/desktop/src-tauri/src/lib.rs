@@ -155,6 +155,7 @@ const MAX_RECENT_REPOSITORIES: usize = 8;
 const COMMIT_BATCH_SIZE: usize = 500;
 const PULL_REQUEST_SYNC_INTERVAL_SECONDS: u64 = 60;
 const MINIMUM_MERGE_TREE_VERSION: (u32, u32) = (2, 38);
+const MINIMUM_MERGE_TREE_WITH_BASE_VERSION: (u32, u32) = (2, 40);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 // Not a legal ref name, so it cannot collide with anything the user could name a branch or tag.
@@ -3895,22 +3896,29 @@ fn parse_merge_tree_output(stdout: &str) -> Result<(String, Vec<String>), String
     ))
 }
 
-// merge-tree only learned to answer this without a worktree, through --write-tree, in 2.38.
-fn merge_tree_unavailable(repo_path: &str) -> Option<ConflictPrediction> {
-    let Some(version) = git_version(repo_path) else {
+fn merge_tree_unavailable(
+    version: Option<(u32, u32)>,
+    minimum_version: (u32, u32),
+    capability: &str,
+) -> Option<ConflictPrediction> {
+    let Some(version) = version else {
         return Some(ConflictPrediction::Unknown { reason: "Could not read the installed Git version.".to_string() });
     };
-    if version < MINIMUM_MERGE_TREE_VERSION {
-        let (major, minor) = MINIMUM_MERGE_TREE_VERSION;
+    if version < minimum_version {
+        let (major, minor) = minimum_version;
         return Some(ConflictPrediction::Unknown {
-            reason: format!("Predicting conflicts requires Git {major}.{minor} or newer."),
+            reason: format!("{capability} requires Git {major}.{minor} or newer."),
         });
     }
     None
 }
 
 fn predicted_conflicts(repo_path: &str, onto: &str, upstream: &str, branch: &str) -> Result<ConflictPrediction, String> {
-    if let Some(prediction) = merge_tree_unavailable(repo_path) {
+    if let Some(prediction) = merge_tree_unavailable(
+        git_version(repo_path),
+        MINIMUM_MERGE_TREE_WITH_BASE_VERSION,
+        "Predicting conflicts",
+    ) {
         return Ok(prediction);
     }
     let onto_sha = resolve_commit(repo_path, onto)?;
@@ -4629,7 +4637,11 @@ async fn merge_ref(repo_path: String, source: String, into: String, options: Mer
 }
 
 fn predicted_merge_conflicts(repo_path: &str, source: &str, into: &str) -> Result<ConflictPrediction, String> {
-    if let Some(prediction) = merge_tree_unavailable(repo_path) {
+    if let Some(prediction) = merge_tree_unavailable(
+        git_version(repo_path),
+        MINIMUM_MERGE_TREE_VERSION,
+        "Predicting merge conflicts with git merge-tree --write-tree",
+    ) {
         return Ok(prediction);
     }
     let source_sha = resolve_commit(repo_path, source)?;
@@ -4661,7 +4673,11 @@ async fn predict_merge_conflicts(repo_path: String, source: String, into: String
 // git revert walks a range newest first and undoes each commit against the result of the ones before it,
 // so the prediction has to replay that same sequence rather than test the range as one change.
 fn predicted_revert_conflicts(repo_path: &str, base: &str, tip: &str) -> Result<ConflictPrediction, String> {
-    if let Some(prediction) = merge_tree_unavailable(repo_path) {
+    if let Some(prediction) = merge_tree_unavailable(
+        git_version(repo_path),
+        MINIMUM_MERGE_TREE_WITH_BASE_VERSION,
+        "Predicting revert conflicts with git merge-tree --merge-base",
+    ) {
         return Ok(prediction);
     }
     let head_sha = resolve_commit(repo_path, "HEAD")?;
@@ -6713,6 +6729,38 @@ mod tests {
         assert_eq!(parse_git_version("git version 2.50.1 (Apple Git-155)"), Some((2, 50)));
         assert_eq!(parse_git_version("git version 2.39.5"), Some((2, 39)));
         assert_eq!(parse_git_version("not git"), None);
+    }
+
+    #[test]
+    fn requires_the_merge_base_capability_for_replay_predictions() {
+        assert!(
+            merge_tree_unavailable(
+                Some((2, 38)),
+                MINIMUM_MERGE_TREE_VERSION,
+                "Predicting merge conflicts"
+            )
+            .is_none()
+        );
+
+        let Some(ConflictPrediction::Unknown { reason }) = merge_tree_unavailable(
+            Some((2, 39)),
+            MINIMUM_MERGE_TREE_WITH_BASE_VERSION,
+            "Predicting conflicts",
+        )
+        else {
+            panic!("Git 2.39 should not be used for replay predictions");
+        };
+        assert_eq!(
+            reason,
+            "Predicting conflicts requires Git 2.40 or newer."
+        );
+
+        assert!(merge_tree_unavailable(
+            Some((2, 40)),
+            MINIMUM_MERGE_TREE_WITH_BASE_VERSION,
+            "Predicting conflicts",
+        )
+        .is_none());
     }
 
     #[test]
