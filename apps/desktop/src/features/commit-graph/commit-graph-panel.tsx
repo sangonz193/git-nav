@@ -204,6 +204,11 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   const rowsRef = useRef<GraphRow[] | null>(null)
   const fingerprint = useRef<string | null>(null)
   const fingerprintGeneration = useRef(0)
+  const squashMergeInferenceRequest = useRef<{
+    graphVersion: number
+    path: string
+    request: Promise<SquashMergeInference[] | null>
+  } | null>(null)
   const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
@@ -224,15 +229,17 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   }, [rowHeight])
   // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
   const refreshWorktreeStatus = useCallback(() => {
-    invoke<WorktreeStatus[]>("worktree_status", { repoPath: params.path })
-      .then(setWorktreeStatuses)
-      .catch(() => undefined)
-    invoke<RepositoryState>("repository_state", { repoPath: params.path })
-      .then(setRepository)
-      .catch(() => undefined)
-    invoke<StashEntry[]>("stash_list", { repoPath: params.path })
-      .then(setStashes)
-      .catch(() => undefined)
+    return Promise.all([
+      invoke<WorktreeStatus[]>("worktree_status", { repoPath: params.path })
+        .then(setWorktreeStatuses)
+        .catch(() => undefined),
+      invoke<RepositoryState>("repository_state", { repoPath: params.path })
+        .then(setRepository)
+        .catch(() => undefined),
+      invoke<StashEntry[]>("stash_list", { repoPath: params.path })
+        .then(setStashes)
+        .catch(() => undefined),
+    ])
   }, [params.path])
   const table = useTable({
     columnResizeMode: "onChange",
@@ -555,9 +562,26 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     setHasOlderCommits(false)
     setIsGraphWindowLoading(true)
     function refreshSquashMergeInferences() {
-      invoke<SquashMergeInference[]>("inferred_squash_merge_edges", { repoPath: params.path })
-        .then(setSquashMergeInferences)
-        .catch(() => undefined)
+      if (document.hidden) {
+        return
+      }
+      const current = squashMergeInferenceRequest.current
+      const request = current?.graphVersion === graphVersion && current.path === params.path
+        ? current.request
+        : invoke<SquashMergeInference[]>("inferred_squash_merge_edges", { repoPath: params.path })
+          .catch(() => null)
+      squashMergeInferenceRequest.current = { graphVersion, path: params.path, request }
+      request.finally(() => {
+        if (squashMergeInferenceRequest.current?.request === request) {
+          squashMergeInferenceRequest.current = null
+        }
+      })
+      return request
+        .then((inferences) => {
+          if (!disposed && inferences !== null) {
+            setSquashMergeInferences(inferences)
+          }
+        })
     }
     function scheduleSquashMergeInferences() {
       if (inferenceTimeout !== null || inferenceInterval !== null) {
@@ -569,6 +593,12 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
         inferenceInterval = window.setInterval(refreshSquashMergeInferences, PULL_REQUEST_SYNC_INTERVAL)
       })
     }
+    const refreshSquashMergeInferencesOnVisibility = () => {
+      if (!document.hidden) {
+        refreshSquashMergeInferences()
+      }
+    }
+    document.addEventListener("visibilitychange", refreshSquashMergeInferencesOnVisibility)
 
     if (graphOffset === 0) {
       invoke<BranchSync[]>("branch_sync", { repoPath: params.path })
@@ -616,6 +646,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       if (inferenceInterval !== null) {
         window.clearInterval(inferenceInterval)
       }
+      document.removeEventListener("visibilitychange", refreshSquashMergeInferencesOnVisibility)
     }
   }, [graphOffset, graphVersion, params.path, refreshWorktreeStatus])
 
@@ -658,7 +689,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     let isPolling = false
     let focusTimeout: number | null = null
     const poll = () => {
-      if (isPolling) {
+      if (isPolling || document.hidden) {
         return
       }
       isPolling = true
@@ -749,23 +780,43 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
 
   useEffect(() => {
     let disposed = false
+    let isRefreshing = false
     const refresh = () => {
-      invoke<Project>("project_snapshot", { path: params.path })
-        .then((project) => {
-          if (!disposed) {
-            setProjectWorktrees(project.worktrees.filter((worktree) => !worktree.isPrunable))
-          }
-        })
-        .catch((message: unknown) => setError(String(message)))
-      refreshWorktreeStatus()
+      if (isRefreshing || document.hidden) {
+        return
+      }
+      isRefreshing = true
+      return Promise.all([
+        invoke<Project>("project_snapshot", { path: params.path })
+          .then((project) => {
+            if (!disposed) {
+              setProjectWorktrees(project.worktrees.filter((worktree) => !worktree.isPrunable))
+            }
+          })
+          .catch((message: unknown) => {
+            if (!disposed) {
+              setError(String(message))
+            }
+          }),
+        refreshWorktreeStatus(),
+      ]).finally(() => {
+        isRefreshing = false
+      })
     }
 
     refresh()
     window.addEventListener("focus", refresh)
+    const refreshOnVisibility = () => {
+      if (!document.hidden) {
+        refresh()
+      }
+    }
+    document.addEventListener("visibilitychange", refreshOnVisibility)
     const interval = window.setInterval(refresh, 10_000)
     return () => {
       disposed = true
       window.removeEventListener("focus", refresh)
+      document.removeEventListener("visibilitychange", refreshOnVisibility)
       window.clearInterval(interval)
     }
   }, [params.path, refreshWorktreeStatus])
