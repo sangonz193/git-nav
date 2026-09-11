@@ -393,6 +393,7 @@ body {
   display: flex;
   font-size: 0.75rem;
   gap: 8px;
+  max-width: calc(100% - 32px);
   padding: 6px 8px;
   position: absolute;
   right: 16px;
@@ -406,6 +407,7 @@ body {
 
 .commit-graph-selection-summary {
   max-width: 320px;
+  min-width: 0;
   overflow: hidden;
   padding-left: 6px;
   text-overflow: ellipsis;
@@ -726,23 +728,6 @@ button.commit-ref-selected:hover {
   transform: translateX(-50%);
   white-space: pre-line;
   word-break: break-word;
-}
-
-.commit-graph-cleanup-report {
-  background: color-mix(in srgb, var(--background) 94%, transparent);
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 6px;
-  bottom: 12px;
-  color: #d4d4d8;
-  left: 50%;
-  margin: 0;
-  max-width: min(720px, calc(100% - 32px));
-  padding: 8px 12px;
-  position: absolute;
-  transform: translateX(-50%);
-  white-space: pre-line;
-  word-break: break-word;
-  z-index: 3;
 }
 
 .diff-panel {

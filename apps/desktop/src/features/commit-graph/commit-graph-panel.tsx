@@ -12,9 +12,10 @@ import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/shadcn/components/popover"
+import { toast } from "@workspace/shadcn/components/sonner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, FoldVertical, GitBranch, GitCompareArrows, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Terminal, Undo2, UnfoldVertical, X } from "lucide-react"
+import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, FoldVertical, GitBranch, GitCompareArrows, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Terminal, UnfoldVertical, X } from "lucide-react"
 import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
@@ -36,7 +37,7 @@ const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
-const UNDO_TIMEOUT = 30_000
+const UNDO_TOAST_DURATION = 10_000
 const SEARCH_DEBOUNCE = 120
 type BranchCleanup = { candidates: string[], deleted: string[], failed: string[] }
 type BranchSelection = { baseRef: string, headRef: string }
@@ -162,16 +163,16 @@ export function CommitGraphPanel(props: IDockviewPanelProps<GraphPanelParams>) {
 
 function CommitGraphPanelContent({ api, containerApi, params, config, updateConfig }: IDockviewPanelProps<GraphPanelParams> & { config: ViewConfig, updateConfig: (change: ViewConfigChange) => void }) {
   const repositoryPanelParams = { name: params.name, path: params.path }
+  const operationToastId = `commit-graph-operation-${api.id}`
+  const undoInFlight = useRef(false)
   const [commits, setCommits] = useState<Commit[]>([])
   const [squashMergeInferences, setSquashMergeInferences] = useState<SquashMergeInference[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [cleanupReport, setCleanupReport] = useState<string | null>(null)
   const [isCleanConfirmationOpen, setIsCleanConfirmationOpen] = useState(false)
   const cleanOptions = config.cleanOptions
   const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(null)
   const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(null)
   const [request, setRequest] = useState<OperationRequest | null>(null)
-  const [completed, setCompleted] = useState<CompletedOperation | null>(null)
   const [graphVersion, setGraphVersion] = useState(0)
   const [graphOffset, setGraphOffset] = useState(0)
   const [hasOlderCommits, setHasOlderCommits] = useState(false)
@@ -223,11 +224,8 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
-  const refreshGraph = useCallback((clearReport = true) => {
+  const refreshGraph = useCallback(() => {
     setError(null)
-    if (clearReport) {
-      setCleanupReport(null)
-    }
     const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
     const row = Math.floor(scrollTop / rowHeight)
     const commit = commitsRef.current[rowsRef.current ? rowsRef.current[row]?.index ?? -1 : row]
@@ -490,10 +488,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   }, [commits, rowOfCommit, squashMergeInferences, unpushed])
   const fetchMutation = useMutation({
     mutationFn: () => invoke("fetch_and_sync_pull_requests", { repoPath: params.path }),
-    onMutate: () => {
-      setError(null)
-      setCleanupReport(null)
-    },
+    onMutate: () => setError(null),
     onSuccess: () => refreshGraph(),
     onError: (message) => setError(String(message)),
   })
@@ -504,14 +499,11 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       }
       return { result: await invoke<BranchCleanup>("delete_squashed_branches", { repoPath: params.path, options: cleanOptions }) }
     },
-    onMutate: () => {
-      setError(null)
-      setCleanupReport(null)
-    },
+    onMutate: () => setError(null),
     onSuccess: (outcome) => {
       setIsCleanConfirmationOpen(false)
       if ("report" in outcome) {
-        setCleanupReport(outcome.report)
+        toast(outcome.report)
         return
       }
       const { result } = outcome
@@ -520,8 +512,9 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
         result.failed.length ? `Could not delete: ${result.failed.join(", ")}` : null,
         !result.deleted.length && !result.failed.length ? "No branches were deleted because the candidate list changed." : null,
       ].filter(Boolean)
-      setCleanupReport(details.join("\n"))
-      refreshGraph(false)
+      const [title, ...description] = details
+      toast(title, { description: description.join("\n") })
+      refreshGraph()
     },
     onError: (message) => setError(String(message)),
   })
@@ -543,10 +536,14 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   const undoMutation = useMutation({
     mutationFn: (updates: RefUpdate[]) => invoke("undo_ref_updates", { repoPath: params.path, updates }),
     onSuccess: () => {
-      setCompleted(null)
+      undoInFlight.current = false
+      toast.dismiss(operationToastId)
       refreshGraph()
     },
-    onError: (message) => setError(String(message)),
+    onError: (message) => {
+      undoInFlight.current = false
+      setError(String(message))
+    },
   })
 
   const updateScroll = useCallback(() => {
@@ -734,7 +731,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
             return
           }
           if (fingerprint.current !== null && fingerprint.current !== value) {
-            refreshGraph(false)
+            refreshGraph()
           }
           fingerprint.current = value
         })
@@ -779,22 +776,6 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
     refreshAnchor.current = null
   }, [commits, rowHeight, rowOfCommit])
-
-  useEffect(() => {
-    if (!cleanupReport) {
-      return
-    }
-    const timeout = window.setTimeout(() => setCleanupReport(null), 6_000)
-    return () => window.clearTimeout(timeout)
-  }, [cleanupReport])
-
-  useEffect(() => {
-    if (!completed) {
-      return
-    }
-    const timeout = window.setTimeout(() => setCompleted(null), UNDO_TIMEOUT)
-    return () => window.clearTimeout(timeout)
-  }, [completed])
 
   // The badge counts what the dialog would delete, so the candidates are read for the options in force and
   // re-read when the repository changes rather than on a timer of their own.
@@ -1103,7 +1084,18 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
 
   function onOperationCompleted(result: CompletedOperation) {
     setRequest(null)
-    setCompleted(result)
+    toast(result.summary, {
+      action: result.updates.length > 0 ? { label: "Undo", onClick: (event) => {
+        event.preventDefault()
+        if (undoInFlight.current) {
+          return
+        }
+        undoInFlight.current = true
+        undoMutation.mutate(result.updates)
+      } } : undefined,
+      duration: UNDO_TOAST_DURATION,
+      id: operationToastId,
+    })
     clearConflictPredictions()
     refreshWorktreeStatus()
     refreshGraph()
@@ -1863,18 +1855,6 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       )}
       {commits.length === 0 && !error && <p className="commit-graph-status">Loading commits…</p>}
       {error && <p className="commit-graph-error" role="alert">{error}</p>}
-      {cleanupReport && <p className="commit-graph-cleanup-report">{cleanupReport}</p>}
-      {completed && (
-        <div className="commit-graph-cleanup-report flex items-center gap-3">
-          <span>{completed.summary}</span>
-          {completed.updates.length > 0 && (
-            <Button disabled={undoMutation.isPending} onClick={() => undoMutation.mutate(completed.updates)} size="xs" type="button" variant="outline">
-              <Undo2 />
-              {undoMutation.isPending ? "Undoing…" : "Undo"}
-            </Button>
-          )}
-        </div>
-      )}
       <AlertDialog onOpenChange={setIsCleanConfirmationOpen} open={isCleanConfirmationOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
