@@ -445,6 +445,8 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
     overscan: 12,
+    // Room past the last row lets it be scrolled up out of the corner, where the selection bar sits.
+    paddingEnd: Math.max(0, Math.floor((scroll.height - GRAPH_HEADER_HEIGHT) / 2)),
     scrollMargin: GRAPH_HEADER_HEIGHT,
     scrollPaddingStart: GRAPH_HEADER_HEIGHT,
   })
