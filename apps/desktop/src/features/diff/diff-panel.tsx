@@ -606,21 +606,29 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     rowVirtualizer.scrollToOffset(0)
   }, [comparison, rowVirtualizer])
 
-  // A fold or changed expanded context changes the heights the scroller was measured at, so they are dropped and taken again. Dropping
-  // them leaves the cards still on screen at their estimates, which only a resize would correct, so they
-  // are measured back right away, once the estimates have replaced the sizes a measurement is compared
-  // against. Only a fold that moved what sits above the scroller asks to be put back where it was, and
-  // marking a file viewed while viewed files are hidden takes that card out of the list before it can be
-  // aimed at.
+  // A fold or changed expanded context changes the heights the scroller was measured at, so they are
+  // dropped and taken again. Dropping them leaves the cards still on screen at their estimates, which only
+  // a resize would correct, so they are measured back right away, once the estimates have replaced the
+  // sizes a measurement is compared against. Cards above the scroller stay at their estimates until they
+  // come back, which would move everything below them by the difference, so the card at the top of the
+  // scroller is put back where it was. A fold that moved what sits above the scroller asks for its own card
+  // instead, and marking a file viewed while viewed files are hidden takes that card out of the list before
+  // it can be aimed at.
   useEffect(() => {
+    const scrollTop = scrollElement.current?.scrollTop ?? 0
+    const top = rowVirtualizer.getVirtualItems().find((row) => row.end > scrollTop)
+    const anchor = pendingAnchor.current !== null
+      ? { key: pendingAnchor.current, offset: 0 }
+      : top && files[top.index] ? { key: fileKey(files[top.index]), offset: top.start - scrollTop } : null
+    pendingAnchor.current = null
     rowVirtualizer.measure()
     rowVirtualizer.getTotalSize()
     scrollElement.current?.querySelectorAll<HTMLElement>(".diff-file-row").forEach((row) => rowVirtualizer.measureElement(row))
-    const key = pendingAnchor.current
-    pendingAnchor.current = null
-    const index = key === null ? -1 : files.findIndex((file) => fileKey(file) === key)
-    if (index !== -1) {
-      rowVirtualizer.scrollToIndex(index, { align: "start" })
+    rowVirtualizer.getTotalSize()
+    const index = anchor === null ? -1 : files.findIndex((file) => fileKey(file) === anchor.key)
+    const start = rowVirtualizer.measurementsCache[index]?.start
+    if (anchor !== null && start !== undefined) {
+      rowVirtualizer.scrollToOffset(start - anchor.offset)
     }
   }, [allExpanded, files, isFolded, mode, rowVirtualizer, wrap])
 
