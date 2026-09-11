@@ -98,14 +98,14 @@
 :root {
   --dv-tabs-and-actions-container-height: 36px;
   color-scheme: light;
-  font-size: 14px;
+  font-size: 16px;
   /* Overscrolling the viewport would pull-to-refresh and discard the loaded graph. */
   overscroll-behavior: none;
   scrollbar-color: var(--muted-foreground) var(--background);
 }
 
 body {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 
 /* Without this the panels hand their overscroll to the viewport, which pulls to refresh on touch. */
@@ -790,15 +790,10 @@ button.commit-ref-selected:hover {
 }
 
 .diff-file-list {
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-}
-
-.diff-drawer .diff-file-list {
-  border-right: 0;
 }
 
 .diff-file-total {
@@ -912,18 +907,30 @@ button.commit-ref-selected:hover {
 
 .diff-file-row {
   left: 0;
+  padding: 8px 8px 0;
   position: absolute;
   width: 100%;
 }
 
-.diff-file-card {
-  border-bottom: 1px solid var(--border);
+.diff-scroll-tail {
+  height: 50%;
 }
 
+/* Clipping with overflow would turn the card into the scroller its header sticks to. */
+.diff-file-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  clip-path: inset(0 round 8px);
+}
+
+.diff-file-card.is-viewed .diff-file-card-path {
+  color: var(--muted-foreground);
+}
+
+/* The card's clip rounds the header at the top of the card, and leaves it square once it is stuck. */
 .diff-file-card-header {
   align-items: center;
-  background: var(--background);
-  border-bottom: 1px solid var(--border);
+  background: var(--card);
   display: flex;
   gap: 6px;
   height: 30px;
@@ -931,6 +938,20 @@ button.commit-ref-selected:hover {
   position: sticky;
   top: 0;
   z-index: 2;
+}
+
+.diff-file-card-header + * {
+  border-top: 1px solid var(--border);
+}
+
+.diff-file-card-viewed {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.75rem;
+  gap: 6px;
+  margin-left: 4px;
+  user-select: none;
 }
 
 .diff-file-card-toggle {

@@ -74,7 +74,7 @@ export function SearchMenu({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border bg-popover shadow-(--overlay-shadow)">
+    <>
       <div className="flex items-center gap-1 border-b px-2 py-1">
         <Search className="size-3.5 shrink-0 text-muted-foreground" />
         <input
@@ -120,6 +120,6 @@ export function SearchMenu({
         ))}
         {query.trim() !== "" && items.length === 0 && <li className="px-2 py-1 text-sm text-muted-foreground">{emptyMessage}</li>}
       </ul>
-    </div>
+    </>
   )
 }
