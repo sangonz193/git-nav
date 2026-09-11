@@ -928,9 +928,11 @@ button.commit-ref-selected:hover {
 }
 
 /* The card's clip rounds the header at the top of the card, and leaves it square once it is stuck. */
+/* The edge below the header travels with it, so lines scrolling under a stuck header still meet a line. */
 .diff-file-card-header {
   align-items: center;
   background: var(--card);
+  box-shadow: 0 1px 0 var(--border);
   display: flex;
   gap: 6px;
   height: 30px;
@@ -938,10 +940,6 @@ button.commit-ref-selected:hover {
   position: sticky;
   top: 0;
   z-index: 2;
-}
-
-.diff-file-card-header + * {
-  border-top: 1px solid var(--border);
 }
 
 .diff-file-card-viewed {
