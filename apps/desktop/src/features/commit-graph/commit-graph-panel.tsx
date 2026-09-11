@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { Popover, PopoverContent, PopoverTrigger } from "@workspace/shadcn/components/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Terminal, Undo2, X } from "lucide-react"
+import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, FoldVertical, GitBranch, GitCompareArrows, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Terminal, Undo2, UnfoldVertical, X } from "lucide-react"
 import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
@@ -1584,6 +1584,11 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
           </Popover>
         </div>
         <div className="flex items-center gap-1">
+          <Hinted hint={config.collapseUnmarked ? "Show every commit" : "Collapse commits nothing points at"}>
+            <Button aria-label={config.collapseUnmarked ? "Show every commit" : "Collapse commits nothing points at"} aria-pressed={config.collapseUnmarked} className={config.collapseUnmarked ? "bg-muted" : undefined} onClick={() => collapseUnmarkedCommits(!config.collapseUnmarked)} size="icon-sm" type="button" variant="outline">
+              {config.collapseUnmarked ? <UnfoldVertical /> : <FoldVertical />}
+            </Button>
+          </Hinted>
           <DropdownMenu>
             <Tooltip>
               <DropdownMenuTrigger asChild>
@@ -1608,14 +1613,6 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
                   {CHIP_KIND_LABELS[kind]}
                 </DropdownMenuCheckboxItem>
               ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={config.collapseUnmarked}
-                onCheckedChange={(checked) => collapseUnmarkedCommits(checked === true)}
-                onSelect={(event) => event.preventDefault()}
-              >
-                Collapse commits nothing points at
-              </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
           {!isDesktop && graphOffset > 0 && (
