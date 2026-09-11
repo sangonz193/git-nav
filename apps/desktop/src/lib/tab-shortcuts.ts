@@ -1,13 +1,23 @@
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { useEffect } from "react"
 
-import { closesTab, reopensTab, usesNativeMenu } from "../features/app-menu/app-menu-shortcuts"
+import {
+  closesTab,
+  reopensTab,
+  usesNativeMenu,
+} from "../features/app-menu/app-menu-shortcuts"
 import { isDesktop } from "./ipc"
 
 export const CLOSE_TAB_EVENT = "close-tab"
 export const REOPEN_TAB_EVENT = "reopen-tab"
 
-export function useTabShortcuts({ closeTab, reopenTab }: { closeTab: () => void, reopenTab?: () => void }) {
+export function useTabShortcuts({
+  closeTab,
+  reopenTab,
+}: {
+  closeTab: () => void
+  reopenTab?: () => void
+}) {
   useEffect(() => {
     if (!isDesktop) return
 
@@ -30,11 +40,10 @@ export function useTabShortcuts({ closeTab, reopenTab }: { closeTab: () => void,
     listenFor(REOPEN_TAB_EVENT, reopenTab)
 
     const onKeyDown = (event: KeyboardEvent) => {
-      const handler = closesTab(event, nativeMenu)
-        ? closeTab
-        : reopensTab(event, nativeMenu)
-          ? reopenTab
-          : undefined
+      const handler =
+        closesTab(event, nativeMenu) ? closeTab
+        : reopensTab(event, nativeMenu) ? reopenTab
+        : undefined
       if (!handler) return
       event.preventDefault()
       handler()

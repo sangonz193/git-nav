@@ -16,9 +16,17 @@ type ClientIdStorage = {
 type Setting = [key: string, value: unknown]
 
 type SettingsStoreOptions<Value, Change> = {
-  apply: (value: Value, clientId: string, key: string, setting: unknown) => Value
+  apply: (
+    value: Value,
+    clientId: string,
+    key: string,
+    setting: unknown,
+  ) => Value
   changes: (change: Change, clientId: string) => Setting[]
-  load: (clientId: string, onSaveError: (error: unknown) => void) => Promise<Value>
+  load: (
+    clientId: string,
+    onSaveError: (error: unknown) => void,
+  ) => Promise<Value>
   saveErrorMessage: string
   syncErrorMessage: string
   update: (value: Value, change: Change) => Value
@@ -29,13 +37,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function createSettingsClientId() {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  )
 }
 
 export function settingsClientId(
   desktop: boolean,
   storage: ClientIdStorage,
-  createId: () => string = createSettingsClientId
+  createId: () => string = createSettingsClientId,
 ) {
   if (desktop) {
     return DESKTOP_CLIENT_ID
@@ -134,9 +145,11 @@ export function createSettingsStore<Value, Change>({
   async function loadSharedValue() {
     const currentClientId = clientId()
     if (isDesktop) {
-      await listen<unknown>(SETTING_CHANGED_EVENT, receiveChange).catch((error) => {
-        toast.error(syncErrorMessage, { description: String(error) })
-      })
+      await listen<unknown>(SETTING_CHANGED_EVENT, receiveChange).catch(
+        (error) => {
+          toast.error(syncErrorMessage, { description: String(error) })
+        },
+      )
     }
     let value: Value = (await load(currentClientId, (error) => {
       toast.error(saveErrorMessage, { description: String(error) })

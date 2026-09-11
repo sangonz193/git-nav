@@ -181,9 +181,9 @@ export function AppMenuButton({
       >
         <DropdownMenuTrigger
           aria-label={
-            availableUpdate
-              ? `Application menu, update to ${availableUpdate} available`
-              : "Application menu"
+            availableUpdate ?
+              `Application menu, update to ${availableUpdate} available`
+            : "Application menu"
           }
           className="relative flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
         >
@@ -303,9 +303,9 @@ export function AppMenuButton({
                   onSelect={() => void installCommandLineTool()}
                 >
                   <SquareTerminal />
-                  {commandLine.state === "installed"
-                    ? "Command Line Tool Installed"
-                    : "Install Command Line Tool"}
+                  {commandLine.state === "installed" ?
+                    "Command Line Tool Installed"
+                  : "Install Command Line Tool"}
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onSelect={() => void checkForUpdateNow()}>

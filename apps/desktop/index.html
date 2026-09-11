@@ -66,8 +66,9 @@
     </style>
     <script>
       ;(() => {
-        const theme = window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
+        const theme =
+          window.matchMedia("(prefers-color-scheme: dark)").matches ?
+            "dark"
           : "light"
         document.documentElement.classList.add(theme)
       })()

@@ -15,13 +15,28 @@ export function rangeMarker({ mergeBase }: SelectedRefs) {
 
 // The default branch is named after whichever remote holds it, but the branch it names is the same one
 // locally and on every other remote.
-export function defaultBranchName(defaultBranch: string | null, remotes: string[]) {
-  return remotes.reduce((value, remote) => value.startsWith(`${remote}/`) ? value.slice(remote.length + 1) : value, defaultBranch ?? "")
+export function defaultBranchName(
+  defaultBranch: string | null,
+  remotes: string[],
+) {
+  return remotes.reduce(
+    (value, remote) =>
+      value.startsWith(`${remote}/`) ? value.slice(remote.length + 1) : value,
+    defaultBranch ?? "",
+  )
 }
 
-export function isDefaultBranch(reference: string, defaultBranch: string | null, remotes: string[]) {
+export function isDefaultBranch(
+  reference: string,
+  defaultBranch: string | null,
+  remotes: string[],
+) {
   const name = defaultBranchName(defaultBranch, remotes)
-  return name !== "" && (reference === name || remotes.some((remote) => reference === `${remote}/${name}`))
+  return (
+    name !== "" &&
+    (reference === name ||
+      remotes.some((remote) => reference === `${remote}/${name}`))
+  )
 }
 
 /**
@@ -29,11 +44,19 @@ export function isDefaultBranch(reference: string, defaultBranch: string | null,
  * way the tab reads when it is opened from a ref. The working tree keeps its base, because its name on
  * its own reads as the uncommitted changes rather than as everything the branch carries.
  */
-export function diffTitle(refs: SelectedRefs, defaultBranch: string | null, remotes: string[]) {
+export function diffTitle(
+  refs: SelectedRefs,
+  defaultBranch: string | null,
+  remotes: string[],
+) {
   const baseLabel = refLabel(refs.base)
   const headLabel = refLabel(refs.head)
-  return refs.mergeBase && refs.head !== WORKTREE_REF && isDefaultBranch(refs.base, defaultBranch, remotes)
-    ? headLabel
+  return (
+      refs.mergeBase &&
+        refs.head !== WORKTREE_REF &&
+        isDefaultBranch(refs.base, defaultBranch, remotes)
+    ) ?
+      headLabel
     : `${baseLabel}${rangeMarker(refs)}${headLabel}`
 }
 
@@ -45,10 +68,20 @@ export function branchRangeTitle(range: SelectedRefs) {
   return diffTitle(range, range.base, [])
 }
 
-export function selectedRefs(base: string, head: string, mergeBase: boolean, baseLabel = refLabel(base), headLabel = refLabel(head)): SelectedRefs {
+export function selectedRefs(
+  base: string,
+  head: string,
+  mergeBase: boolean,
+  baseLabel = refLabel(base),
+  headLabel = refLabel(head),
+): SelectedRefs {
   return { base, head, baseLabel, headLabel, mergeBase }
 }
 
 export function refLabel(reference: string) {
-  return reference === WORKTREE_REF ? "Working tree" : reference.replace(/^[0-9a-f]{40}(?:[0-9a-f]{24})?\b/i, (sha) => sha.slice(0, 8))
+  return reference === WORKTREE_REF ? "Working tree" : (
+      reference.replace(/^[0-9a-f]{40}(?:[0-9a-f]{24})?\b/i, (sha) =>
+        sha.slice(0, 8),
+      )
+    )
 }

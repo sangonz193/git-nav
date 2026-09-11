@@ -9,7 +9,6 @@
     "build": "tsc -b && vite build",
     "tauri": "tauri",
     "lint": "eslint",
-    "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "preview": "vite preview"

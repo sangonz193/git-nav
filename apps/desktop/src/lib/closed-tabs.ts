@@ -1,8 +1,12 @@
 import type { GroupviewPanelState } from "dockview-react"
 
-type PanelPosition = { groupId: string, index: number }
-type ClosedTab = PanelPosition & { id: string, state: GroupviewPanelState }
-type ClosedPanel = { id: string, group: { id: string, panels: readonly { id: string }[] }, toJSON(): GroupviewPanelState }
+type PanelPosition = { groupId: string; index: number }
+type ClosedTab = PanelPosition & { id: string; state: GroupviewPanelState }
+type ClosedPanel = {
+  id: string
+  group: { id: string; panels: readonly { id: string }[] }
+  toJSON(): GroupviewPanelState
+}
 
 const CLOSED_TAB_LIMIT = 10
 
@@ -14,8 +18,19 @@ export function closedTabHistory(limit = CLOSED_TAB_LIMIT) {
   const closed: ClosedTab[] = []
   return {
     beginMutation(kind: string, panels: readonly ClosedPanel[]) {
-      positions = kind === "remove"
-        ? new Map(panels.map((panel) => [panel.id, { groupId: panel.group.id, index: panel.group.panels.findIndex((sibling) => sibling.id === panel.id) }]))
+      positions =
+        kind === "remove" ?
+          new Map(
+            panels.map((panel) => [
+              panel.id,
+              {
+                groupId: panel.group.id,
+                index: panel.group.panels.findIndex(
+                  (sibling) => sibling.id === panel.id,
+                ),
+              },
+            ]),
+          )
         : undefined
     },
     endMutation() {
@@ -45,7 +60,10 @@ export function closedTabHistory(limit = CLOSED_TAB_LIMIT) {
 
 // The group a tab was closed from is gone once it held nothing else, and a tab that outlives its group
 // opens wherever the next one would have.
-export function reopenedPanel(tab: ClosedTab, hasGroup: (groupId: string) => boolean) {
+export function reopenedPanel(
+  tab: ClosedTab,
+  hasGroup: (groupId: string) => boolean,
+) {
   const { contentComponent, params, tabComponent, title } = tab.state
   if (!contentComponent) {
     return null
@@ -56,6 +74,14 @@ export function reopenedPanel(tab: ClosedTab, hasGroup: (groupId: string) => boo
     params,
     tabComponent,
     title,
-    ...(hasGroup(tab.groupId) ? { position: { direction: "within" as const, index: tab.index, referenceGroup: tab.groupId } } : {}),
+    ...(hasGroup(tab.groupId) ?
+      {
+        position: {
+          direction: "within" as const,
+          index: tab.index,
+          referenceGroup: tab.groupId,
+        },
+      }
+    : {}),
   }
 }

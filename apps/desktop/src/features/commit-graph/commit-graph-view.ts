@@ -1,9 +1,24 @@
 import { createSettingsStore, loadSettings, saveSetting } from "@/lib/settings"
 
-import { detachedWorktrees, displayRefs, isCurrentCheckout, rowChips, type BranchPullRequest, type BranchSync, type Commit, type RowChip, type RowWorktree, type StashEntry } from "./commit-graph"
+import {
+  detachedWorktrees,
+  displayRefs,
+  isCurrentCheckout,
+  rowChips,
+  type BranchPullRequest,
+  type BranchSync,
+  type Commit,
+  type RowChip,
+  type RowWorktree,
+  type StashEntry,
+} from "./commit-graph"
 
 export type ChipKind = "branch" | "remote" | "stash" | "tag"
-export type CleanOptions = { deleteMergedPullRequestBranches: boolean, deleteMergedBranches: boolean, deleteSquashMergedBranches: boolean }
+export type CleanOptions = {
+  deleteMergedPullRequestBranches: boolean
+  deleteMergedBranches: boolean
+  deleteSquashMergedBranches: boolean
+}
 export type ViewConfig = {
   chipKinds: Record<ChipKind, boolean>
   cleanOptions: CleanOptions
@@ -24,7 +39,11 @@ export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
 
 export const DEFAULT_VIEW_CONFIG: ViewConfig = {
   chipKinds: { branch: true, remote: true, stash: true, tag: true },
-  cleanOptions: { deleteMergedPullRequestBranches: true, deleteMergedBranches: false, deleteSquashMergedBranches: false },
+  cleanOptions: {
+    deleteMergedPullRequestBranches: true,
+    deleteMergedBranches: false,
+    deleteSquashMergedBranches: false,
+  },
   collapseUnmarked: true,
 }
 
@@ -52,11 +71,11 @@ function parsedViewConfig(stored: unknown): ViewConfig | null {
       chipKinds: {
         branch: booleanOr(
           chipKinds.branch,
-          DEFAULT_VIEW_CONFIG.chipKinds.branch
+          DEFAULT_VIEW_CONFIG.chipKinds.branch,
         ),
         remote: booleanOr(
           chipKinds.remote,
-          DEFAULT_VIEW_CONFIG.chipKinds.remote
+          DEFAULT_VIEW_CONFIG.chipKinds.remote,
         ),
         stash: booleanOr(chipKinds.stash, DEFAULT_VIEW_CONFIG.chipKinds.stash),
         tag: booleanOr(chipKinds.tag, DEFAULT_VIEW_CONFIG.chipKinds.tag),
@@ -64,20 +83,20 @@ function parsedViewConfig(stored: unknown): ViewConfig | null {
       cleanOptions: {
         deleteMergedPullRequestBranches: booleanOr(
           cleanOptions.deleteMergedPullRequestBranches,
-          DEFAULT_VIEW_CONFIG.cleanOptions.deleteMergedPullRequestBranches
+          DEFAULT_VIEW_CONFIG.cleanOptions.deleteMergedPullRequestBranches,
         ),
         deleteMergedBranches: booleanOr(
           cleanOptions.deleteMergedBranches,
-          DEFAULT_VIEW_CONFIG.cleanOptions.deleteMergedBranches
+          DEFAULT_VIEW_CONFIG.cleanOptions.deleteMergedBranches,
         ),
         deleteSquashMergedBranches: booleanOr(
           cleanOptions.deleteSquashMergedBranches,
-          DEFAULT_VIEW_CONFIG.cleanOptions.deleteSquashMergedBranches
+          DEFAULT_VIEW_CONFIG.cleanOptions.deleteSquashMergedBranches,
         ),
       },
       collapseUnmarked: booleanOr(
         value.collapseUnmarked,
-        DEFAULT_VIEW_CONFIG.collapseUnmarked
+        DEFAULT_VIEW_CONFIG.collapseUnmarked,
       ),
     }
   } catch {
@@ -105,7 +124,7 @@ export function viewConfigSettingKeys(clientId: string) {
 
 function viewConfigSettings(
   config: ViewConfig,
-  clientId: string
+  clientId: string,
 ): [string, boolean][] {
   const keys = viewConfigSettingKeys(clientId)
   return [
@@ -132,49 +151,49 @@ function viewConfigSettings(
 function viewConfigFromSettings(
   settings: Record<string, unknown>,
   clientId: string,
-  fallback: ViewConfig
+  fallback: ViewConfig,
 ) {
   const keys = viewConfigSettingKeys(clientId)
   return {
     chipKinds: {
       branch: booleanOr(
         settings[keys.chipKinds.branch],
-        fallback.chipKinds.branch
+        fallback.chipKinds.branch,
       ),
       remote: booleanOr(
         settings[keys.chipKinds.remote],
-        fallback.chipKinds.remote
+        fallback.chipKinds.remote,
       ),
       stash: booleanOr(
         settings[keys.chipKinds.stash],
-        fallback.chipKinds.stash
+        fallback.chipKinds.stash,
       ),
       tag: booleanOr(settings[keys.chipKinds.tag], fallback.chipKinds.tag),
     },
     cleanOptions: {
       deleteMergedPullRequestBranches: booleanOr(
         settings[keys.cleanOptions.deleteMergedPullRequestBranches],
-        fallback.cleanOptions.deleteMergedPullRequestBranches
+        fallback.cleanOptions.deleteMergedPullRequestBranches,
       ),
       deleteMergedBranches: booleanOr(
         settings[keys.cleanOptions.deleteMergedBranches],
-        fallback.cleanOptions.deleteMergedBranches
+        fallback.cleanOptions.deleteMergedBranches,
       ),
       deleteSquashMergedBranches: booleanOr(
         settings[keys.cleanOptions.deleteSquashMergedBranches],
-        fallback.cleanOptions.deleteSquashMergedBranches
+        fallback.cleanOptions.deleteSquashMergedBranches,
       ),
     },
     collapseUnmarked: booleanOr(
       settings[keys.collapseUnmarked],
-      fallback.collapseUnmarked
+      fallback.collapseUnmarked,
     ),
   }
 }
 
 function mergeViewConfig(
   config: ViewConfig,
-  change: ViewConfigChange
+  change: ViewConfigChange,
 ): ViewConfig {
   return {
     ...config,
@@ -188,13 +207,13 @@ export function applyViewConfigSetting(
   config: ViewConfig,
   clientId: string,
   key: string,
-  value: unknown
+  value: unknown,
 ) {
   if (typeof value !== "boolean") {
     return config
   }
   const current = viewConfigSettings(config, clientId).find(
-    ([settingKey]) => settingKey === key
+    ([settingKey]) => settingKey === key,
   )
   if (!current || current[1] === value) {
     return config
@@ -208,7 +227,7 @@ export async function loadViewConfig(
   local: string | null,
   clientId: string,
   removeLocal: () => void = () => undefined,
-  onSaveError: (error: unknown) => void = () => undefined
+  onSaveError: (error: unknown) => void = () => undefined,
 ) {
   const legacy = parsedViewConfig(local)
   try {
@@ -216,7 +235,7 @@ export async function loadViewConfig(
     const config = viewConfigFromSettings(
       stored,
       clientId,
-      legacy ?? DEFAULT_VIEW_CONFIG
+      legacy ?? DEFAULT_VIEW_CONFIG,
     )
     if (!legacy) {
       return config
@@ -290,7 +309,7 @@ const viewConfigSettingsStore = createSettingsStore({
       legacyViewConfig(),
       clientId,
       removeLegacyViewConfig,
-      onSaveError
+      onSaveError,
     ),
   saveErrorMessage: "Could not save graph settings.",
   syncErrorMessage: "Could not synchronize graph settings.",
@@ -315,14 +334,39 @@ function isPinnedChip(chip: RowChip) {
   if (chip.kind === "worktree") {
     return true
   }
-  return chip.kind !== "stash" && (chip.ref.checkedOut || chip.ref.worktrees.length > 0)
+  return (
+    chip.kind !== "stash" &&
+    (chip.ref.checkedOut || chip.ref.worktrees.length > 0)
+  )
 }
 
-export function commitChips(commit: Commit, { branchSync, chipKinds, pullRequests, remotes, stashesByBase, worktreesByHead }: ChipContext) {
+export function commitChips(
+  commit: Commit,
+  {
+    branchSync,
+    chipKinds,
+    pullRequests,
+    remotes,
+    stashesByBase,
+    worktreesByHead,
+  }: ChipContext,
+) {
   const worktrees = worktreesByHead.get(commit.hash) ?? []
-  const refs = displayRefs(commit.refs, { branchSync, pullRequests, remotes, worktrees })
-  const chips = rowChips(refs, stashesByBase.get(commit.hash), detachedWorktrees(refs, worktrees))
-  return chips.filter((chip) => chip.kind === "worktree" || isPinnedChip(chip) || chipKinds[chip.kind])
+  const refs = displayRefs(commit.refs, {
+    branchSync,
+    pullRequests,
+    remotes,
+    worktrees,
+  })
+  const chips = rowChips(
+    refs,
+    stashesByBase.get(commit.hash),
+    detachedWorktrees(refs, worktrees),
+  )
+  return chips.filter(
+    (chip) =>
+      chip.kind === "worktree" || isPinnedChip(chip) || chipKinds[chip.kind],
+  )
 }
 
 // A row is worth its own place when something points at it. Most commits carry nothing at all, which is the
@@ -332,14 +376,18 @@ export function isMarkedCommit(commit: Commit, context: ChipContext) {
   if (isCurrentCheckout(commit.refs)) {
     return true
   }
-  if (commit.refs.length === 0 && !context.stashesByBase.has(commit.hash) && !context.worktreesByHead.has(commit.hash)) {
+  if (
+    commit.refs.length === 0 &&
+    !context.stashesByBase.has(commit.hash) &&
+    !context.worktreesByHead.has(commit.hash)
+  ) {
     return false
   }
   return commitChips(commit, context).length > 0
 }
 
-export type GraphRow = { hidden: number, index: number, lanes: number }
-export type GraphRows = { revealing: boolean, rows: GraphRow[] }
+export type GraphRow = { hidden: number; index: number; lanes: number }
+export type GraphRows = { revealing: boolean; rows: GraphRow[] }
 
 const ALL_LANES = -1
 
@@ -356,7 +404,12 @@ function activeLaneMask(activeLanes: boolean[]) {
 
 // Commits arrive in batches, so the rows already built are kept and only the new tail is scanned. A run at the
 // end is reopened rather than carried over, since the commits that follow may still belong to it.
-export function appendGraphRows(previous: GraphRows | null, commits: Commit[], isMarked: (commit: Commit) => boolean, isRevealed: (hash: string) => boolean): GraphRows {
+export function appendGraphRows(
+  previous: GraphRows | null,
+  commits: Commit[],
+  isMarked: (commit: Commit) => boolean,
+  isRevealed: (hash: string) => boolean,
+): GraphRows {
   const rows = previous ? previous.rows.slice() : []
   let revealing = previous?.revealing ?? false
   let index = 0
@@ -389,8 +442,13 @@ export function appendGraphRows(previous: GraphRows | null, commits: Commit[], i
     }
     // A lane crosses the run when it is carrying a line on both sides of it, which is what the commit above
     // the run reports alongside the commits inside it.
-    const above = index > 0 ? activeLaneMask(commits[index - 1].activeLanes) : ALL_LANES
-    rows.push({ hidden: 1, index, lanes: activeLaneMask(commit.activeLanes) & above })
+    const above =
+      index > 0 ? activeLaneMask(commits[index - 1].activeLanes) : ALL_LANES
+    rows.push({
+      hidden: 1,
+      index,
+      lanes: activeLaneMask(commit.activeLanes) & above,
+    })
   }
 
   return { revealing, rows }
@@ -414,9 +472,17 @@ export function rowIndexOfCommit(rows: GraphRow[], commitIndex: number) {
   return found
 }
 
-export type SearchHit = { commitIndex: number, detail: string, kind: ChipKind | "commit", label: string }
+export type SearchHit = {
+  commitIndex: number
+  detail: string
+  kind: ChipKind | "commit"
+  label: string
+}
 
-function refHit(ref: string, remotes: string[]): { kind: ChipKind, label: string } | null {
+function refHit(
+  ref: string,
+  remotes: string[],
+): { kind: ChipKind; label: string } | null {
   if (ref.startsWith("tag: ")) {
     return { kind: "tag", label: ref.slice("tag: ".length) }
   }
@@ -430,7 +496,14 @@ function refHit(ref: string, remotes: string[]): { kind: ChipKind, label: string
 
 // Refs answer what the graph is navigated by, so they are ranked ahead of the commits carrying them. The walk
 // is newest first, which is the useful order to cut at once both lists are full.
-export function searchGraph(commits: Commit[], query: string, { remotes = DEFAULT_REMOTES, stashesByBase }: { remotes?: string[], stashesByBase?: Map<string, StashEntry[]> } = {}): SearchHit[] {
+export function searchGraph(
+  commits: Commit[],
+  query: string,
+  {
+    remotes = DEFAULT_REMOTES,
+    stashesByBase,
+  }: { remotes?: string[]; stashesByBase?: Map<string, StashEntry[]> } = {},
+): SearchHit[] {
   const needle = query.trim().toLowerCase()
   if (!needle) {
     return []
@@ -438,23 +511,51 @@ export function searchGraph(commits: Commit[], query: string, { remotes = DEFAUL
   const refs: SearchHit[] = []
   const subjects: SearchHit[] = []
 
-  for (let index = 0; index < commits.length && (refs.length < SEARCH_LIMIT || subjects.length < SEARCH_LIMIT); index += 1) {
+  for (
+    let index = 0;
+    index < commits.length &&
+    (refs.length < SEARCH_LIMIT || subjects.length < SEARCH_LIMIT);
+    index += 1
+  ) {
     const commit = commits[index]
     if (refs.length < SEARCH_LIMIT) {
       for (const ref of commit.refs) {
         const hit = refHit(ref, remotes)
         if (hit && hit.label.toLowerCase().includes(needle)) {
-          refs.push({ commitIndex: index, detail: commit.subject, kind: hit.kind, label: hit.label })
+          refs.push({
+            commitIndex: index,
+            detail: commit.subject,
+            kind: hit.kind,
+            label: hit.label,
+          })
         }
       }
       for (const entry of stashesByBase?.get(commit.hash) ?? []) {
-        if (entry.name.toLowerCase().includes(needle) || entry.message.toLowerCase().includes(needle)) {
-          refs.push({ commitIndex: index, detail: entry.message, kind: "stash", label: entry.name })
+        if (
+          entry.name.toLowerCase().includes(needle) ||
+          entry.message.toLowerCase().includes(needle)
+        ) {
+          refs.push({
+            commitIndex: index,
+            detail: entry.message,
+            kind: "stash",
+            label: entry.name,
+          })
         }
       }
     }
-    if (subjects.length < SEARCH_LIMIT && (commit.subject.toLowerCase().includes(needle) || commit.author.toLowerCase().includes(needle) || commit.hash.startsWith(needle))) {
-      subjects.push({ commitIndex: index, detail: `${commit.hash.slice(0, 8)} · ${commit.author}`, kind: "commit", label: commit.subject || "(no subject)" })
+    if (
+      subjects.length < SEARCH_LIMIT &&
+      (commit.subject.toLowerCase().includes(needle) ||
+        commit.author.toLowerCase().includes(needle) ||
+        commit.hash.startsWith(needle))
+    ) {
+      subjects.push({
+        commitIndex: index,
+        detail: `${commit.hash.slice(0, 8)} · ${commit.author}`,
+        kind: "commit",
+        label: commit.subject || "(no subject)",
+      })
     }
   }
 

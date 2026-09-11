@@ -26,9 +26,7 @@
       "@workspace/shadcn/*": ["../../packages/shadcn/src/*"]
     }
   },
-  "include": [
-    "src"
-  ],
+  "include": ["src"],
   "references": [
     {
       "path": "../../packages/shadcn/tsconfig.app.json"

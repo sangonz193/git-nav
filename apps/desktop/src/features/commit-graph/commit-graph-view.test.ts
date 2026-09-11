@@ -14,7 +14,11 @@ import {
   viewConfigSettingKeys,
 } from "./commit-graph-view"
 
-function commit(hash: string, refs: string[] = [], activeLanes: boolean[] = [true]): Commit {
+function commit(
+  hash: string,
+  refs: string[] = [],
+  activeLanes: boolean[] = [true],
+): Commit {
   return {
     hash,
     parents: [],
@@ -42,8 +46,25 @@ function context(overrides: Partial<ChipContext> = {}): ChipContext {
   }
 }
 
-const stash: StashEntry = { base: "c", branch: "main", date: "2026-01-01T00:00:00Z", message: "work in progress", name: "stash@{0}", sha: "s" }
-const worktree: RowWorktree = { branch: "feature", changedFiles: 0, head: "d", isCurrent: false, isOpen: false, name: "feature", path: "/tmp/feature", pendingOperation: null, untrackedFiles: 0 }
+const stash: StashEntry = {
+  base: "c",
+  branch: "main",
+  date: "2026-01-01T00:00:00Z",
+  message: "work in progress",
+  name: "stash@{0}",
+  sha: "s",
+}
+const worktree: RowWorktree = {
+  branch: "feature",
+  changedFiles: 0,
+  head: "d",
+  isCurrent: false,
+  isOpen: false,
+  name: "feature",
+  path: "/tmp/feature",
+  pendingOperation: null,
+  untrackedFiles: 0,
+}
 
 describe("loadViewConfig", () => {
   test("falls back to the defaults when nothing is stored", () => {
@@ -54,8 +75,8 @@ describe("loadViewConfig", () => {
         },
         async () => undefined,
         null,
-        "desktop"
-      )
+        "desktop",
+      ),
     ).resolves.toEqual(DEFAULT_VIEW_CONFIG)
   })
 
@@ -67,8 +88,8 @@ describe("loadViewConfig", () => {
         },
         async () => undefined,
         "{oops",
-        "desktop"
-      )
+        "desktop",
+      ),
     ).resolves.toEqual(DEFAULT_VIEW_CONFIG)
   })
 
@@ -79,9 +100,14 @@ describe("loadViewConfig", () => {
       },
       async () => undefined,
       JSON.stringify({ chipKinds: { tag: false }, collapseUnmarked: false }),
-      "desktop"
+      "desktop",
     )
-    expect(config.chipKinds).toEqual({ branch: true, remote: true, stash: true, tag: false })
+    expect(config.chipKinds).toEqual({
+      branch: true,
+      remote: true,
+      stash: true,
+      tag: false,
+    })
     expect(config.collapseUnmarked).toBe(false)
     expect(config.cleanOptions).toEqual(DEFAULT_VIEW_CONFIG.cleanOptions)
   })
@@ -92,8 +118,12 @@ describe("loadViewConfig", () => {
         throw new Error("unreachable")
       },
       async () => undefined,
-      JSON.stringify({ chipKinds: { branch: "yes", tag: false }, cleanOptions: { deleteMergedBranches: 1 }, collapseUnmarked: "yes" }),
-      "desktop"
+      JSON.stringify({
+        chipKinds: { branch: "yes", tag: false },
+        cleanOptions: { deleteMergedBranches: 1 },
+        collapseUnmarked: "yes",
+      }),
+      "desktop",
     )
     expect(config).toEqual({
       chipKinds: { branch: true, remote: true, stash: true, tag: false },
@@ -116,7 +146,7 @@ describe("loadViewConfig", () => {
       "browser-a",
       () => {
         removed = true
-      }
+      },
     )
     const keys = viewConfigSettingKeys("browser-a")
     expect(config.chipKinds.tag).toBe(false)
@@ -136,7 +166,7 @@ describe("loadViewConfig", () => {
       }),
       async () => undefined,
       null,
-      "browser-a"
+      "browser-a",
     )
     expect(config.chipKinds.tag).toBe(false)
   })
@@ -151,7 +181,7 @@ describe("loadViewConfig", () => {
       }),
       async () => undefined,
       null,
-      "desktop"
+      "desktop",
     )
     expect(config.chipKinds.tag).toBe(false)
     expect(config.chipKinds.branch).toBe(true)
@@ -165,7 +195,7 @@ describe("loadViewConfig", () => {
       async () => ({ [keys.chipKinds.tag]: "no" }),
       async () => undefined,
       null,
-      "desktop"
+      "desktop",
     )
     expect(config.chipKinds.tag).toBe(true)
   })
@@ -179,9 +209,14 @@ describe("loadViewConfig", () => {
         saved.push([key, value])
       },
       JSON.stringify({ chipKinds: { branch: false, tag: false } }),
-      "desktop"
+      "desktop",
     )
-    expect(config.chipKinds).toEqual({ branch: false, remote: true, stash: true, tag: true })
+    expect(config.chipKinds).toEqual({
+      branch: false,
+      remote: true,
+      stash: true,
+      tag: true,
+    })
     expect(saved.some(([key]) => key === keys.chipKinds.tag)).toBe(false)
     expect(saved).toHaveLength(7)
   })
@@ -195,7 +230,7 @@ describe("loadViewConfig", () => {
         saved.push([key, value])
       },
       JSON.stringify({ chipKinds: { tag: false } }),
-      "desktop"
+      "desktop",
     )
     expect(config.chipKinds.tag).toBe(false)
     expect(saved).toContainEqual([keys.chipKinds.tag, false])
@@ -209,7 +244,7 @@ describe("loadViewConfig", () => {
       },
       async () => undefined,
       JSON.stringify({ chipKinds: { stash: false } }),
-      "desktop"
+      "desktop",
     )
     expect(config.chipKinds.stash).toBe(false)
   })
@@ -222,7 +257,7 @@ describe("loadViewConfig", () => {
         saved.push([key, value])
       },
       "{oops",
-      "desktop"
+      "desktop",
     )
     expect(saved).toEqual([])
   })
@@ -242,7 +277,7 @@ describe("loadViewConfig", () => {
       },
       (error) => {
         failures.push(error)
-      }
+      },
     )
     expect(failures).toHaveLength(8)
     expect(removed).toBe(false)
@@ -260,7 +295,7 @@ describe("applyViewConfigSetting", () => {
       current,
       "desktop",
       keys.chipKinds.branch,
-      false
+      false,
     )
     expect(next.chipKinds).toEqual({
       branch: false,
@@ -272,26 +307,39 @@ describe("applyViewConfigSetting", () => {
 
   test("ignores the emitting window's unchanged value", () => {
     const key = viewConfigSettingKeys("desktop").chipKinds.tag
-    expect(applyViewConfigSetting(DEFAULT_VIEW_CONFIG, "desktop", key, true)).toBe(
-      DEFAULT_VIEW_CONFIG
-    )
+    expect(
+      applyViewConfigSetting(DEFAULT_VIEW_CONFIG, "desktop", key, true),
+    ).toBe(DEFAULT_VIEW_CONFIG)
   })
 })
 
 describe("commitChips", () => {
   test("drops the kinds that are turned off", () => {
-    const chips = commitChips(commit("a", ["main", "tag: v1.0.0"]), context({ chipKinds: { branch: true, remote: true, stash: true, tag: false } }))
+    const chips = commitChips(
+      commit("a", ["main", "tag: v1.0.0"]),
+      context({
+        chipKinds: { branch: true, remote: true, stash: true, tag: false },
+      }),
+    )
     expect(chips.map((chip) => chip.kind)).toEqual(["branch"])
   })
 
   test("keeps the checked out ref whatever is turned off", () => {
-    const chips = commitChips(commit("a", ["HEAD -> origin/main"]), context({ chipKinds: { branch: false, remote: false, stash: false, tag: false } }))
+    const chips = commitChips(
+      commit("a", ["HEAD -> origin/main"]),
+      context({
+        chipKinds: { branch: false, remote: false, stash: false, tag: false },
+      }),
+    )
     expect(chips).toHaveLength(1)
     expect(chips[0].kind).toBe("remote")
   })
 
   test("keeps a stash on the commit it was made from", () => {
-    const chips = commitChips(commit("c"), context({ stashesByBase: new Map([["c", [stash]]]) }))
+    const chips = commitChips(
+      commit("c"),
+      context({ stashesByBase: new Map([["c", [stash]]]) }),
+    )
     expect(chips.map((chip) => chip.kind)).toEqual(["stash"])
   })
 })
@@ -302,17 +350,26 @@ describe("isMarkedCommit", () => {
   })
 
   test("a commit whose only ref is hidden is not marked", () => {
-    const hidden = context({ chipKinds: { branch: true, remote: true, stash: true, tag: false } })
+    const hidden = context({
+      chipKinds: { branch: true, remote: true, stash: true, tag: false },
+    })
     expect(isMarkedCommit(commit("a", ["tag: v1.0.0"]), hidden)).toBe(false)
   })
 
   test("the checkout is marked even with every kind hidden", () => {
-    const hidden = context({ chipKinds: { branch: false, remote: false, stash: false, tag: false } })
+    const hidden = context({
+      chipKinds: { branch: false, remote: false, stash: false, tag: false },
+    })
     expect(isMarkedCommit(commit("a", ["HEAD -> main"]), hidden)).toBe(true)
   })
 
   test("a worktree marks the commit it sits on", () => {
-    expect(isMarkedCommit(commit("d"), context({ worktreesByHead: new Map([["d", [worktree]]]) }))).toBe(true)
+    expect(
+      isMarkedCommit(
+        commit("d"),
+        context({ worktreesByHead: new Map([["d", [worktree]]]) }),
+      ),
+    ).toBe(true)
   })
 })
 
@@ -321,7 +378,12 @@ describe("appendGraphRows", () => {
   const nothingRevealed = () => false
 
   test("gathers the commits between two refs into one run", () => {
-    const commits = [commit("a", ["main"]), commit("b"), commit("c"), commit("d", ["old"])]
+    const commits = [
+      commit("a", ["main"]),
+      commit("b"),
+      commit("c"),
+      commit("d", ["old"]),
+    ]
     const { rows } = appendGraphRows(null, commits, marked, nothingRevealed)
     expect(rows).toEqual([
       { hidden: 0, index: 0, lanes: 0 },
@@ -331,30 +393,71 @@ describe("appendGraphRows", () => {
   })
 
   test("a lane that stops inside a run does not cross it", () => {
-    const commits = [commit("a", ["main"]), commit("b", [], [true, true]), commit("c", [], [true]), commit("d", ["old"])]
+    const commits = [
+      commit("a", ["main"]),
+      commit("b", [], [true, true]),
+      commit("c", [], [true]),
+      commit("d", ["old"]),
+    ]
     const { rows } = appendGraphRows(null, commits, marked, nothingRevealed)
     expect(rows[1].lanes).toBe(1)
   })
 
   test("continuing from an earlier batch gives the same rows as one pass", () => {
-    const commits = [commit("a", ["main"]), commit("b"), commit("c"), commit("d", ["old"]), commit("e"), commit("f")]
-    const first = appendGraphRows(null, commits.slice(0, 2), marked, nothingRevealed)
-    const second = appendGraphRows(first, commits.slice(0, 5), marked, nothingRevealed)
+    const commits = [
+      commit("a", ["main"]),
+      commit("b"),
+      commit("c"),
+      commit("d", ["old"]),
+      commit("e"),
+      commit("f"),
+    ]
+    const first = appendGraphRows(
+      null,
+      commits.slice(0, 2),
+      marked,
+      nothingRevealed,
+    )
+    const second = appendGraphRows(
+      first,
+      commits.slice(0, 5),
+      marked,
+      nothingRevealed,
+    )
     const continued = appendGraphRows(second, commits, marked, nothingRevealed)
-    expect(continued.rows).toEqual(appendGraphRows(null, commits, marked, nothingRevealed).rows)
+    expect(continued.rows).toEqual(
+      appendGraphRows(null, commits, marked, nothingRevealed).rows,
+    )
   })
 
   test("the rows an earlier batch produced are left alone", () => {
     const commits = [commit("a", ["main"]), commit("b"), commit("c")]
-    const first = appendGraphRows(null, commits.slice(0, 2), marked, nothingRevealed)
+    const first = appendGraphRows(
+      null,
+      commits.slice(0, 2),
+      marked,
+      nothingRevealed,
+    )
     const before = structuredClone(first.rows)
     appendGraphRows(first, commits, marked, nothingRevealed)
     expect(first.rows).toEqual(before)
   })
 
   test("a revealed run is shown down to the next ref", () => {
-    const commits = [commit("a", ["main"]), commit("b"), commit("c"), commit("d", ["old"]), commit("e"), commit("f")]
-    const { rows } = appendGraphRows(null, commits, marked, (hash) => hash === "b")
+    const commits = [
+      commit("a", ["main"]),
+      commit("b"),
+      commit("c"),
+      commit("d", ["old"]),
+      commit("e"),
+      commit("f"),
+    ]
+    const { rows } = appendGraphRows(
+      null,
+      commits,
+      marked,
+      (hash) => hash === "b",
+    )
     expect(rows).toEqual([
       { hidden: 0, index: 0, lanes: 0 },
       { hidden: 0, index: 1, lanes: 0 },
@@ -365,9 +468,24 @@ describe("appendGraphRows", () => {
   })
 
   test("a revealed run carries across the batch that splits it", () => {
-    const commits = [commit("a", ["main"]), commit("b"), commit("c"), commit("d")]
-    const first = appendGraphRows(null, commits.slice(0, 3), commit => commit.refs.length > 0, (hash) => hash === "b")
-    const continued = appendGraphRows(first, commits, marked, (hash) => hash === "b")
+    const commits = [
+      commit("a", ["main"]),
+      commit("b"),
+      commit("c"),
+      commit("d"),
+    ]
+    const first = appendGraphRows(
+      null,
+      commits.slice(0, 3),
+      (commit) => commit.refs.length > 0,
+      (hash) => hash === "b",
+    )
+    const continued = appendGraphRows(
+      first,
+      commits,
+      marked,
+      (hash) => hash === "b",
+    )
     expect(continued.rows.map((row) => row.hidden)).toEqual([0, 0, 0, 0])
   })
 })
@@ -409,16 +527,36 @@ describe("searchGraph", () => {
   })
 
   test("matches a tag by name", () => {
-    expect(searchGraph(commits, "v1.0")).toEqual([{ commitIndex: 1, detail: "subject bbbbbbbb", kind: "tag", label: "v1.0.0" }])
+    expect(searchGraph(commits, "v1.0")).toEqual([
+      {
+        commitIndex: 1,
+        detail: "subject bbbbbbbb",
+        kind: "tag",
+        label: "v1.0.0",
+      },
+    ])
   })
 
   test("matches a commit by subject and by hash", () => {
-    expect(searchGraph(commits, "parser").map((hit) => hit.commitIndex)).toEqual([2])
-    expect(searchGraph(commits, "cccc").map((hit) => hit.commitIndex)).toEqual([2])
+    expect(
+      searchGraph(commits, "parser").map((hit) => hit.commitIndex),
+    ).toEqual([2])
+    expect(searchGraph(commits, "cccc").map((hit) => hit.commitIndex)).toEqual([
+      2,
+    ])
   })
 
   test("matches a stash by its message", () => {
-    const hits = searchGraph(commits, "progress", { stashesByBase: new Map([["cccccccc", [stash]]]) })
-    expect(hits).toEqual([{ commitIndex: 2, detail: "work in progress", kind: "stash", label: "stash@{0}" }])
+    const hits = searchGraph(commits, "progress", {
+      stashesByBase: new Map([["cccccccc", [stash]]]),
+    })
+    expect(hits).toEqual([
+      {
+        commitIndex: 2,
+        detail: "work in progress",
+        kind: "stash",
+        label: "stash@{0}",
+      },
+    ])
   })
 })

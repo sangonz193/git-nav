@@ -55,9 +55,9 @@ export function DownloadCta({ platforms }: { platforms: PlatformDownloads[] }) {
           className="underline-offset-4 hover:text-foreground hover:underline"
           href={RELEASES}
         >
-          {alternates.length > 0
-            ? "Other platforms"
-            : "macOS, Windows and Linux"}
+          {alternates.length > 0 ?
+            "Other platforms"
+          : "macOS, Windows and Linux"}
         </a>
         . Free and open source.
       </p>

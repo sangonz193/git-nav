@@ -5,7 +5,7 @@ const [artifactsDirectory, releaseDirectory, tag] = Bun.argv.slice(2)
 
 if (!artifactsDirectory || !releaseDirectory || !tag) {
   throw new Error(
-    "Usage: bun scripts/create-update-release.ts <artifacts-directory> <release-directory> <tag>"
+    "Usage: bun scripts/create-update-release.ts <artifacts-directory> <release-directory> <tag>",
   )
 }
 
@@ -35,7 +35,7 @@ for (const [platform, target] of Object.entries(platformTargets)) {
     const releaseName = assetName(`${platform}-${basename(updaterArtifact)}`)
     await cp(
       join(bundleDirectory, updaterArtifact),
-      join(releaseDirectory, releaseName)
+      join(releaseDirectory, releaseName),
     )
     platforms[updaterTarget] = {
       signature: (
@@ -48,11 +48,11 @@ for (const [platform, target] of Object.entries(platformTargets)) {
   for (const file of files.filter(
     (file) =>
       !updaterArtifacts.some(([, artifact]) => artifact === file) &&
-      isInstaller(file)
+      isInstaller(file),
   )) {
     await cp(
       join(bundleDirectory, file),
-      join(releaseDirectory, assetName(`${platform}-${basename(file)}`))
+      join(releaseDirectory, assetName(`${platform}-${basename(file)}`)),
     )
   }
 }
@@ -66,8 +66,8 @@ await writeFile(
       platforms,
     },
     null,
-    2
-  )}\n`
+    2,
+  )}\n`,
 )
 
 // GitHub rewrites anything outside this set when it takes an asset, so a name that survives the
@@ -116,7 +116,7 @@ function only(files, matches, platform) {
   const matching = files.filter(matches)
   if (matching.length !== 1) {
     throw new Error(
-      `Expected one updater artifact for ${platform}, found ${matching.length}.`
+      `Expected one updater artifact for ${platform}, found ${matching.length}.`,
     )
   }
   return matching[0]

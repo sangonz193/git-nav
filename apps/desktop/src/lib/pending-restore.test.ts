@@ -14,7 +14,7 @@ describe("createUserWinningRestore", () => {
     expect(
       restore.restore(() => {
         value = "stored"
-      })
+      }),
     ).toBe(false)
     expect(value).toBe("user")
   })
@@ -26,12 +26,12 @@ describe("createUserWinningRestore", () => {
     expect(
       restore.restore(() => {
         value = "stored"
-      })
+      }),
     ).toBe(true)
     expect(
       restore.restore(() => {
         value = "stale"
-      })
+      }),
     ).toBe(false)
     expect(value).toBe("stored")
   })

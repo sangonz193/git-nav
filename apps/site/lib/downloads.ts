@@ -69,12 +69,12 @@ export function platformDownloads(assets: Asset[]): PlatformDownloads[] {
         const asset = assets.find(
           (candidate) =>
             candidate.name.startsWith(build.prefix) &&
-            candidate.name.endsWith(build.extension)
+            candidate.name.endsWith(build.extension),
         )
-        return asset
-          ? [{ label: build.label, url: asset.browser_download_url }]
+        return asset ?
+            [{ label: build.label, url: asset.browser_download_url }]
           : []
-      }
+      },
     ),
   }))
 }

@@ -1,19 +1,41 @@
 import { describe, expect, test } from "bun:test"
 
 import { WORKTREE_REF } from "@/lib/repository-constants"
-import { branchRangeTitle, defaultBranchName, diffTitle, isDefaultBranch, refLabel, selectedRefs, type SelectedRefs } from "./diff-title"
+import {
+  branchRangeTitle,
+  defaultBranchName,
+  diffTitle,
+  isDefaultBranch,
+  refLabel,
+  selectedRefs,
+  type SelectedRefs,
+} from "./diff-title"
 
 const REMOTES = ["origin", "upstream"]
 
 function refs(base: string, head: string, mergeBase = true): SelectedRefs {
-  return { base, head, baseLabel: refLabel(base), headLabel: refLabel(head), mergeBase }
+  return {
+    base,
+    head,
+    baseLabel: refLabel(base),
+    headLabel: refLabel(head),
+    mergeBase,
+  }
 }
 
 describe("refLabel", () => {
   test("shortens a commit to the hash the graph shows", () => {
-    expect(refLabel("25745febf1d028f03c9f0a1b2c3d4e5f60718293")).toBe("25745feb")
-    expect(refLabel("25745febf1d028f03c9f0a1b2c3d4e5f60718293^")).toBe("25745feb^")
-    expect(refLabel("25745febf1d028f03c9f0a1b2c3d4e5f6071829325745febf1d028f03c9f0a1b")).toBe("25745feb")
+    expect(refLabel("25745febf1d028f03c9f0a1b2c3d4e5f60718293")).toBe(
+      "25745feb",
+    )
+    expect(refLabel("25745febf1d028f03c9f0a1b2c3d4e5f60718293^")).toBe(
+      "25745feb^",
+    )
+    expect(
+      refLabel(
+        "25745febf1d028f03c9f0a1b2c3d4e5f6071829325745febf1d028f03c9f0a1b",
+      ),
+    ).toBe("25745feb")
   })
 
   test("keeps a ref name whole", () => {
@@ -42,19 +64,33 @@ describe("isDefaultBranch", () => {
 
 describe("diffTitle", () => {
   test("names a branch alone when it is measured from the default branch", () => {
-    expect(diffTitle(refs("origin/main", "feature"), "origin/main", REMOTES)).toBe("feature")
-    expect(diffTitle(refs("main", "feature"), "origin/main", REMOTES)).toBe("feature")
-    expect(diffTitle(refs("upstream/main", "feature"), "main", REMOTES)).toBe("feature")
+    expect(
+      diffTitle(refs("origin/main", "feature"), "origin/main", REMOTES),
+    ).toBe("feature")
+    expect(diffTitle(refs("main", "feature"), "origin/main", REMOTES)).toBe(
+      "feature",
+    )
+    expect(diffTitle(refs("upstream/main", "feature"), "main", REMOTES)).toBe(
+      "feature",
+    )
   })
 
   test("names both ends when the base is not the default branch", () => {
-    expect(diffTitle(refs("release", "feature"), "origin/main", REMOTES)).toBe("release...feature")
-    expect(diffTitle(refs("origin/mainline", "feature"), "origin/main", REMOTES)).toBe("origin/mainline...feature")
-    expect(diffTitle(refs("origin/main", "feature", false), "origin/main", REMOTES)).toBe("origin/main..feature")
+    expect(diffTitle(refs("release", "feature"), "origin/main", REMOTES)).toBe(
+      "release...feature",
+    )
+    expect(
+      diffTitle(refs("origin/mainline", "feature"), "origin/main", REMOTES),
+    ).toBe("origin/mainline...feature")
+    expect(
+      diffTitle(refs("origin/main", "feature", false), "origin/main", REMOTES),
+    ).toBe("origin/main..feature")
   })
 
   test("keeps the base when the head is the working tree", () => {
-    expect(diffTitle(refs("origin/main", WORKTREE_REF), "origin/main", REMOTES)).toBe("origin/main...Working tree")
+    expect(
+      diffTitle(refs("origin/main", WORKTREE_REF), "origin/main", REMOTES),
+    ).toBe("origin/main...Working tree")
   })
 
   test("names both ends when the repository has no default branch to leave out", () => {
@@ -63,8 +99,19 @@ describe("diffTitle", () => {
 
   test("uses commit hashes rather than picker labels in tab titles", () => {
     const hash = "25745febf1d028f03c9f0a1b2c3d4e5f60718293"
-    expect(diffTitle({ base: "origin/main", baseLabel: "origin/main", head: hash, headLabel: "Implement comparison picker", mergeBase: false }, "origin/main", REMOTES))
-      .toBe("origin/main..25745feb")
+    expect(
+      diffTitle(
+        {
+          base: "origin/main",
+          baseLabel: "origin/main",
+          head: hash,
+          headLabel: "Implement comparison picker",
+          mergeBase: false,
+        },
+        "origin/main",
+        REMOTES,
+      ),
+    ).toBe("origin/main..25745feb")
   })
 })
 
@@ -75,13 +122,23 @@ describe("branchRangeTitle", () => {
   })
 
   test("titles a selection the way the repository's own default branch would", () => {
-    expect(branchRangeTitle(refs("origin/main", "feature"))).toBe(diffTitle(refs("origin/main", "feature"), "main", REMOTES))
+    expect(branchRangeTitle(refs("origin/main", "feature"))).toBe(
+      diffTitle(refs("origin/main", "feature"), "main", REMOTES),
+    )
   })
 })
 
 describe("selectedRefs", () => {
   test("restores labels separately from revision identifiers", () => {
-    expect(selectedRefs("a".repeat(40), "b".repeat(40), false, "Base subject", "Head subject")).toEqual({
+    expect(
+      selectedRefs(
+        "a".repeat(40),
+        "b".repeat(40),
+        false,
+        "Base subject",
+        "Head subject",
+      ),
+    ).toEqual({
       base: "a".repeat(40),
       baseLabel: "Base subject",
       head: "b".repeat(40),

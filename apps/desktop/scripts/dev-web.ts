@@ -5,8 +5,18 @@ const desktopRoot = resolve(import.meta.dir, "..")
 
 const children = [
   Bun.spawn(
-    ["cargo", "run", "--quiet", "--manifest-path", "src-tauri/Cargo.toml", "--", "serve", "--foreground", "--no-token"],
-    { cwd: desktopRoot, stdio: ["inherit", "inherit", "inherit"] }
+    [
+      "cargo",
+      "run",
+      "--quiet",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      "--",
+      "serve",
+      "--foreground",
+      "--no-token",
+    ],
+    { cwd: desktopRoot, stdio: ["inherit", "inherit", "inherit"] },
   ),
   Bun.spawn(["bunx", "--bun", "vite"], {
     cwd: desktopRoot,

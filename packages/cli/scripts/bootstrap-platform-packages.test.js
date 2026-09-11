@@ -1,14 +1,14 @@
-import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   bootstrapTag,
   packageExists,
   parseArguments,
   platformPackages,
   publishCommand,
-} from "./bootstrap-platform-packages.ts";
+} from "./bootstrap-platform-packages.ts"
 
 const cliPackage = {
   binaryScope: "@git-nav",
@@ -22,60 +22,58 @@ const cliPackage = {
     type: "git",
     url: "git+https://github.com/sangonz193/git-nav.git",
   },
-};
+}
 
 async function forwardedArguments(command) {
-  const root = await mkdtemp(join(tmpdir(), "bootstrap-platform-packages-"));
-  const cliRoot = join(root, "cli");
+  const root = await mkdtemp(join(tmpdir(), "bootstrap-platform-packages-"))
+  const cliRoot = join(root, "cli")
 
   try {
-    await mkdir(cliRoot);
+    await mkdir(cliRoot)
     await writeFile(
       join(root, "package.json"),
       JSON.stringify({
         workspaces: ["cli"],
         scripts: { bootstrap: "bun --filter=cli run bootstrap" },
       }),
-    );
+    )
     await writeFile(
       join(cliRoot, "package.json"),
       JSON.stringify({
         name: "cli",
         scripts: { bootstrap: "bun arguments.ts" },
       }),
-    );
+    )
     await writeFile(
       join(cliRoot, "arguments.ts"),
       "console.log(JSON.stringify(Bun.argv.slice(2)));\n",
-    );
+    )
 
     const proc = Bun.spawn({
       cmd: [process.execPath, ...command],
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",
-    });
+    })
     const [code, stdout, stderr] = await Promise.all([
       proc.exited,
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
-    ]);
+    ])
 
-    expect(code).toBe(0);
-    const output = `${stdout}\n${stderr}`;
-    const arguments_ = output
-      .split("\n")
-      .findLast((line) => line.includes("["));
-    if (!arguments_) throw new Error(output);
-    return JSON.parse(arguments_.slice(arguments_.indexOf("[")));
+    expect(code).toBe(0)
+    const output = `${stdout}\n${stderr}`
+    const arguments_ = output.split("\n").findLast((line) => line.includes("["))
+    if (!arguments_) throw new Error(output)
+    return JSON.parse(arguments_.slice(arguments_.indexOf("[")))
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true })
   }
 }
 
 describe("platformPackages", () => {
   test("publishes placeholders with a non-release tag", () => {
-    expect(bootstrapTag).toBe("bootstrap");
+    expect(bootstrapTag).toBe("bootstrap")
     expect(publishCommand()).toEqual([
       "npm",
       "publish",
@@ -83,8 +81,8 @@ describe("platformPackages", () => {
       "public",
       "--tag",
       "bootstrap",
-    ]);
-  });
+    ])
+  })
 
   test("creates unresolvable placeholder manifests", () => {
     expect(platformPackages(cliPackage)).toEqual([
@@ -112,9 +110,9 @@ describe("platformPackages", () => {
           repository: cliPackage.repository,
         },
       },
-    ]);
-  });
-});
+    ])
+  })
+})
 
 describe("packageExists", () => {
   test("treats 404 responses as missing packages", async () => {
@@ -123,26 +121,26 @@ describe("packageExists", () => {
         "@git-nav/linux-x64",
         async () => new Response(null, { status: 404 }),
       ),
-    ).toBeFalse();
-  });
+    ).toBeFalse()
+  })
 
   test("treats successful responses as existing packages", async () => {
     expect(
       await packageExists("@git-nav/darwin-arm64", async () => new Response()),
-    ).toBeTrue();
-  });
-});
+    ).toBeTrue()
+  })
+})
 
 describe("parseArguments", () => {
   test("defaults to dry run", () => {
-    expect(parseArguments([])).toBeFalse();
-    expect(parseArguments(["--publish"])).toBeTrue();
-  });
+    expect(parseArguments([])).toBeFalse()
+    expect(parseArguments(["--publish"])).toBeTrue()
+  })
 
   test("rejects unsupported arguments", () => {
-    expect(() => parseArguments(["--dry-run"])).toThrow();
-    expect(() => parseArguments(["--publish", "--dry-run"])).toThrow();
-  });
+    expect(() => parseArguments(["--dry-run"])).toThrow()
+    expect(() => parseArguments(["--publish", "--dry-run"])).toThrow()
+  })
 
   test("rejects preview arguments forwarded through bun run", async () => {
     const arguments_ = await forwardedArguments([
@@ -150,18 +148,18 @@ describe("parseArguments", () => {
       "bootstrap",
       "--publish",
       "--dry-run",
-    ]);
+    ])
 
-    expect(arguments_).toEqual(["--publish", "--dry-run"]);
-    expect(() => parseArguments(arguments_)).toThrow();
-  });
+    expect(arguments_).toEqual(["--publish", "--dry-run"])
+    expect(() => parseArguments(arguments_)).toThrow()
+  })
 
   test("forwards explicit publishing through bun run and direct invocation", async () => {
     expect(
       await forwardedArguments(["run", "bootstrap", "--", "--publish"]),
-    ).toEqual(["--publish"]);
+    ).toEqual(["--publish"])
     expect(await forwardedArguments(["cli/arguments.ts", "--publish"])).toEqual(
       ["--publish"],
-    );
-  });
-});
+    )
+  })
+})

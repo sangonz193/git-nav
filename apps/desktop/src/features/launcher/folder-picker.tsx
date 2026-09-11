@@ -69,7 +69,9 @@ export function FolderPicker({
               type="button"
             >
               <CornerLeftUp className="size-4 shrink-0 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">Parent folder</span>
+              <span className="text-sm text-muted-foreground">
+                Parent folder
+              </span>
             </button>
           )}
           {listing?.entries.map((entry) => (
@@ -79,12 +81,12 @@ export function FolderPicker({
               onClick={() => setPath(entry.path)}
               type="button"
             >
-              {entry.isRepository ? (
+              {entry.isRepository ?
                 <FolderGit2 className="size-4 shrink-0 text-primary" />
-              ) : (
-                <Folder className="size-4 shrink-0 text-muted-foreground" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-sm">{entry.name}</span>
+              : <Folder className="size-4 shrink-0 text-muted-foreground" />}
+              <span className="min-w-0 flex-1 truncate text-sm">
+                {entry.name}
+              </span>
               <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
             </button>
           ))}
@@ -103,7 +105,9 @@ export function FolderPicker({
             onClick={() => listing && onChoose(listing.path)}
             type="button"
           >
-            {listing?.isRepository ? "Open this folder" : "Not a Git repository"}
+            {listing?.isRepository ?
+              "Open this folder"
+            : "Not a Git repository"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -33,13 +33,13 @@ describe("create-update-release", () => {
         releaseDirectory,
         "v1.2.3",
       ],
-      { stderr: "pipe" }
+      { stderr: "pipe" },
     )
     const stderr = await new Response(child.stderr).text()
     expect(await child.exited, stderr).toBe(0)
 
     const manifest = JSON.parse(
-      await readFile(join(releaseDirectory, "latest.json"), "utf8")
+      await readFile(join(releaseDirectory, "latest.json"), "utf8"),
     )
 
     for (const [platform, target] of [
@@ -47,7 +47,7 @@ describe("create-update-release", () => {
       ["linux-x64", "linux-x86_64"],
     ]) {
       expect(manifest.platforms[target].url).toEndWith(
-        `/${platform}-Git.Nav.AppImage`
+        `/${platform}-Git.Nav.AppImage`,
       )
       expect(manifest.platforms[`${target}-deb`]).toEqual({
         signature: `${platform}-deb-signature`,
@@ -60,14 +60,14 @@ describe("create-update-release", () => {
       expect(
         await readFile(
           join(releaseDirectory, `${platform}-Git.Nav.deb`),
-          "utf8"
-        )
+          "utf8",
+        ),
       ).toBe(`${platform}-deb`)
       expect(
         await readFile(
           join(releaseDirectory, `${platform}-Git.Nav.rpm`),
-          "utf8"
-        )
+          "utf8",
+        ),
       ).toBe(`${platform}-rpm`)
     }
   })
@@ -87,18 +87,18 @@ describe("create-update-release", () => {
         releaseDirectory,
         "v1.2.3",
       ],
-      { stderr: "pipe" }
+      { stderr: "pipe" },
     )
     const stderr = await new Response(child.stderr).text()
     expect(await child.exited, stderr).toBe(0)
 
     const manifest = JSON.parse(
-      await readFile(join(releaseDirectory, "latest.json"), "utf8")
+      await readFile(join(releaseDirectory, "latest.json"), "utf8"),
     )
     const released = await readdir(releaseDirectory)
 
     for (const [target, entry] of Object.entries<{ url: string }>(
-      manifest.platforms
+      manifest.platforms,
     )) {
       expect(entry.url).not.toContain("%")
       expect([
@@ -143,11 +143,11 @@ async function createArtifacts(artifactsDirectory: string) {
 async function writeArtifacts(
   artifactsDirectory: string,
   platform: string,
-  files: [string, string][]
+  files: [string, string][],
 ) {
   const directory = join(artifactsDirectory, `installer-${platform}`)
   await mkdir(directory, { recursive: true })
   await Promise.all(
-    files.map(([file, contents]) => writeFile(join(directory, file), contents))
+    files.map(([file, contents]) => writeFile(join(directory, file), contents)),
   )
 }
