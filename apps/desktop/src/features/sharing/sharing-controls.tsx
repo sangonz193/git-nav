@@ -82,13 +82,13 @@ function SharingSettingsDialog({
   state: SharingState | null
 }) {
   const [settings, setSettings] = useState<SharingSettings>(
-    defaultSharingSettings
+    defaultSharingSettings,
   )
   const [savedSettings, setSavedSettings] = useState<SharingSettings>(
-    defaultSharingSettings
+    defaultSharingSettings,
   )
   const [portInput, setPortInput] = useState(
-    String(defaultSharingSettings.port)
+    String(defaultSharingSettings.port),
   )
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
@@ -100,7 +100,7 @@ function SharingSettingsDialog({
       .then(async (stored) => {
         const displayed = displayedSharingSettings(
           sharingSettings(stored),
-          state
+          state,
         )
         setSettings(displayed)
         setSavedSettings(displayed)
@@ -136,7 +136,7 @@ function SharingSettingsDialog({
 
   async function updateSetting<Key extends keyof SharingSettings>(
     key: Key,
-    value: SharingSettings[Key]
+    value: SharingSettings[Key],
   ) {
     if (value === savedSettings[key]) return
     const next = { ...settings, [key]: value }
@@ -208,7 +208,7 @@ function SharingSettingsDialog({
               onChange={(event) =>
                 void updateSetting(
                   "host",
-                  event.target.value as SharingSettings["host"]
+                  event.target.value as SharingSettings["host"],
                 )
               }
               value={settings.host}
@@ -376,11 +376,9 @@ function SharingQrDialog({
             type="button"
             variant="outline"
           >
-            {isRotating ? (
+            {isRotating ?
               <LoaderCircle className="animate-spin" />
-            ) : (
-              <SquarePen />
-            )}
+            : <SquarePen />}
             {isRotating ? "Creating…" : "New link"}
           </Button>
           {showStop && (
@@ -390,7 +388,9 @@ function SharingQrDialog({
               type="button"
               variant="outline"
             >
-              {isStopping ? <LoaderCircle className="animate-spin" /> : <X />}
+              {isStopping ?
+                <LoaderCircle className="animate-spin" />
+              : <X />}
               {isStopping ? "Stopping…" : "Stop"}
             </Button>
           )}
@@ -513,13 +513,13 @@ export function NetworkSharingRow() {
             variant={sharing ? "outline" : "default"}
           >
             {isChanging && <LoaderCircle className="animate-spin" />}
-            {isChanging
-              ? sharing
-                ? "Stopping…"
-                : "Starting…"
-              : sharing
-                ? "Stop"
-                : "Start"}
+            {isChanging ?
+              sharing ?
+                "Stopping…"
+              : "Starting…"
+            : sharing ?
+              "Stop"
+            : "Start"}
           </Button>
         </div>
       </div>

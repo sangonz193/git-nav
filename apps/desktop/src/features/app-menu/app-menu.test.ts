@@ -17,7 +17,7 @@ function shortcut(key: string, overrides: Partial<KeyboardEvent> = {}) {
       shiftKey: false,
       ...overrides,
     },
-    false
+    false,
   )
 }
 
@@ -48,11 +48,11 @@ describe("desktop app shortcuts", () => {
           metaKey: false,
           shiftKey: false,
         },
-        true
-      )
+        true,
+      ),
     ).toBeNull()
     expect(
-      usesNativeMenu("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
+      usesNativeMenu("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"),
     ).toBeTrue()
     expect(usesNativeMenu("Mozilla/5.0 (X11; Linux x86_64)")).toBeFalse()
   })

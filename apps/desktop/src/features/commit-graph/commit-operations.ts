@@ -1,14 +1,43 @@
 import { invoke } from "@/lib/ipc"
-import { AppWindow, Archive, ArrowDownToLine, ArrowUpFromLine, Cloud, Copy, GitBranch, GitGraph, GitMerge, LogIn, Pencil, Scissors, Tag, Trash2, Undo2 } from "lucide-react"
+import {
+  AppWindow,
+  Archive,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Cloud,
+  Copy,
+  GitBranch,
+  GitGraph,
+  GitMerge,
+  LogIn,
+  Pencil,
+  Scissors,
+  Tag,
+  Trash2,
+  Undo2,
+} from "lucide-react"
 import type { ComponentType, ReactNode } from "react"
 
-import { PENDING_OPERATION_LABELS, refName, remoteBranchName, type Commit, type CommitSelection, type PendingOperation, type RefKind, type RefSelection, type Selection, type StashEntry } from "./commit-graph"
+import {
+  PENDING_OPERATION_LABELS,
+  refName,
+  remoteBranchName,
+  type Commit,
+  type CommitSelection,
+  type PendingOperation,
+  type RefKind,
+  type RefSelection,
+  type Selection,
+  type StashEntry,
+} from "./commit-graph"
 
 export type Block = { reason: string }
-export type Warning = { files?: string[], message: string }
-export type RefUpdate = { after: string, before: string, reference: string }
-export type CompletedOperation = { summary: string, updates: RefUpdate[] }
-export type OperationResult = (CompletedOperation & { outcome: "completed" }) | { files: string[], message: string, outcome: "failed" }
+export type Warning = { files?: string[]; message: string }
+export type RefUpdate = { after: string; before: string; reference: string }
+export type CompletedOperation = { summary: string; updates: RefUpdate[] }
+export type OperationResult =
+  | (CompletedOperation & { outcome: "completed" })
+  | { files: string[]; message: string; outcome: "failed" }
 export type RepositoryState = {
   currentBranch: string | null
   defaultBranch: string | null
@@ -29,13 +58,11 @@ export type BranchOperationState = {
 }
 export type ConflictPrediction =
   | { outcome: "clean" }
-  | { commit: string, files: string[], outcome: "conflicts", subject: string }
-  | { outcome: "unknown", reason: string }
+  | { commit: string; files: string[]; outcome: "conflicts"; subject: string }
+  | { outcome: "unknown"; reason: string }
 
 export type Operand =
-  | Selection
-  | { entry: StashEntry, kind: "stash" }
-  | { kind: "worktree" }
+  Selection | { entry: StashEntry; kind: "stash" } | { kind: "worktree" }
 export type OperationRequest = {
   id: string
   repository: RepositoryState
@@ -43,20 +70,35 @@ export type OperationRequest = {
   target: Operand
 }
 export type Field =
-  | { choices: { description?: string, label: string, value: string }[], key: string, kind: "choice", label: string }
-  | { initial?: string, key: string, kind: "text", label: string, placeholder?: string }
-  | { initial?: boolean, key: string, kind: "toggle", label: string }
+  | {
+      choices: { description?: string; label: string; value: string }[]
+      key: string
+      kind: "choice"
+      label: string
+    }
+  | {
+      initial?: string
+      key: string
+      kind: "text"
+      label: string
+      placeholder?: string
+    }
+  | { initial?: boolean; key: string; kind: "toggle"; label: string }
 export type Values = Record<string, string>
 export type OperationState = {
   branch: BranchOperationState | null
   mergeBase: string | null
   prediction: ConflictPrediction | null
 }
-type Needs = { branch?: string, mergeBase?: [string, string], prediction?: PredictionRequest }
+type Needs = {
+  branch?: string
+  mergeBase?: [string, string]
+  prediction?: PredictionRequest
+}
 type PredictionRequest =
-  | { branch: string, kind: "rebase", onto: string, upstream: string }
-  | { base: string, kind: "revert", tip: string }
-  | { into: string, kind: "merge", source: string }
+  | { branch: string; kind: "rebase"; onto: string; upstream: string }
+  | { base: string; kind: "revert"; tip: string }
+  | { into: string; kind: "merge"; source: string }
 export type Plan = {
   argv: string[]
   args: Record<string, unknown>
@@ -65,17 +107,35 @@ export type Plan = {
 // A menu names what it acts on once, in its header, so the operations on it read as verbs and group by what
 // they do to the repository. The selection group names the graph selection the same way, so its operations
 // read as verbs too.
-export const OPERATION_GROUPS = ["navigate", "sync", "selection", "integrate", "refs", "danger"] as const
+export const OPERATION_GROUPS = [
+  "navigate",
+  "sync",
+  "selection",
+  "integrate",
+  "refs",
+  "danger",
+] as const
 export type OperationGroup = (typeof OPERATION_GROUPS)[number]
 // A ref name is the part of a label that can run long, so it is kept apart for the menu to shorten on its own.
 // A worktree name looks just like a branch name, so the kind marks the name the way the chips already do.
 export type NameKind = RefKind | "stash" | "worktree"
-export const CHIP_ICONS = { branch: GitBranch, remote: Cloud, stash: Archive, tag: Tag, worktree: AppWindow }
-export type Label = string | { after?: string, before?: string, kind?: NameKind, name: string }
+export const CHIP_ICONS = {
+  branch: GitBranch,
+  remote: Cloud,
+  stash: Archive,
+  tag: Tag,
+  worktree: AppWindow,
+}
+export type Label =
+  string | { after?: string; before?: string; kind?: NameKind; name: string }
 export type Operation = {
   action: (request: OperationRequest, values: Values) => string
   applicable: (request: OperationRequest) => boolean
-  blocks: (request: OperationRequest, state: OperationState, values: Values) => Block[]
+  blocks: (
+    request: OperationRequest,
+    state: OperationState,
+    values: Values,
+  ) => Block[]
   description: (request: OperationRequest, values: Values) => string
   destructive?: boolean
   // A field can depend on what another field is set to, so an outcome that needs more input can ask for it.
@@ -85,20 +145,33 @@ export type Operation = {
   id: string
   label: (request: OperationRequest) => Label
   needs?: (request: OperationRequest, values: Values) => Needs
-  plan: (request: OperationRequest, values: Values, state: OperationState) => Plan
+  plan: (
+    request: OperationRequest,
+    values: Values,
+    state: OperationState,
+  ) => Plan
   // A label that leans on the menu around it ("Merge here") needs a title that stands alone in a dialog.
   title?: (request: OperationRequest) => string
   // What the menu shows in place of the label when the ref alone already rules the operation out.
   unavailable?: (request: OperationRequest) => Label | null
   // Required, so every operation has to answer where it leaves the repository rather than let the user find out.
-  warnings: (request: OperationRequest, state: OperationState, values: Values) => Warning[]
+  warnings: (
+    request: OperationRequest,
+    state: OperationState,
+    values: Values,
+  ) => Warning[]
 }
 
 export function labelText(label: Label) {
-  return typeof label === "string" ? label : `${label.before ?? ""}${label.name}${label.after ?? ""}`
+  return typeof label === "string" ? label : (
+      `${label.before ?? ""}${label.name}${label.after ?? ""}`
+    )
 }
 
-export function operationTitle(operation: Operation, request: OperationRequest) {
+export function operationTitle(
+  operation: Operation,
+  request: OperationRequest,
+) {
   return operation.title?.(request) ?? labelText(operation.label(request))
 }
 
@@ -108,10 +181,18 @@ export function selectionLabel(source: Selection): Label {
     return { kind: source.kind, name: refName(source.ref) }
   }
   const branch = source.branches[0]?.branch
-  return branch ? { before: `${operandName(source)} on `, kind: "branch", name: branch } : operandName(source)
+  return branch ?
+      { before: `${operandName(source)} on `, kind: "branch", name: branch }
+    : operandName(source)
 }
 export type RefMenuComponents = {
-  Item: ComponentType<{ children: ReactNode, className?: string, disabled?: boolean, onSelect?: () => void, title?: string }>
+  Item: ComponentType<{
+    children: ReactNode
+    className?: string
+    disabled?: boolean
+    onSelect?: () => void
+    title?: string
+  }>
   Label: ComponentType<{ children: ReactNode }>
   Separator: ComponentType
   Sub: ComponentType<{ children: ReactNode }>
@@ -120,7 +201,11 @@ export type RefMenuComponents = {
 }
 
 function isRef(operand: Operand): operand is RefSelection {
-  return operand.kind === "branch" || operand.kind === "remote" || operand.kind === "tag"
+  return (
+    operand.kind === "branch" ||
+    operand.kind === "remote" ||
+    operand.kind === "tag"
+  )
 }
 
 function isCommits(operand: Operand): operand is CommitSelection {
@@ -137,7 +222,9 @@ export function operandName(operand: Operand) {
   if (operand.kind === "worktree") {
     return "the working tree"
   }
-  return operand.commits.length === 1 ? operand.tip.hash.slice(0, 8) : `${operand.commits.length} commits`
+  return operand.commits.length === 1 ?
+      operand.tip.hash.slice(0, 8)
+    : `${operand.commits.length} commits`
 }
 
 // Every operand that git can name resolves to something it accepts on a command line.
@@ -166,7 +253,11 @@ function commitCount(commits: Commit[]) {
 }
 
 function sameOperand(left: Operand | null, right: Operand) {
-  return Boolean(left) && operandName(left as Operand) === operandName(right) && operandSha(left as Operand) === operandSha(right)
+  return (
+    Boolean(left) &&
+    operandName(left as Operand) === operandName(right) &&
+    operandSha(left as Operand) === operandSha(right)
+  )
 }
 
 export function flag(values: Values, key: string) {
@@ -176,7 +267,9 @@ export function flag(values: Values, key: string) {
 function worktreeBlocks(state: OperationState, name: string) {
   const blocks: Block[] = []
   if (state.branch?.pendingOperation) {
-    blocks.push({ reason: `${name} is ${PENDING_OPERATION_LABELS[state.branch.pendingOperation]}` })
+    blocks.push({
+      reason: `${name} is ${PENDING_OPERATION_LABELS[state.branch.pendingOperation]}`,
+    })
   }
   if (state.branch?.isDirty) {
     blocks.push({ reason: `${name} has uncommitted changes` })
@@ -186,15 +279,26 @@ function worktreeBlocks(state: OperationState, name: string) {
 
 // A prediction names the commit that stops the operation, so the caller names what it was doing to that
 // commit and where the stop leaves the repository.
-function predictionWarnings(state: OperationState, verb: string, landing: string): Warning[] {
+function predictionWarnings(
+  state: OperationState,
+  verb: string,
+  landing: string,
+): Warning[] {
   if (state.prediction?.outcome === "conflicts") {
     return [
-      { files: state.prediction.files, message: `${verb} ${state.prediction.commit.slice(0, 8)} “${state.prediction.subject}” is predicted to conflict in:` },
+      {
+        files: state.prediction.files,
+        message: `${verb} ${state.prediction.commit.slice(0, 8)} “${state.prediction.subject}” is predicted to conflict in:`,
+      },
       { message: landing },
     ]
   }
   if (state.prediction?.outcome === "unknown") {
-    return [{ message: `Conflicts could not be predicted: ${state.prediction.reason}` }]
+    return [
+      {
+        message: `Conflicts could not be predicted: ${state.prediction.reason}`,
+      },
+    ]
   }
   return []
 }
@@ -206,15 +310,28 @@ function rebaseSource(request: OperationRequest, values?: Values) {
     return { base: null, branch: refName(source.ref), commits: null }
   }
   if (source?.kind === "commits" && source.branches.length > 0) {
-    const branch = source.branches.find((candidate) => candidate.branch === values?.branch) ?? source.branches[0]
+    const branch =
+      source.branches.find(
+        (candidate) => candidate.branch === values?.branch,
+      ) ?? source.branches[0]
     return { base: source.base, branch: branch.branch, commits: source.commits }
   }
   return null
 }
 
 function branchChoiceField(branches: { branch: string }[]): Field[] {
-  return branches.length > 1
-    ? [{ key: "branch", kind: "choice", label: "Branch to move", choices: branches.map(({ branch }) => ({ value: branch, label: branch })) }]
+  return branches.length > 1 ?
+      [
+        {
+          key: "branch",
+          kind: "choice",
+          label: "Branch to move",
+          choices: branches.map(({ branch }) => ({
+            value: branch,
+            label: branch,
+          })),
+        },
+      ]
     : []
 }
 
@@ -222,46 +339,95 @@ const checkout: Operation = {
   id: "checkout",
   icon: LogIn,
   group: "navigate",
-  applicable: ({ target }) => (isRef(target) && !target.ref.checkedOut) || (isCommits(target) && target.commits.length === 1),
-  label: ({ target }) => target.kind === "branch"
-    ? "Check out"
-    : target.kind === "remote"
-      ? "Check out as a local branch"
-      : "Check out (detached)",
-  unavailable: ({ target }) => isRef(target) && target.ref.worktrees.length > 0 ? { before: "Checked out in ", kind: "worktree", name: target.ref.worktrees[0].name } : null,
-  description: ({ repository, target }) => repository.isDirty
-    ? `This moves the working tree to ${operandName(target)}, and the uncommitted changes have to go somewhere.`
+  applicable: ({ target }) =>
+    (isRef(target) && !target.ref.checkedOut) ||
+    (isCommits(target) && target.commits.length === 1),
+  label: ({ target }) =>
+    target.kind === "branch" ? "Check out"
+    : target.kind === "remote" ? "Check out as a local branch"
+    : "Check out (detached)",
+  unavailable: ({ target }) =>
+    isRef(target) && target.ref.worktrees.length > 0 ?
+      {
+        before: "Checked out in ",
+        kind: "worktree",
+        name: target.ref.worktrees[0].name,
+      }
+    : null,
+  description: ({ repository, target }) =>
+    repository.isDirty ?
+      `This moves the working tree to ${operandName(target)}, and the uncommitted changes have to go somewhere.`
     : `This moves the working tree to ${operandName(target)}.`,
   fields: ({ repository, target }) => [
-    ...(target.kind === "remote"
-      ? [{ initial: operandName(target).split("/").slice(1).join("/"), key: "name", kind: "text" as const, label: "Local branch name" }]
-      : []),
-    ...(repository.isDirty
-      ? [{
-        key: "changes",
-        kind: "choice" as const,
-        label: "Uncommitted changes",
-        choices: [
-          { value: "stash", label: "Set aside and restore after", description: "Stashes the changes, checks out, then reapplies them." },
-          { value: "carry", label: "Carry across", description: "Leaves the changes in the working tree. Git refuses when a changed file differs between the two commits." },
-        ],
-      }]
-      : []),
+    ...(target.kind === "remote" ?
+      [
+        {
+          initial: operandName(target).split("/").slice(1).join("/"),
+          key: "name",
+          kind: "text" as const,
+          label: "Local branch name",
+        },
+      ]
+    : []),
+    ...(repository.isDirty ?
+      [
+        {
+          key: "changes",
+          kind: "choice" as const,
+          label: "Uncommitted changes",
+          choices: [
+            {
+              value: "stash",
+              label: "Set aside and restore after",
+              description:
+                "Stashes the changes, checks out, then reapplies them.",
+            },
+            {
+              value: "carry",
+              label: "Carry across",
+              description:
+                "Leaves the changes in the working tree. Git refuses when a changed file differs between the two commits.",
+            },
+          ],
+        },
+      ]
+    : []),
   ],
   blocks: ({ repository, target }, _state, values) => [
-    ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
-    ...(target.kind === "remote" && !values.name?.trim() ? [{ reason: "name the local branch" }] : []),
+    ...(repository.pendingOperation ?
+      [
+        {
+          reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}`,
+        },
+      ]
+    : []),
+    ...(target.kind === "remote" && !values.name?.trim() ?
+      [{ reason: "name the local branch" }]
+    : []),
   ],
   warnings: ({ repository, target }, _state, values) => [
-    ...(target.kind === "branch" || target.kind === "remote"
-      ? []
-      : [{ message: `A detached HEAD is not on a branch, so commits made from ${operandName(target)} belong to no branch until you create one.` }]),
-    ...(repository.isDirty && values.changes === "carry"
-      ? [{ message: `Git refuses to carry the changes across when a file you edited differs between here and ${operandName(target)}, and nothing moves when it does.` }]
-      : []),
-    ...(repository.isDirty && values.changes === "stash"
-      ? [{ message: "Changes that do not reapply cleanly stay in the stash and leave the files with conflict markers to resolve." }]
-      : []),
+    ...(target.kind === "branch" || target.kind === "remote" ?
+      []
+    : [
+        {
+          message: `A detached HEAD is not on a branch, so commits made from ${operandName(target)} belong to no branch until you create one.`,
+        },
+      ]),
+    ...(repository.isDirty && values.changes === "carry" ?
+      [
+        {
+          message: `Git refuses to carry the changes across when a file you edited differs between here and ${operandName(target)}, and nothing moves when it does.`,
+        },
+      ]
+    : []),
+    ...(repository.isDirty && values.changes === "stash" ?
+      [
+        {
+          message:
+            "Changes that do not reapply cleanly stay in the stash and leave the files with conflict markers to resolve.",
+        },
+      ]
+    : []),
   ],
   action: () => "Check out",
   plan: ({ target }, values) => {
@@ -270,9 +436,19 @@ const checkout: Operation = {
     const detach = target.kind === "tag" || isCommits(target)
     const stash = values.changes === "stash"
     return {
-      argv: ["git", "switch", ...(detach ? ["--detach"] : create ? ["-c", create, "--track"] : []), reference],
+      argv: [
+        "git",
+        "switch",
+        ...(detach ? ["--detach"]
+        : create ? ["-c", create, "--track"]
+        : []),
+        reference,
+      ],
       command: "checkout_ref",
-      args: { reference, options: { create, track: Boolean(create), detach, stash } },
+      args: {
+        reference,
+        options: { create, track: Boolean(create), detach, stash },
+      },
     }
   },
 }
@@ -281,37 +457,64 @@ const push: Operation = {
   id: "push",
   icon: ArrowUpFromLine,
   group: "sync",
-  applicable: ({ repository, target }) => Boolean(repository.remote) && target.kind === "branch",
+  applicable: ({ repository, target }) =>
+    Boolean(repository.remote) && target.kind === "branch",
   label: ({ target }) => {
     const sync = isRef(target) ? target.ref.sync : null
     if (!sync?.upstream || sync.isGone) {
       return "Publish"
     }
-    return sync.ahead > 0 ? { before: `Push ${sync.ahead} commit${sync.ahead === 1 ? "" : "s"} to `, name: sync.upstream } : "Push"
+    return sync.ahead > 0 ?
+        {
+          before: `Push ${sync.ahead} commit${sync.ahead === 1 ? "" : "s"} to `,
+          name: sync.upstream,
+        }
+      : "Push"
   },
   unavailable: ({ target }) => {
     const sync = isRef(target) ? target.ref.sync : null
-    return sync?.upstream && !sync.isGone && sync.ahead === 0 && sync.behind === 0 ? "Nothing to push" : null
+    return (
+        sync?.upstream && !sync.isGone && sync.ahead === 0 && sync.behind === 0
+      ) ?
+        "Nothing to push"
+      : null
   },
-  description: ({ repository, target }) => `This sends ${operandName(target)} to ${repository.remote}.`,
+  description: ({ repository, target }) =>
+    `This sends ${operandName(target)} to ${repository.remote}.`,
   fields: ({ target }) => {
     const sync = isRef(target) ? target.ref.sync : null
-    return sync?.upstream && !sync.isGone && sync.behind > 0
-      ? [{
-        key: "mode",
-        kind: "choice" as const,
-        label: "Remote is ahead",
-        choices: [
-          { value: "push", label: "Push", description: `Git rejects this while ${sync.upstream} has commits you do not have.` },
-          { value: "force", label: "Force push with lease", description: `Replaces ${sync.upstream} with your history, dropping its ${sync.behind} commit${sync.behind === 1 ? "" : "s"}. Refuses to run if the remote moved again.` },
-        ],
-      }]
+    return sync?.upstream && !sync.isGone && sync.behind > 0 ?
+        [
+          {
+            key: "mode",
+            kind: "choice" as const,
+            label: "Remote is ahead",
+            choices: [
+              {
+                value: "push",
+                label: "Push",
+                description: `Git rejects this while ${sync.upstream} has commits you do not have.`,
+              },
+              {
+                value: "force",
+                label: "Force push with lease",
+                description: `Replaces ${sync.upstream} with your history, dropping its ${sync.behind} commit${sync.behind === 1 ? "" : "s"}. Refuses to run if the remote moved again.`,
+              },
+            ],
+          },
+        ]
       : []
   },
   blocks: ({ target }, _state, values) => {
     const sync = isRef(target) ? target.ref.sync : null
-    return sync?.upstream && !sync.isGone && sync.ahead === 0 && sync.behind === 0 && values.mode !== "force"
-      ? [{ reason: `${sync.upstream} already has these commits` }]
+    return (
+        sync?.upstream &&
+          !sync.isGone &&
+          sync.ahead === 0 &&
+          sync.behind === 0 &&
+          values.mode !== "force"
+      ) ?
+        [{ reason: `${sync.upstream} already has these commits` }]
       : []
   },
   warnings: ({ target }, _state, values) => {
@@ -319,9 +522,17 @@ const push: Operation = {
     if (!sync?.upstream || sync.isGone || sync.behind === 0) {
       return []
     }
-    return values.mode === "force"
-      ? [{ message: `Force pushing rewrites ${sync.upstream} for everyone who has it, and drops its ${sync.behind} commit${sync.behind === 1 ? "" : "s"}.` }]
-      : [{ message: `${sync.upstream} has ${sync.behind} commit${sync.behind === 1 ? "" : "s"} you do not have, so the remote rejects this push and nothing is sent.` }]
+    return values.mode === "force" ?
+        [
+          {
+            message: `Force pushing rewrites ${sync.upstream} for everyone who has it, and drops its ${sync.behind} commit${sync.behind === 1 ? "" : "s"}.`,
+          },
+        ]
+      : [
+          {
+            message: `${sync.upstream} has ${sync.behind} commit${sync.behind === 1 ? "" : "s"} you do not have, so the remote rejects this push and nothing is sent.`,
+          },
+        ]
   },
   action: () => "Push",
   plan: ({ repository, target }, values) => {
@@ -331,9 +542,19 @@ const push: Operation = {
     const force = values.mode === "force"
     const remote = repository.remote ?? "origin"
     return {
-      argv: ["git", "push", ...(force ? ["--force-with-lease", "--force-if-includes"] : []), ...(setUpstream ? ["--set-upstream"] : []), remote, reference],
+      argv: [
+        "git",
+        "push",
+        ...(force ? ["--force-with-lease", "--force-if-includes"] : []),
+        ...(setUpstream ? ["--set-upstream"] : []),
+        remote,
+        reference,
+      ],
       command: "push_ref",
-      args: { reference, options: { remote, force, setUpstream, delete: false } },
+      args: {
+        reference,
+        options: { remote, force, setUpstream, delete: false },
+      },
     }
   },
 }
@@ -342,9 +563,11 @@ const pushTag: Operation = {
   id: "pushTag",
   icon: ArrowUpFromLine,
   group: "sync",
-  applicable: ({ repository, target }) => Boolean(repository.remote) && target.kind === "tag",
+  applicable: ({ repository, target }) =>
+    Boolean(repository.remote) && target.kind === "tag",
   label: () => "Push tag",
-  description: ({ repository, target }) => `This sends ${operandName(target)} to ${repository.remote}.`,
+  description: ({ repository, target }) =>
+    `This sends ${operandName(target)} to ${repository.remote}.`,
   blocks: () => [],
   warnings: () => [],
   action: () => "Push tag",
@@ -354,7 +577,10 @@ const pushTag: Operation = {
     return {
       argv: ["git", "push", remote, reference],
       command: "push_ref",
-      args: { reference, options: { remote, force: false, setUpstream: false, delete: false } },
+      args: {
+        reference,
+        options: { remote, force: false, setUpstream: false, delete: false },
+      },
     }
   },
 }
@@ -363,8 +589,14 @@ const pull: Operation = {
   id: "pull",
   icon: ArrowDownToLine,
   group: "sync",
-  applicable: ({ target }) => target.kind === "branch" && Boolean(target.ref.sync?.upstream) && !target.ref.sync?.isGone,
-  label: ({ target }) => ({ before: "Fast-forward to ", name: isRef(target) ? target.ref.sync?.upstream ?? "" : "" }),
+  applicable: ({ target }) =>
+    target.kind === "branch" &&
+    Boolean(target.ref.sync?.upstream) &&
+    !target.ref.sync?.isGone,
+  label: ({ target }) => ({
+    before: "Fast-forward to ",
+    name: isRef(target) ? (target.ref.sync?.upstream ?? "") : "",
+  }),
   unavailable: ({ target }) => {
     const sync = isRef(target) ? target.ref.sync : null
     if (!sync) {
@@ -373,14 +605,29 @@ const pull: Operation = {
     if (sync.behind === 0) {
       return "Nothing to fast-forward"
     }
-    return sync.ahead > 0 ? { before: "Diverged from ", name: sync.upstream ?? "" } : null
+    return sync.ahead > 0 ?
+        { before: "Diverged from ", name: sync.upstream ?? "" }
+      : null
   },
-  description: ({ target }) => `This fetches ${isRef(target) ? target.ref.sync?.upstream : ""} and moves ${operandName(target)} up to it without creating a merge.`,
+  description: ({ target }) =>
+    `This fetches ${isRef(target) ? target.ref.sync?.upstream : ""} and moves ${operandName(target)} up to it without creating a merge.`,
   blocks: ({ target }, state) => {
     const sync = isRef(target) ? target.ref.sync : null
     return [
-      ...(sync && sync.behind === 0 ? [{ reason: `${operandName(target)} already has everything on ${sync.upstream}` }] : []),
-      ...(sync && sync.ahead > 0 && sync.behind > 0 ? [{ reason: `${operandName(target)} and ${sync.upstream} have both moved, which needs a merge or a rebase` }] : []),
+      ...(sync && sync.behind === 0 ?
+        [
+          {
+            reason: `${operandName(target)} already has everything on ${sync.upstream}`,
+          },
+        ]
+      : []),
+      ...(sync && sync.ahead > 0 && sync.behind > 0 ?
+        [
+          {
+            reason: `${operandName(target)} and ${sync.upstream} have both moved, which needs a merge or a rebase`,
+          },
+        ]
+      : []),
       ...worktreeBlocks(state, operandName(target)),
     ]
   },
@@ -388,15 +635,28 @@ const pull: Operation = {
   warnings: () => [],
   action: () => "Fast-forward",
   plan: ({ target }) => ({
-    argv: ["git", "fetch", "&&", "git", "merge", "--ff-only", isRef(target) ? target.ref.sync?.upstream ?? "" : ""],
+    argv: [
+      "git",
+      "fetch",
+      "&&",
+      "git",
+      "merge",
+      "--ff-only",
+      isRef(target) ? (target.ref.sync?.upstream ?? "") : "",
+    ],
     command: "pull_branch",
     args: { branch: operandName(target) },
   }),
 }
 
-type MergeOperands = { into: string, name: string, reference: string }
+type MergeOperands = { into: string; name: string; reference: string }
 
-function mergeOperation(id: string, group: OperationGroup, mergeOperands: (request: OperationRequest) => MergeOperands | null, label: (operands: MergeOperands) => Label): Operation {
+function mergeOperation(
+  id: string,
+  group: OperationGroup,
+  mergeOperands: (request: OperationRequest) => MergeOperands | null,
+  label: (operands: MergeOperands) => Label,
+): Operation {
   return {
     id,
     icon: GitMerge,
@@ -417,17 +677,43 @@ function mergeOperation(id: string, group: OperationGroup, mergeOperands: (reque
         kind: "choice",
         label: "Merge style",
         choices: [
-          { value: "default", label: "Merge", description: "Fast-forwards when it can, otherwise records a merge commit." },
-          { value: "noFastForward", label: "Always create a merge commit", description: "Keeps the merge visible in the graph even when a fast-forward was possible." },
-          { value: "fastForwardOnly", label: "Fast-forward only", description: "Refuses the merge when it would need a merge commit." },
-          { value: "squash", label: "Squash", description: "Records the combined change as one commit, leaving the history flat." },
+          {
+            value: "default",
+            label: "Merge",
+            description:
+              "Fast-forwards when it can, otherwise records a merge commit.",
+          },
+          {
+            value: "noFastForward",
+            label: "Always create a merge commit",
+            description:
+              "Keeps the merge visible in the graph even when a fast-forward was possible.",
+          },
+          {
+            value: "fastForwardOnly",
+            label: "Fast-forward only",
+            description: "Refuses the merge when it would need a merge commit.",
+          },
+          {
+            value: "squash",
+            label: "Squash",
+            description:
+              "Records the combined change as one commit, leaving the history flat.",
+          },
         ],
       },
       // Git leaves a squash staged and uncommitted, so the message it needs is asked for up front rather than
       // left as a half-finished merge in the working tree.
-      ...(values.mode === "squash"
-        ? [{ key: "message", kind: "text" as const, label: "Commit message", placeholder: `What ${mergeOperands(request)?.name ?? "the branch"} does` }]
-        : []),
+      ...(values.mode === "squash" ?
+        [
+          {
+            key: "message",
+            kind: "text" as const,
+            label: "Commit message",
+            placeholder: `What ${mergeOperands(request)?.name ?? "the branch"} does`,
+          },
+        ]
+      : []),
     ],
     blocks: (request, state, values) => {
       const operands = mergeOperands(request)
@@ -435,9 +721,15 @@ function mergeOperation(id: string, group: OperationGroup, mergeOperands: (reque
         return [{ reason: "nothing to merge" }]
       }
       return [
-        ...(operands.name === operands.into ? [{ reason: "a branch cannot merge into itself" }] : []),
-        ...(state.branch && !state.branch.worktreePath ? [{ reason: `${operands.into} is not checked out in any worktree` }] : []),
-        ...(values.mode === "squash" && !values.message?.trim() ? [{ reason: "write the commit message" }] : []),
+        ...(operands.name === operands.into ?
+          [{ reason: "a branch cannot merge into itself" }]
+        : []),
+        ...(state.branch && !state.branch.worktreePath ?
+          [{ reason: `${operands.into} is not checked out in any worktree` }]
+        : []),
+        ...(values.mode === "squash" && !values.message?.trim() ?
+          [{ reason: "write the commit message" }]
+        : []),
         ...worktreeBlocks(state, operands.into),
       ]
     },
@@ -448,36 +740,77 @@ function mergeOperation(id: string, group: OperationGroup, mergeOperands: (reque
       }
       return {
         branch: operands.into,
-        prediction: { kind: "merge", source: operands.reference, into: operands.into },
-        ...(values.mode === "fastForwardOnly" ? { mergeBase: [operands.into, operands.reference] as [string, string] } : {}),
+        prediction: {
+          kind: "merge",
+          source: operands.reference,
+          into: operands.into,
+        },
+        ...(values.mode === "fastForwardOnly" ?
+          { mergeBase: [operands.into, operands.reference] as [string, string] }
+        : {}),
       }
     },
     warnings: (request, state, values) => {
       const operands = mergeOperands(request)
-      const landing = values.mode === "squash"
-        ? `The squash is undone when that happens, so nothing lands on ${operands?.into}.`
+      const landing =
+        values.mode === "squash" ?
+          `The squash is undone when that happens, so nothing lands on ${operands?.into}.`
         : `The merge is undone when that happens, so ${operands?.into} stays where it is.`
       return [
         ...predictionWarnings(state, "Merging", landing),
-        ...(values.mode === "fastForwardOnly" && state.mergeBase && state.branch?.sha && state.mergeBase !== state.branch.sha
-          ? [{ message: `${operands?.into} has commits ${operands?.name} does not, so there is no fast-forward to make and Git refuses this merge.` }]
-          : []),
-        ...(values.mode === "squash"
-          ? [{ message: `The squash commit does not record ${operands?.name} as a parent, so Git still counts it as unmerged afterwards.` }]
-          : []),
+        ...((
+          values.mode === "fastForwardOnly" &&
+          state.mergeBase &&
+          state.branch?.sha &&
+          state.mergeBase !== state.branch.sha
+        ) ?
+          [
+            {
+              message: `${operands?.into} has commits ${operands?.name} does not, so there is no fast-forward to make and Git refuses this merge.`,
+            },
+          ]
+        : []),
+        ...(values.mode === "squash" ?
+          [
+            {
+              message: `The squash commit does not record ${operands?.name} as a parent, so Git still counts it as unmerged afterwards.`,
+            },
+          ]
+        : []),
       ]
     },
     action: () => "Merge",
     plan: (request, values) => {
       const operands = mergeOperands(request)!
       const message = values.message?.trim() ?? ""
-      const style = { default: [], noFastForward: ["--no-ff"], fastForwardOnly: ["--ff-only"], squash: ["--squash"] }[values.mode] ?? []
+      const style =
+        {
+          default: [],
+          noFastForward: ["--no-ff"],
+          fastForwardOnly: ["--ff-only"],
+          squash: ["--squash"],
+        }[values.mode] ?? []
       return {
-        argv: values.mode === "squash"
-          ? ["git", "merge", "--squash", operands.reference, "&&", "git", "commit", "--message", message]
+        argv:
+          values.mode === "squash" ?
+            [
+              "git",
+              "merge",
+              "--squash",
+              operands.reference,
+              "&&",
+              "git",
+              "commit",
+              "--message",
+              message,
+            ]
           : ["git", "merge", "--no-edit", ...style, operands.reference],
         command: "merge_ref",
-        args: { source: operands.reference, into: operands.into, options: { mode: values.mode, message: message || null } },
+        args: {
+          source: operands.reference,
+          into: operands.into,
+          options: { mode: values.mode, message: message || null },
+        },
       }
     },
   }
@@ -487,8 +820,13 @@ function mergeOperation(id: string, group: OperationGroup, mergeOperands: (reque
 const mergeSelectedHere = mergeOperation(
   "mergeSelectedHere",
   "selection",
-  ({ source, target }) => source && !sameOperand(source, target) && target.kind === "branch"
-    ? { into: operandName(target), name: operandName(source), reference: operandRef(source) }
+  ({ source, target }) =>
+    source && !sameOperand(source, target) && target.kind === "branch" ?
+      {
+        into: operandName(target),
+        name: operandName(source),
+        reference: operandRef(source),
+      }
     : null,
   () => "Merge here",
 )
@@ -497,8 +835,17 @@ const mergeSelectedHere = mergeOperation(
 const mergeIntoCurrent = mergeOperation(
   "mergeIntoCurrent",
   "integrate",
-  ({ repository, target }) => repository.currentBranch && (isRef(target) || isCommits(target)) && operandName(target) !== repository.currentBranch
-    ? { into: repository.currentBranch, name: operandName(target), reference: operandRef(target) }
+  ({ repository, target }) =>
+    (
+      repository.currentBranch &&
+      (isRef(target) || isCommits(target)) &&
+      operandName(target) !== repository.currentBranch
+    ) ?
+      {
+        into: repository.currentBranch,
+        name: operandName(target),
+        reference: operandRef(target),
+      }
     : null,
   ({ into }) => ({ before: "Merge into ", name: into }),
 )
@@ -507,15 +854,20 @@ const rebaseOnto: Operation = {
   id: "rebaseOnto",
   icon: GitGraph,
   group: "selection",
-  applicable: (request) => Boolean(rebaseSource(request)) && (isRef(request.target) || isCommits(request.target)) && !sameOperand(request.source, request.target),
+  applicable: (request) =>
+    Boolean(rebaseSource(request)) &&
+    (isRef(request.target) || isCommits(request.target)) &&
+    !sameOperand(request.source, request.target),
   label: () => "Rebase onto here",
   title: (request) => {
     const source = rebaseSource(request)!
     const moved = source.commits ? ` (${commitCount(source.commits)})` : ""
     return `Rebase ${source.branch}${moved} onto ${operandName(request.target)}`
   },
-  description: (request) => `This replays the moved commits on ${operandName(request.target)} and leaves ${rebaseSource(request)?.branch} on the result.`,
-  fields: ({ source }) => branchChoiceField(source?.kind === "commits" ? source.branches : []),
+  description: (request) =>
+    `This replays the moved commits on ${operandName(request.target)} and leaves ${rebaseSource(request)?.branch} on the result.`,
+  fields: ({ source }) =>
+    branchChoiceField(source?.kind === "commits" ? source.branches : []),
   blocks: (request, state, values) => {
     const source = rebaseSource(request, values)!
     const { target } = request
@@ -529,11 +881,23 @@ const rebaseOnto: Operation = {
     if (source.base?.hash === operandSha(target)) {
       blocks.push({ reason: "the selection already starts at the target" })
     }
-    if (!source.commits && state.mergeBase && state.mergeBase === operandSha(target)) {
-      blocks.push({ reason: `${source.branch} already sits on ${operandName(target)}` })
+    if (
+      !source.commits &&
+      state.mergeBase &&
+      state.mergeBase === operandSha(target)
+    ) {
+      blocks.push({
+        reason: `${source.branch} already sits on ${operandName(target)}`,
+      })
     }
-    if (state.branch?.worktreePath && !state.branch.isCurrentWorktree && state.prediction?.outcome === "conflicts") {
-      blocks.push({ reason: "conflicts would leave another worktree mid-rebase" })
+    if (
+      state.branch?.worktreePath &&
+      !state.branch.isCurrentWorktree &&
+      state.prediction?.outcome === "conflicts"
+    ) {
+      blocks.push({
+        reason: "conflicts would leave another worktree mid-rebase",
+      })
     }
     return [...blocks, ...worktreeBlocks(state, source.branch)]
   },
@@ -543,23 +907,55 @@ const rebaseOnto: Operation = {
     const upstream = source.commits ? source.base?.hash : undefined
     return {
       branch: source.branch,
-      ...(source.commits ? {} : { mergeBase: [source.branch, onto] as [string, string] }),
-      ...(upstream ? { prediction: { kind: "rebase" as const, branch: source.branch, onto, upstream } } : {}),
+      ...(source.commits ?
+        {}
+      : { mergeBase: [source.branch, onto] as [string, string] }),
+      ...(upstream ?
+        {
+          prediction: {
+            kind: "rebase" as const,
+            branch: source.branch,
+            onto,
+            upstream,
+          },
+        }
+      : {}),
     }
   },
   warnings: (request, state, values) => [
-    ...predictionWarnings(state, "Replaying", `The rebase is undone when that happens, so ${rebaseSource(request, values)?.branch} stays where it is.`),
-    ...(rebaseSource(request)?.commits?.some((commit) => commit.parents.length > 1)
-      ? [{ message: "The selection contains a merge commit, which will be flattened into a linear sequence." }]
-      : []),
+    ...predictionWarnings(
+      state,
+      "Replaying",
+      `The rebase is undone when that happens, so ${rebaseSource(request, values)?.branch} stays where it is.`,
+    ),
+    ...((
+      rebaseSource(request)?.commits?.some(
+        (commit) => commit.parents.length > 1,
+      )
+    ) ?
+      [
+        {
+          message:
+            "The selection contains a merge commit, which will be flattened into a linear sequence.",
+        },
+      ]
+    : []),
   ],
   action: () => "Rebase",
   plan: (request, values, state) => {
     const source = rebaseSource(request, values)!
     const onto = operandRef(request.target)
-    const upstream = source.commits ? source.base!.hash : state.mergeBase ?? ""
+    const upstream =
+      source.commits ? source.base!.hash : (state.mergeBase ?? "")
     return {
-      argv: ["git", "rebase", "--onto", onto, upstream.slice(0, 8), source.branch],
+      argv: [
+        "git",
+        "rebase",
+        "--onto",
+        onto,
+        upstream.slice(0, 8),
+        source.branch,
+      ],
       command: "rebase_onto",
       args: { onto, upstream, branch: source.branch },
     }
@@ -571,14 +967,24 @@ const dropCommits: Operation = {
   icon: Scissors,
   group: "danger",
   destructive: true,
-  applicable: ({ source, target }) => isCommits(target) && sameOperand(source, target) && target.branches.length > 0,
-  label: ({ target }) => ({ before: "Remove from ", name: (target as CommitSelection).branches[0].branch }),
-  description: ({ target }) => `This rewrites ${(target as CommitSelection).branches[0].branch} without the selected ${commitCount((target as CommitSelection).commits)}. Everything after them is replayed.`,
-  fields: ({ target }) => branchChoiceField((target as CommitSelection).branches),
+  applicable: ({ source, target }) =>
+    isCommits(target) &&
+    sameOperand(source, target) &&
+    target.branches.length > 0,
+  label: ({ target }) => ({
+    before: "Remove from ",
+    name: (target as CommitSelection).branches[0].branch,
+  }),
+  description: ({ target }) =>
+    `This rewrites ${(target as CommitSelection).branches[0].branch} without the selected ${commitCount((target as CommitSelection).commits)}. Everything after them is replayed.`,
+  fields: ({ target }) =>
+    branchChoiceField((target as CommitSelection).branches),
   blocks: ({ target }, state, values) => {
     const selection = target as CommitSelection
     return [
-      ...(selection.base ? [] : [{ reason: "the oldest selected commit has no parent" }]),
+      ...(selection.base ?
+        []
+      : [{ reason: "the oldest selected commit has no parent" }]),
       ...worktreeBlocks(state, droppedBranch(selection, values)),
     ]
   },
@@ -587,55 +993,128 @@ const dropCommits: Operation = {
     const branch = droppedBranch(selection, values)
     return {
       branch,
-      ...(selection.base ? { prediction: { kind: "rebase" as const, branch, onto: selection.base.hash, upstream: selection.tip.hash } } : {}),
+      ...(selection.base ?
+        {
+          prediction: {
+            kind: "rebase" as const,
+            branch,
+            onto: selection.base.hash,
+            upstream: selection.tip.hash,
+          },
+        }
+      : {}),
     }
   },
   warnings: ({ target }, state, values) => [
-    ...predictionWarnings(state, "Replaying", `The rewrite is undone when that happens, so ${droppedBranch(target as CommitSelection, values)} stays where it is.`),
-    ...((target as CommitSelection).commits.some((commit) => commit.parents.length > 1)
-      ? [{ message: "The selection contains a merge commit, which will be flattened into a linear sequence." }]
-      : []),
+    ...predictionWarnings(
+      state,
+      "Replaying",
+      `The rewrite is undone when that happens, so ${droppedBranch(target as CommitSelection, values)} stays where it is.`,
+    ),
+    ...((
+      (target as CommitSelection).commits.some(
+        (commit) => commit.parents.length > 1,
+      )
+    ) ?
+      [
+        {
+          message:
+            "The selection contains a merge commit, which will be flattened into a linear sequence.",
+        },
+      ]
+    : []),
   ],
   action: () => "Remove commits",
   plan: ({ target }, values) => {
     const selection = target as CommitSelection
     const branch = droppedBranch(selection, values)
     return {
-      argv: ["git", "rebase", "--onto", selection.base!.hash.slice(0, 8), selection.tip.hash.slice(0, 8), branch],
+      argv: [
+        "git",
+        "rebase",
+        "--onto",
+        selection.base!.hash.slice(0, 8),
+        selection.tip.hash.slice(0, 8),
+        branch,
+      ],
       command: "rebase_onto",
-      args: { onto: selection.base!.hash, upstream: selection.tip.hash, branch },
+      args: {
+        onto: selection.base!.hash,
+        upstream: selection.tip.hash,
+        branch,
+      },
     }
   },
 }
 
 function droppedBranch(selection: CommitSelection, values: Values) {
-  return selection.branches.find((candidate) => candidate.branch === values.branch)?.branch ?? selection.branches[0].branch
+  return (
+    selection.branches.find((candidate) => candidate.branch === values.branch)
+      ?.branch ?? selection.branches[0].branch
+  )
 }
 
 const cherryPick: Operation = {
   id: "cherryPick",
   icon: Copy,
   group: "integrate",
-  applicable: ({ repository, target }) => isCommits(target) && Boolean(repository.currentBranch) && Boolean(target.base),
-  label: ({ repository }) => ({ before: "Copy onto ", name: repository.currentBranch ?? "" }),
-  description: ({ repository, target }) => `This replays the selected ${commitCount((target as CommitSelection).commits)} as new commits on ${repository.currentBranch}.`,
+  applicable: ({ repository, target }) =>
+    isCommits(target) &&
+    Boolean(repository.currentBranch) &&
+    Boolean(target.base),
+  label: ({ repository }) => ({
+    before: "Copy onto ",
+    name: repository.currentBranch ?? "",
+  }),
+  description: ({ repository, target }) =>
+    `This replays the selected ${commitCount((target as CommitSelection).commits)} as new commits on ${repository.currentBranch}.`,
   blocks: ({ repository, target }) => [
-    ...(repository.isDirty ? [{ reason: "this worktree has uncommitted changes" }] : []),
-    ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
-    ...((target as CommitSelection).commits.some((commit) => commit.hash === repository.headSha) ? [{ reason: "the selection is already checked out" }] : []),
+    ...(repository.isDirty ?
+      [{ reason: "this worktree has uncommitted changes" }]
+    : []),
+    ...(repository.pendingOperation ?
+      [
+        {
+          reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}`,
+        },
+      ]
+    : []),
+    ...((
+      (target as CommitSelection).commits.some(
+        (commit) => commit.hash === repository.headSha,
+      )
+    ) ?
+      [{ reason: "the selection is already checked out" }]
+    : []),
   ],
   needs: ({ repository, target }) => {
     const selection = target as CommitSelection
-    return repository.headSha && selection.base
-      ? { prediction: { kind: "rebase", branch: selection.tip.hash, onto: repository.headSha, upstream: selection.base.hash } }
+    return repository.headSha && selection.base ?
+        {
+          prediction: {
+            kind: "rebase",
+            branch: selection.tip.hash,
+            onto: repository.headSha,
+            upstream: selection.base.hash,
+          },
+        }
       : {}
   },
-  warnings: ({ repository }, state) => predictionWarnings(state, "Copying", `The copy is undone when that happens, so nothing lands on ${repository.currentBranch}.`),
+  warnings: ({ repository }, state) =>
+    predictionWarnings(
+      state,
+      "Copying",
+      `The copy is undone when that happens, so nothing lands on ${repository.currentBranch}.`,
+    ),
   action: () => "Copy commits",
   plan: ({ target }) => {
     const selection = target as CommitSelection
     return {
-      argv: ["git", "cherry-pick", `${selection.base!.hash.slice(0, 8)}..${selection.tip.hash.slice(0, 8)}`],
+      argv: [
+        "git",
+        "cherry-pick",
+        `${selection.base!.hash.slice(0, 8)}..${selection.tip.hash.slice(0, 8)}`,
+      ],
       command: "cherry_pick_range",
       args: { base: selection.base!.hash, tip: selection.tip.hash },
     }
@@ -646,24 +1125,63 @@ const revert: Operation = {
   id: "revert",
   icon: Undo2,
   group: "integrate",
-  applicable: ({ repository, target }) => isCommits(target) && Boolean(repository.currentBranch) && Boolean(target.base),
-  label: ({ repository }) => ({ before: "Revert on ", name: repository.currentBranch ?? "" }),
-  description: ({ repository, target }) => `This adds commits to ${repository.currentBranch} that undo the selected ${commitCount((target as CommitSelection).commits)}, leaving the originals in place.`,
+  applicable: ({ repository, target }) =>
+    isCommits(target) &&
+    Boolean(repository.currentBranch) &&
+    Boolean(target.base),
+  label: ({ repository }) => ({
+    before: "Revert on ",
+    name: repository.currentBranch ?? "",
+  }),
+  description: ({ repository, target }) =>
+    `This adds commits to ${repository.currentBranch} that undo the selected ${commitCount((target as CommitSelection).commits)}, leaving the originals in place.`,
   blocks: ({ repository, target }) => [
-    ...(repository.isDirty ? [{ reason: "this worktree has uncommitted changes" }] : []),
-    ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
-    ...((target as CommitSelection).commits.some((commit) => commit.parents.length > 1) ? [{ reason: "reverting a merge commit needs a mainline to keep" }] : []),
+    ...(repository.isDirty ?
+      [{ reason: "this worktree has uncommitted changes" }]
+    : []),
+    ...(repository.pendingOperation ?
+      [
+        {
+          reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}`,
+        },
+      ]
+    : []),
+    ...((
+      (target as CommitSelection).commits.some(
+        (commit) => commit.parents.length > 1,
+      )
+    ) ?
+      [{ reason: "reverting a merge commit needs a mainline to keep" }]
+    : []),
   ],
   needs: ({ target }) => {
     const selection = target as CommitSelection
-    return selection.base ? { prediction: { kind: "revert", base: selection.base.hash, tip: selection.tip.hash } } : {}
+    return selection.base ?
+        {
+          prediction: {
+            kind: "revert",
+            base: selection.base.hash,
+            tip: selection.tip.hash,
+          },
+        }
+      : {}
   },
-  warnings: ({ repository }, state) => predictionWarnings(state, "Undoing", `The revert is undone when that happens, so nothing lands on ${repository.currentBranch}.`),
+  warnings: ({ repository }, state) =>
+    predictionWarnings(
+      state,
+      "Undoing",
+      `The revert is undone when that happens, so nothing lands on ${repository.currentBranch}.`,
+    ),
   action: () => "Revert",
   plan: ({ target }) => {
     const selection = target as CommitSelection
     return {
-      argv: ["git", "revert", "--no-edit", `${selection.base!.hash.slice(0, 8)}..${selection.tip.hash.slice(0, 8)}`],
+      argv: [
+        "git",
+        "revert",
+        "--no-edit",
+        `${selection.base!.hash.slice(0, 8)}..${selection.tip.hash.slice(0, 8)}`,
+      ],
       command: "revert_range",
       args: { base: selection.base!.hash, tip: selection.tip.hash },
     }
@@ -675,31 +1193,67 @@ const resetCurrent: Operation = {
   group: "danger",
   icon: Undo2,
   destructive: true,
-  applicable: ({ repository, target }) => Boolean(repository.currentBranch)
-    && (isRef(target) || (isCommits(target) && target.commits.length === 1))
-    && operandSha(target) !== repository.headSha,
-  label: ({ repository }) => ({ before: "Reset ", name: repository.currentBranch ?? "", after: " to here" }),
-  description: ({ repository, target }) => `This moves ${repository.currentBranch} to ${operandName(target)} without replaying anything.`,
-  fields: () => [{
-    key: "mode",
-    kind: "choice",
-    label: "What happens to the difference",
-    choices: [
-      { value: "mixed", label: "Keep as uncommitted changes", description: "Leaves the files as they are and unstages them." },
-      { value: "soft", label: "Keep staged", description: "Leaves the files as they are with the difference staged." },
-      { value: "hard", label: "Discard", description: "Overwrites the working tree. Uncommitted work is lost and cannot be undone." },
-    ],
-  }],
-  blocks: ({ repository }) => repository.pendingOperation
-    ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }]
+  applicable: ({ repository, target }) =>
+    Boolean(repository.currentBranch) &&
+    (isRef(target) || (isCommits(target) && target.commits.length === 1)) &&
+    operandSha(target) !== repository.headSha,
+  label: ({ repository }) => ({
+    before: "Reset ",
+    name: repository.currentBranch ?? "",
+    after: " to here",
+  }),
+  description: ({ repository, target }) =>
+    `This moves ${repository.currentBranch} to ${operandName(target)} without replaying anything.`,
+  fields: () => [
+    {
+      key: "mode",
+      kind: "choice",
+      label: "What happens to the difference",
+      choices: [
+        {
+          value: "mixed",
+          label: "Keep as uncommitted changes",
+          description: "Leaves the files as they are and unstages them.",
+        },
+        {
+          value: "soft",
+          label: "Keep staged",
+          description:
+            "Leaves the files as they are with the difference staged.",
+        },
+        {
+          value: "hard",
+          label: "Discard",
+          description:
+            "Overwrites the working tree. Uncommitted work is lost and cannot be undone.",
+        },
+      ],
+    },
+  ],
+  blocks: ({ repository }) =>
+    repository.pendingOperation ?
+      [
+        {
+          reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}`,
+        },
+      ]
     : [],
   warnings: ({ repository, target }, _state, values) => {
     if (values.mode === "hard") {
-      return repository.isDirty
-        ? [{ message: "The uncommitted changes in this worktree will be discarded, and undo cannot bring them back." }]
+      return repository.isDirty ?
+          [
+            {
+              message:
+                "The uncommitted changes in this worktree will be discarded, and undo cannot bring them back.",
+            },
+          ]
         : []
     }
-    return [{ message: `Everything between ${operandName(target)} and ${repository.currentBranch} is left in the working tree, so this worktree ends up with uncommitted changes.` }]
+    return [
+      {
+        message: `Everything between ${operandName(target)} and ${repository.currentBranch} is left in the working tree, so this worktree ends up with uncommitted changes.`,
+      },
+    ]
   },
   action: () => "Reset",
   plan: ({ target }, values) => ({
@@ -713,18 +1267,38 @@ const createBranch: Operation = {
   id: "createBranch",
   icon: GitBranch,
   group: "refs",
-  applicable: ({ target }) => isRef(target) || (isCommits(target) && target.commits.length === 1),
+  applicable: ({ target }) =>
+    isRef(target) || (isCommits(target) && target.commits.length === 1),
   label: () => "Create branch here",
-  description: ({ target }) => `The new branch starts at ${operandName(target)}.`,
+  description: ({ target }) =>
+    `The new branch starts at ${operandName(target)}.`,
   fields: () => [
-    { key: "name", kind: "text", label: "Branch name", placeholder: "feature/name" },
-    { initial: true, key: "checkout", kind: "toggle", label: "Check out the new branch" },
+    {
+      key: "name",
+      kind: "text",
+      label: "Branch name",
+      placeholder: "feature/name",
+    },
+    {
+      initial: true,
+      key: "checkout",
+      kind: "toggle",
+      label: "Check out the new branch",
+    },
   ],
   warnings: () => [],
   blocks: ({ repository }, _state, values) => [
     ...(values.name.trim() ? [] : [{ reason: "name the branch" }]),
-    ...(flag(values, "checkout") && repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
-    ...(flag(values, "checkout") && repository.isDirty ? [{ reason: "this worktree has uncommitted changes" }] : []),
+    ...(flag(values, "checkout") && repository.pendingOperation ?
+      [
+        {
+          reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}`,
+        },
+      ]
+    : []),
+    ...(flag(values, "checkout") && repository.isDirty ?
+      [{ reason: "this worktree has uncommitted changes" }]
+    : []),
   ],
   action: () => "Create branch",
   plan: ({ target }, values) => {
@@ -733,7 +1307,17 @@ const createBranch: Operation = {
     const track = target.kind === "remote"
     const checkout = flag(values, "checkout")
     return {
-      argv: checkout ? ["git", "switch", "-c", name, ...(track ? ["--track"] : []), startPoint] : ["git", "branch", ...(track ? ["--track"] : []), name, startPoint],
+      argv:
+        checkout ?
+          [
+            "git",
+            "switch",
+            "-c",
+            name,
+            ...(track ? ["--track"] : []),
+            startPoint,
+          ]
+        : ["git", "branch", ...(track ? ["--track"] : []), name, startPoint],
       command: "create_branch",
       args: { name, startPoint, options: { checkout, track } },
     }
@@ -746,9 +1330,18 @@ const renameBranch: Operation = {
   group: "refs",
   applicable: ({ target }) => target.kind === "branch",
   label: () => "Rename",
-  description: ({ target }) => `Anything tracking ${operandName(target)} keeps pointing at the old name on the remote.`,
-  fields: ({ target }) => [{ initial: operandName(target), key: "name", kind: "text", label: "New name" }],
-  blocks: (_request, _state, values) => values.name.trim() ? [] : [{ reason: "name the branch" }],
+  description: ({ target }) =>
+    `Anything tracking ${operandName(target)} keeps pointing at the old name on the remote.`,
+  fields: ({ target }) => [
+    {
+      initial: operandName(target),
+      key: "name",
+      kind: "text",
+      label: "New name",
+    },
+  ],
+  blocks: (_request, _state, values) =>
+    values.name.trim() ? [] : [{ reason: "name the branch" }],
   warnings: () => [],
   action: () => "Rename",
   plan: ({ target }, values) => ({
@@ -762,21 +1355,35 @@ const createTag: Operation = {
   id: "createTag",
   icon: Tag,
   group: "refs",
-  applicable: ({ target }) => isRef(target) || (isCommits(target) && target.commits.length === 1),
+  applicable: ({ target }) =>
+    isRef(target) || (isCommits(target) && target.commits.length === 1),
   label: () => "Create tag here",
-  description: ({ target }) => `The tag marks ${operandName(target)} and does not move with the branch.`,
+  description: ({ target }) =>
+    `The tag marks ${operandName(target)} and does not move with the branch.`,
   fields: () => [
     { key: "name", kind: "text", label: "Tag name", placeholder: "v1.0.0" },
-    { key: "message", kind: "text", label: "Message", placeholder: "Leave empty for a lightweight tag" },
+    {
+      key: "message",
+      kind: "text",
+      label: "Message",
+      placeholder: "Leave empty for a lightweight tag",
+    },
   ],
-  blocks: (_request, _state, values) => values.name.trim() ? [] : [{ reason: "name the tag" }],
+  blocks: (_request, _state, values) =>
+    values.name.trim() ? [] : [{ reason: "name the tag" }],
   warnings: () => [],
   action: () => "Create tag",
   plan: ({ target }, values) => {
     const name = values.name.trim()
     const message = values.message.trim()
     return {
-      argv: ["git", "tag", ...(message ? ["--annotate", "--message", message] : []), name, operandRef(target)],
+      argv: [
+        "git",
+        "tag",
+        ...(message ? ["--annotate", "--message", message] : []),
+        name,
+        operandRef(target),
+      ],
       command: "create_tag",
       args: { name, target: operandRef(target), message: message || null },
     }
@@ -788,9 +1395,13 @@ const deleteBranch: Operation = {
   icon: Trash2,
   group: "danger",
   destructive: true,
-  applicable: ({ target }) => target.kind === "branch" && !target.ref.checkedOut && target.ref.worktrees.length === 0,
+  applicable: ({ target }) =>
+    target.kind === "branch" &&
+    !target.ref.checkedOut &&
+    target.ref.worktrees.length === 0,
   label: () => "Delete branch",
-  description: ({ target }) => `This deletes the local branch ${operandName(target)}. The commits stay until Git collects them.`,
+  description: ({ target }) =>
+    `This deletes the local branch ${operandName(target)}. The commits stay until Git collects them.`,
   blocks: () => [],
   warnings: ({ target }) => {
     const sync = isRef(target) ? target.ref.sync : null
@@ -798,11 +1409,14 @@ const deleteBranch: Operation = {
     if (!sync || (tracked && sync.ahead === 0)) {
       return []
     }
-    return [{
-      message: tracked
-        ? `${operandName(target)} has ${sync.ahead} commit${sync.ahead === 1 ? "" : "s"} that ${sync.upstream} does not have.`
-        : `${operandName(target)} is not on any remote.`,
-    }]
+    return [
+      {
+        message:
+          tracked ?
+            `${operandName(target)} has ${sync.ahead} commit${sync.ahead === 1 ? "" : "s"} that ${sync.upstream} does not have.`
+          : `${operandName(target)} is not on any remote.`,
+      },
+    ]
   },
   action: () => "Delete branch",
   plan: ({ target }) => ({
@@ -819,7 +1433,8 @@ const deleteTag: Operation = {
   destructive: true,
   applicable: ({ target }) => target.kind === "tag",
   label: () => "Delete tag",
-  description: ({ target }) => `This deletes the local tag ${operandName(target)}.`,
+  description: ({ target }) =>
+    `This deletes the local tag ${operandName(target)}.`,
   blocks: () => [],
   warnings: () => [],
   action: () => "Delete tag",
@@ -837,11 +1452,17 @@ const deleteRemoteRef: Operation = {
   destructive: true,
   // The remote comes from the ref itself: with more than one remote configured, assuming the repository's
   // primary one would delete a same-named branch on the wrong remote.
-  applicable: ({ target }) => target.kind === "remote" && remoteBranchName(target.ref) !== null && remoteBranchName(target.ref) !== "HEAD",
+  applicable: ({ target }) =>
+    target.kind === "remote" &&
+    remoteBranchName(target.ref) !== null &&
+    remoteBranchName(target.ref) !== "HEAD",
   label: () => "Delete from the remote",
-  description: ({ target }) => `This deletes ${operandName(target)} for everyone who uses the remote.`,
+  description: ({ target }) =>
+    `This deletes ${operandName(target)} for everyone who uses the remote.`,
   blocks: () => [],
-  warnings: () => [{ message: "Deleting a branch on the remote cannot be undone from here." }],
+  warnings: () => [
+    { message: "Deleting a branch on the remote cannot be undone from here." },
+  ],
   action: () => "Delete on remote",
   plan: ({ target }) => {
     const ref = (target as RefSelection).ref
@@ -850,7 +1471,10 @@ const deleteRemoteRef: Operation = {
     return {
       argv: ["git", "push", remote, "--delete", branch],
       command: "push_ref",
-      args: { reference: branch, options: { remote, force: false, setUpstream: false, delete: true } },
+      args: {
+        reference: branch,
+        options: { remote, force: false, setUpstream: false, delete: true },
+      },
     }
   },
 }
@@ -859,26 +1483,53 @@ const stashChanges: Operation = {
   id: "stashChanges",
   icon: ArrowDownToLine,
   group: "refs",
-  applicable: ({ repository, target }) => target.kind === "worktree" && repository.isDirty,
+  applicable: ({ repository, target }) =>
+    target.kind === "worktree" && repository.isDirty,
   label: () => "Stash the uncommitted changes",
-  description: () => "This sets the working tree back to the last commit and keeps the changes in the stash.",
+  description: () =>
+    "This sets the working tree back to the last commit and keeps the changes in the stash.",
   fields: () => [
-    { key: "message", kind: "text", label: "Message", placeholder: "Describe the work in progress" },
+    {
+      key: "message",
+      kind: "text",
+      label: "Message",
+      placeholder: "Describe the work in progress",
+    },
     { key: "untracked", kind: "toggle", label: "Include untracked files" },
   ],
-  blocks: ({ repository }) => repository.pendingOperation
-    ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }]
+  blocks: ({ repository }) =>
+    repository.pendingOperation ?
+      [
+        {
+          reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}`,
+        },
+      ]
     : [],
   warnings: () => [],
   action: () => "Stash",
   plan: (_request, values) => ({
-    argv: ["git", "stash", "push", ...(flag(values, "untracked") ? ["--include-untracked"] : []), ...(values.message.trim() ? ["--message", values.message.trim()] : [])],
+    argv: [
+      "git",
+      "stash",
+      "push",
+      ...(flag(values, "untracked") ? ["--include-untracked"] : []),
+      ...(values.message.trim() ? ["--message", values.message.trim()] : []),
+    ],
     command: "stash_changes",
-    args: { message: values.message.trim() || null, includeUntracked: flag(values, "untracked") },
+    args: {
+      message: values.message.trim() || null,
+      includeUntracked: flag(values, "untracked"),
+    },
   }),
 }
 
-function stashOperation(id: string, action: string, label: string, describe: (name: string) => string, destructive?: boolean): Operation {
+function stashOperation(
+  id: string,
+  action: string,
+  label: string,
+  describe: (name: string) => string,
+  destructive?: boolean,
+): Operation {
   return {
     id,
     icon: destructive ? Trash2 : ArrowUpFromLine,
@@ -888,22 +1539,42 @@ function stashOperation(id: string, action: string, label: string, describe: (na
     label: () => label,
     description: ({ target }) => describe(operandName(target)),
     blocks: ({ repository }) => [
-      ...(repository.pendingOperation ? [{ reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}` }] : []),
-      ...(action !== "drop" && repository.isDirty ? [{ reason: "this worktree has uncommitted changes" }] : []),
+      ...(repository.pendingOperation ?
+        [
+          {
+            reason: `this worktree is ${PENDING_OPERATION_LABELS[repository.pendingOperation]}`,
+          },
+        ]
+      : []),
+      ...(action !== "drop" && repository.isDirty ?
+        [{ reason: "this worktree has uncommitted changes" }]
+      : []),
     ],
     // Restoring a stash is a merge of it into the checkout, which is what makes it predictable.
-    needs: ({ repository, target }) => action === "drop" || !repository.headSha
-      ? {}
-      : { prediction: { kind: "merge", source: operandSha(target), into: repository.headSha } },
-    warnings: ({ target }, state) => action === "drop"
-      ? [{ message: `Dropping ${operandName(target)} cannot be undone from here.` }]
+    needs: ({ repository, target }) =>
+      action === "drop" || !repository.headSha ?
+        {}
+      : {
+          prediction: {
+            kind: "merge",
+            source: operandSha(target),
+            into: repository.headSha,
+          },
+        },
+    warnings: ({ target }, state) =>
+      action === "drop" ?
+        [
+          {
+            message: `Dropping ${operandName(target)} cannot be undone from here.`,
+          },
+        ]
       : predictionWarnings(
-        state,
-        "Restoring",
-        action === "pop"
-          ? "The files are left with conflict markers to resolve and the entry stays in the stash when that happens."
+          state,
+          "Restoring",
+          action === "pop" ?
+            "The files are left with conflict markers to resolve and the entry stays in the stash when that happens."
           : "The files are left with conflict markers to resolve when that happens.",
-      ),
+        ),
     action: () => label,
     plan: ({ target }) => ({
       argv: ["git", "stash", action, operandName(target)],
@@ -929,31 +1600,59 @@ const OPERATIONS: Operation[] = [
   renameBranch,
   resetCurrent,
   stashChanges,
-  stashOperation("stashApply", "apply", "Apply", (name) => `This restores the changes in ${name} and keeps the entry.`),
-  stashOperation("stashPop", "pop", "Restore", (name) => `This restores the changes in ${name} and removes the entry.`),
-  stashOperation("stashDrop", "drop", "Drop", (name) => `This deletes ${name} without restoring anything.`, true),
+  stashOperation(
+    "stashApply",
+    "apply",
+    "Apply",
+    (name) => `This restores the changes in ${name} and keeps the entry.`,
+  ),
+  stashOperation(
+    "stashPop",
+    "pop",
+    "Restore",
+    (name) => `This restores the changes in ${name} and removes the entry.`,
+  ),
+  stashOperation(
+    "stashDrop",
+    "drop",
+    "Drop",
+    (name) => `This deletes ${name} without restoring anything.`,
+    true,
+  ),
   deleteBranch,
   deleteRemoteRef,
   deleteTag,
 ]
 
 function fieldDefault(field: Field) {
-  return field.kind === "choice"
-    ? field.choices[0].value
-    : field.kind === "toggle"
-      ? String(field.initial ?? false)
-      : field.initial ?? ""
+  return (
+    field.kind === "choice" ? field.choices[0].value
+    : field.kind === "toggle" ? String(field.initial ?? false)
+    : (field.initial ?? "")
+  )
 }
 
 // The values are exactly what the shown fields hold, so what the user typed into a field that has since gone
 // away is remembered for if it comes back but never reaches the plan.
 function fieldValues(fields: Field[], entered: Values): Values {
-  return Object.fromEntries(fields.map((field) => [field.key, entered[field.key] ?? fieldDefault(field)]))
+  return Object.fromEntries(
+    fields.map((field) => [
+      field.key,
+      entered[field.key] ?? fieldDefault(field),
+    ]),
+  )
 }
 
 // A field can appear once another field has a value, so the list and the values it holds settle in two passes.
-export function resolveFields(operation: Operation, request: OperationRequest, entered: Values) {
-  const settling = fieldValues(operation.fields?.(request, entered) ?? [], entered)
+export function resolveFields(
+  operation: Operation,
+  request: OperationRequest,
+  entered: Values,
+) {
+  const settling = fieldValues(
+    operation.fields?.(request, entered) ?? [],
+    entered,
+  )
   const fields = operation.fields?.(request, settling) ?? []
   return { fields, values: fieldValues(fields, entered) }
 }
@@ -962,12 +1661,25 @@ export function initialValues(operation: Operation, request: OperationRequest) {
   return resolveFields(operation, request, {}).values
 }
 
-export function applicableOperations(repository: RepositoryState, source: Selection | null, target: Operand) {
-  return OPERATIONS
-    .map((operation) => ({ operation, request: { id: operation.id, repository, source, target } }))
+export function applicableOperations(
+  repository: RepositoryState,
+  source: Selection | null,
+  target: Operand,
+) {
+  return OPERATIONS.map((operation) => ({
+    operation,
+    request: { id: operation.id, repository, source, target },
+  }))
     .filter(({ operation, request }) => operation.applicable(request))
-    .sort((left, right) => OPERATION_GROUPS.indexOf(left.operation.group) - OPERATION_GROUPS.indexOf(right.operation.group))
-    .map((entry) => ({ ...entry, unavailable: entry.operation.unavailable?.(entry.request) ?? null }))
+    .sort(
+      (left, right) =>
+        OPERATION_GROUPS.indexOf(left.operation.group) -
+        OPERATION_GROUPS.indexOf(right.operation.group),
+    )
+    .map((entry) => ({
+      ...entry,
+      unavailable: entry.operation.unavailable?.(entry.request) ?? null,
+    }))
 }
 
 const predictionCache = new Map<string, ConflictPrediction>()
@@ -981,17 +1693,32 @@ function predictionKey(request: PredictionRequest) {
   if (request.kind === "rebase") {
     return `rebase ${request.onto} ${request.upstream} ${request.branch}`
   }
-  return request.kind === "revert" ? `revert ${request.base} ${request.tip}` : `merge ${request.source} ${request.into}`
+  return request.kind === "revert" ?
+      `revert ${request.base} ${request.tip}`
+    : `merge ${request.source} ${request.into}`
 }
 
 function predictionInvocation(repoPath: string, request: PredictionRequest) {
   if (request.kind === "rebase") {
-    return invoke<ConflictPrediction>("predict_rebase_conflicts", { repoPath, branch: request.branch, onto: request.onto, upstream: request.upstream })
+    return invoke<ConflictPrediction>("predict_rebase_conflicts", {
+      repoPath,
+      branch: request.branch,
+      onto: request.onto,
+      upstream: request.upstream,
+    })
   }
   if (request.kind === "revert") {
-    return invoke<ConflictPrediction>("predict_revert_conflicts", { repoPath, base: request.base, tip: request.tip })
+    return invoke<ConflictPrediction>("predict_revert_conflicts", {
+      repoPath,
+      base: request.base,
+      tip: request.tip,
+    })
   }
-  return invoke<ConflictPrediction>("predict_merge_conflicts", { repoPath, source: request.source, into: request.into })
+  return invoke<ConflictPrediction>("predict_merge_conflicts", {
+    repoPath,
+    source: request.source,
+    into: request.into,
+  })
 }
 
 function predict(repoPath: string, request: PredictionRequest) {
@@ -1005,7 +1732,6 @@ function predict(repoPath: string, request: PredictionRequest) {
     return prediction
   })
 }
-
 
 export function operationById(id: string) {
   return OPERATIONS.find((operation) => operation.id === id)!

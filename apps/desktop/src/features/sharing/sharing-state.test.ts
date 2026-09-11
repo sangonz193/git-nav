@@ -17,7 +17,7 @@ describe("sharing settings", () => {
 
   test("falls back from an invalid stored port so it can be repaired", () => {
     expect(
-      sharingSettings({ "serve.host": "localhost", "serve.port": 80 })
+      sharingSettings({ "serve.host": "localhost", "serve.port": 80 }),
     ).toEqual(defaultSharingSettings)
   })
 
@@ -28,7 +28,7 @@ describe("sharing settings", () => {
         "serve.port": 4310,
         "serve.publicUrl": "https://git-nav.example/path",
         "serve.startSharing": true,
-      })
+      }),
     ).toEqual({
       host: "0.0.0.0",
       port: 4310,
@@ -52,8 +52,8 @@ describe("stored port repair", () => {
     expect(
       repairedSharingPort(
         { "serve.port": 80 },
-        { entryUrls: [], host: "0.0.0.0", port: 4310, sharing: true }
-      )
+        { entryUrls: [], host: "0.0.0.0", port: 4310, sharing: true },
+      ),
     ).toBe(4310)
     expect(repairedSharingPort({ "serve.port": 4310 }, null)).toBeNull()
   })
@@ -62,14 +62,14 @@ describe("stored port repair", () => {
     expect(
       repairedSharingPort(
         { "serve.port": 80 },
-        { entryUrls: [], host: "0.0.0.0", port: 80, sharing: true }
-      )
+        { entryUrls: [], host: "0.0.0.0", port: 80, sharing: true },
+      ),
     ).toBe(4300)
     expect(
       repairedSharingPort(
         { "serve.port": 80 },
-        { entryUrls: [], host: null, port: 4310, sharing: false }
-      )
+        { entryUrls: [], host: null, port: 4310, sharing: false },
+      ),
     ).toBe(4300)
   })
 })
@@ -113,29 +113,29 @@ describe("displayed sharing settings", () => {
         host: null,
         port: null,
         sharing: false,
-      })
+      }),
     ).toEqual(stored)
     expect(displayedSharingSettings(stored, null)).toEqual(stored)
   })
 
   test("shows the running host and port while sharing", () => {
     expect(
-      displayedSharingSettings(stored, sharingOn("0.0.0.0", 4310))
+      displayedSharingSettings(stored, sharingOn("0.0.0.0", 4310)),
     ).toEqual({ ...stored, host: "0.0.0.0", port: 4310 })
   })
 
   test("reports an address other than the loopback ones as reachable", () => {
     expect(
-      displayedSharingSettings(stored, sharingOn("192.168.1.5", 4300)).host
+      displayedSharingSettings(stored, sharingOn("192.168.1.5", 4300)).host,
     ).toBe("0.0.0.0")
     expect(displayedSharingSettings(stored, sharingOn("::1", 4300)).host).toBe(
-      "127.0.0.1"
+      "127.0.0.1",
     )
   })
 
   test("falls back to the stored settings without a running address", () => {
     expect(displayedSharingSettings(stored, sharingOn(null, null))).toEqual(
-      stored
+      stored,
     )
   })
 })
@@ -143,10 +143,10 @@ describe("displayed sharing settings", () => {
 describe("sharing public URL", () => {
   test("accepts http and https addresses and an empty value", () => {
     expect(sharingPublicUrl("https://git-nav.example")).toBe(
-      "https://git-nav.example"
+      "https://git-nav.example",
     )
     expect(sharingPublicUrl("http://git-nav.example:8080/path")).toBe(
-      "http://git-nav.example:8080/path"
+      "http://git-nav.example:8080/path",
     )
     expect(sharingPublicUrl("")).toBe("")
   })

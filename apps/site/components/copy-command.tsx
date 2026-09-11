@@ -21,7 +21,9 @@ export function CopyCommand({ command }: { command: string }) {
         }}
         type="button"
       >
-        {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+        {copied ?
+          <Check className="size-4" />
+        : <Copy className="size-4" />}
       </button>
     </div>
   )

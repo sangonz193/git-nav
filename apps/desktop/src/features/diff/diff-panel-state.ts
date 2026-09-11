@@ -1,4 +1,8 @@
-import type { DiffPanelParams, DiffPanelUserPreferences, RepositoryPanelParams } from "@/lib/panel-params"
+import type {
+  DiffPanelParams,
+  DiffPanelUserPreferences,
+  RepositoryPanelParams,
+} from "@/lib/panel-params"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 import type { SelectedRefs } from "./diff-title"
 
@@ -34,14 +38,24 @@ export function fileIdentity(file: ChangedFile, headRef: string) {
   return JSON.stringify([file.status, file.oldPath, file.oldOid, file.newOid])
 }
 
-export function isViewedFile(file: ChangedFile, headRef: string, viewed: ReadonlyMap<string, string>) {
+export function isViewedFile(
+  file: ChangedFile,
+  headRef: string,
+  viewed: ReadonlyMap<string, string>,
+) {
   return viewed.get(fileName(file)) === fileIdentity(file, headRef)
 }
 
 // A file that has been read is folded away, so a mark arriving after the comparison folds its file
 // without a second pass over the list. A fold set by hand says what it is rather than what it differs
 // from, since the mark it would be read against may not have arrived yet.
-export function isFoldedFile(file: ChangedFile, headRef: string, viewed: ReadonlyMap<string, string>, folds: ReadonlyMap<string, boolean>, key: string) {
+export function isFoldedFile(
+  file: ChangedFile,
+  headRef: string,
+  viewed: ReadonlyMap<string, string>,
+  folds: ReadonlyMap<string, boolean>,
+  key: string,
+) {
   return folds.get(key) ?? isViewedFile(file, headRef, viewed)
 }
 
@@ -54,15 +68,27 @@ export function changedFilesLabel(shown: number, changed: number) {
   return changed === 1 ? "1 file" : `${changed.toLocaleString()} files`
 }
 
-export function initialDiffLayout(width: number, preferences: DiffPanelUserPreferences) {
+export function initialDiffLayout(
+  width: number,
+  preferences: DiffPanelUserPreferences,
+) {
   return {
-    fileTreeOpen: width >= NARROW_DIFF_PANEL_WIDTH && (preferences.fileTreeOpen ?? true),
-    mode: preferences.mode ?? (width < WIDE_DIFF_PANEL_WIDTH ? "unified" as const : "split" as const),
+    fileTreeOpen:
+      width >= NARROW_DIFF_PANEL_WIDTH && (preferences.fileTreeOpen ?? true),
+    mode:
+      preferences.mode ??
+      (width < WIDE_DIFF_PANEL_WIDTH ?
+        ("unified" as const)
+      : ("split" as const)),
     wrap: preferences.wrap ?? width < NARROW_DIFF_PANEL_WIDTH,
   }
 }
 
-export function toggledDiffFileTree(isOpen: boolean, isNarrow: boolean, preferences: DiffPanelUserPreferences) {
+export function toggledDiffFileTree(
+  isOpen: boolean,
+  isNarrow: boolean,
+  preferences: DiffPanelUserPreferences,
+) {
   const fileTreeOpen = !isOpen
   return {
     fileTreeOpen,
@@ -85,6 +111,7 @@ export function persistedDiffPanelParams(
     headLabel: refs.headLabel,
     mergeBase: refs.mergeBase,
     selectedFilePath,
-    userPreferences: Object.keys(userPreferences).length > 0 ? userPreferences : undefined,
+    userPreferences:
+      Object.keys(userPreferences).length > 0 ? userPreferences : undefined,
   }
 }

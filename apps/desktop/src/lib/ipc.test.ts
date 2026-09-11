@@ -16,14 +16,14 @@ describe("invoke", () => {
       return Promise.resolve(
         new Response("null", {
           headers: { "Content-Type": "application/json" },
-        })
+        }),
       )
     }) as typeof fetch
 
     const saving = invoke(
       "save_repository_layout",
       { path: "/repo" },
-      { keepalive: true }
+      { keepalive: true },
     )
 
     expect(requests).toHaveLength(1)

@@ -2,20 +2,41 @@ import { describe, expect, test } from "bun:test"
 
 import { closedTabHistory, reopenedPanel } from "./closed-tabs"
 
-type FakeGroup = { id: string, panels: FakePanel[] }
-type FakePanel = { id: string, group: FakeGroup, toJSON(): { id: string, contentComponent?: string, tabComponent?: string, title?: string, params?: Record<string, unknown> } }
+type FakeGroup = { id: string; panels: FakePanel[] }
+type FakePanel = {
+  id: string
+  group: FakeGroup
+  toJSON(): {
+    id: string
+    contentComponent?: string
+    tabComponent?: string
+    title?: string
+    params?: Record<string, unknown>
+  }
+}
 
 function group(id: string, panelIds: string[]) {
   const value: FakeGroup = { id, panels: [] }
   value.panels = panelIds.map((panelId) => ({
     id: panelId,
     group: value,
-    toJSON: () => ({ id: panelId, contentComponent: "diff", tabComponent: "diff", title: panelId, params: { path: "/repo" } }),
+    toJSON: () => ({
+      id: panelId,
+      contentComponent: "diff",
+      tabComponent: "diff",
+      title: panelId,
+      params: { path: "/repo" },
+    }),
   }))
   return value
 }
 
-function close(history: ReturnType<typeof closedTabHistory>, panels: FakePanel[], panel: FakePanel, kind = "remove") {
+function close(
+  history: ReturnType<typeof closedTabHistory>,
+  panels: FakePanel[],
+  panel: FakePanel,
+  kind = "remove",
+) {
   history.beginMutation(kind, panels)
   history.closePanel(panel)
   history.endMutation()

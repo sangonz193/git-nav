@@ -1,4 +1,14 @@
-import { GRAPH_GUTTER, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, LANE_WIDTH, laneColor, parentEdgeColor, ROW_HEIGHT, startsLane, type Commit } from "./commit-graph"
+import {
+  GRAPH_GUTTER,
+  GRAPH_HEADER_HEIGHT,
+  GRAPH_WIDTH,
+  LANE_WIDTH,
+  laneColor,
+  parentEdgeColor,
+  ROW_HEIGHT,
+  startsLane,
+  type Commit,
+} from "./commit-graph"
 import type { GraphRow } from "./commit-graph-view"
 
 // Unpushed work keeps the colour of the branch it belongs to and gives up some of its weight instead.
@@ -9,7 +19,13 @@ const COLLAPSED_DASH = [2, 3]
 // layer at full strength and that layer is faded once.
 let unpushedLayer: HTMLCanvasElement | null = null
 
-type SquashMergeEdge = { branchLane: number; branchRow: number; isLocal: boolean; targetLane: number; targetRow: number }
+type SquashMergeEdge = {
+  branchLane: number
+  branchRow: number
+  isLocal: boolean
+  targetLane: number
+  targetRow: number
+}
 
 type CommitGraphDrawing = {
   canvas: HTMLCanvasElement
@@ -25,9 +41,18 @@ type CommitGraphDrawing = {
   rowHeight?: number
 }
 
-function unpushedContext(pixelWidth: number, pixelHeight: number, ratio: number, width: number, height: number) {
+function unpushedContext(
+  pixelWidth: number,
+  pixelHeight: number,
+  ratio: number,
+  width: number,
+  height: number,
+) {
   unpushedLayer ??= document.createElement("canvas")
-  if (unpushedLayer.width !== pixelWidth || unpushedLayer.height !== pixelHeight) {
+  if (
+    unpushedLayer.width !== pixelWidth ||
+    unpushedLayer.height !== pixelHeight
+  ) {
     unpushedLayer.width = pixelWidth
     unpushedLayer.height = pixelHeight
   }
@@ -42,7 +67,19 @@ function unpushedContext(pixelWidth: number, pixelHeight: number, ratio: number,
   return context
 }
 
-export function drawCommitGraph({ canvas, commits, items, scrollTop, height, rows, squashMergeEdges, unpushed, unpushedLanes, width = GRAPH_WIDTH, rowHeight = ROW_HEIGHT }: CommitGraphDrawing) {
+export function drawCommitGraph({
+  canvas,
+  commits,
+  items,
+  scrollTop,
+  height,
+  rows,
+  squashMergeEdges,
+  unpushed,
+  unpushedLanes,
+  width = GRAPH_WIDTH,
+  rowHeight = ROW_HEIGHT,
+}: CommitGraphDrawing) {
   const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
   const pixelWidth = Math.ceil(width * ratio)
@@ -79,9 +116,17 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
     layer.lineWidth = 1.5
     layer.setLineDash([3, 4])
   }
-  for (const { branchLane, branchRow, isLocal, targetLane, targetRow } of squashMergeEdges) {
-    const branchY = GRAPH_HEADER_HEIGHT + branchRow * rowHeight - scrollTop + rowHeight / 2
-    const targetY = GRAPH_HEADER_HEIGHT + targetRow * rowHeight - scrollTop + rowHeight / 2
+  for (const {
+    branchLane,
+    branchRow,
+    isLocal,
+    targetLane,
+    targetRow,
+  } of squashMergeEdges) {
+    const branchY =
+      GRAPH_HEADER_HEIGHT + branchRow * rowHeight - scrollTop + rowHeight / 2
+    const targetY =
+      GRAPH_HEADER_HEIGHT + targetRow * rowHeight - scrollTop + rowHeight / 2
     if (Math.max(branchY, targetY) < 0 || Math.min(branchY, targetY) > height) {
       continue
     }
@@ -140,7 +185,11 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
 
     const previousLanes = unpushedLanes?.[commitIndex - 1] ?? 0
     for (let lane = 0; lane < previousActiveLanes.length; lane += 1) {
-      if (!previousActiveLanes[lane] || startsLane(commits, commitIndex - 1, lane) || !commit.incomingLanes.includes(lane)) {
+      if (
+        !previousActiveLanes[lane] ||
+        startsLane(commits, commitIndex - 1, lane) ||
+        !commit.incomingLanes.includes(lane)
+      ) {
         continue
       }
       const target = layerFor(Boolean(previousLanes & (1 << lane)))
@@ -149,7 +198,14 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
       target.beginPath()
       target.moveTo(x, startY - rowHeight)
       if (x !== startX) {
-        target.bezierCurveTo(x, startY - rowHeight / 2, startX, startY - rowHeight / 2, startX, startY)
+        target.bezierCurveTo(
+          x,
+          startY - rowHeight / 2,
+          startX,
+          startY - rowHeight / 2,
+          startX,
+          startY,
+        )
       } else {
         target.lineTo(x, startY)
       }
@@ -159,7 +215,11 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
     const activeLanes = unpushedLanes?.[commitIndex] ?? 0
     const nextCommit = commits[commitIndex + 1]
     for (let lane = 0; lane < commit.activeLanes.length; lane += 1) {
-      if (!commit.activeLanes[lane] || startsLane(commits, commitIndex, lane) || nextCommit?.incomingLanes.includes(lane)) {
+      if (
+        !commit.activeLanes[lane] ||
+        startsLane(commits, commitIndex, lane) ||
+        nextCommit?.incomingLanes.includes(lane)
+      ) {
         continue
       }
       const target = layerFor(Boolean(activeLanes & (1 << lane)))
@@ -173,7 +233,10 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
 
     const own = layerFor(isLocal)
     for (const [index, parentLane] of commit.parentLanes.entries()) {
-      const endLane = nextCommit?.incomingLanes.includes(parentLane) ? nextCommit.lane : parentLane
+      const endLane =
+        nextCommit?.incomingLanes.includes(parentLane) ?
+          nextCommit.lane
+        : parentLane
       const endX = GRAPH_GUTTER + endLane * LANE_WIDTH
       own.strokeStyle = parentEdgeColor(commit, index, endLane)
       own.beginPath()
@@ -181,7 +244,14 @@ export function drawCommitGraph({ canvas, commits, items, scrollTop, height, row
       if (startX === endX) {
         own.lineTo(endX, endY)
       } else {
-        own.bezierCurveTo(startX, startY + rowHeight / 2, endX, endY - rowHeight / 2, endX, endY)
+        own.bezierCurveTo(
+          startX,
+          startY + rowHeight / 2,
+          endX,
+          endY - rowHeight / 2,
+          endX,
+          endY,
+        )
       }
       own.stroke()
     }

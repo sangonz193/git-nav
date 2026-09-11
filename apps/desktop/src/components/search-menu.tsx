@@ -1,8 +1,18 @@
 import { Search, X } from "lucide-react"
-import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type RefObject, useEffect, useRef } from "react"
+import {
+  type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+  useEffect,
+  useRef,
+} from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/shadcn/components/tooltip"
 
 type Icon = ComponentType<{ className?: string }>
 
@@ -59,7 +69,10 @@ export function SearchMenu({
       if (items.length === 0) {
         return
       }
-      onHighlight((activeIndex + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length)
+      onHighlight(
+        (activeIndex + (event.key === "ArrowDown" ? 1 : items.length - 1)) %
+          items.length,
+      )
       return
     }
     if (event.key === "Enter" && items[activeIndex]) {
@@ -86,8 +99,16 @@ export function SearchMenu({
           ref={field}
           value={query}
         />
-        {items.length > 0 && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{`${activeIndex + 1}/${items.length}`}</span>}
-        <Button aria-label="Close search" onClick={onClose} size="icon-xs" type="button" variant="ghost">
+        {items.length > 0 && (
+          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{`${activeIndex + 1}/${items.length}`}</span>
+        )}
+        <Button
+          aria-label="Close search"
+          onClick={onClose}
+          size="icon-xs"
+          type="button"
+          variant="ghost"
+        >
           <X />
         </Button>
       </div>
@@ -102,13 +123,26 @@ export function SearchMenu({
               <item.icon className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm">{item.label}</span>
-                <span className="block truncate text-xs text-muted-foreground">{item.detail}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {item.detail}
+                </span>
               </span>
             </button>
             {item.action && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button aria-label={item.action.hint} className={index === activeIndex ? "shrink-0" : "shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"} onClick={item.action.onSelect} size="xs" type="button" variant="ghost">
+                  <Button
+                    aria-label={item.action.hint}
+                    className={
+                      index === activeIndex ? "shrink-0" : (
+                        "shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                      )
+                    }
+                    onClick={item.action.onSelect}
+                    size="xs"
+                    type="button"
+                    variant="ghost"
+                  >
                     <item.action.icon />
                     {item.action.label}
                   </Button>
@@ -118,7 +152,11 @@ export function SearchMenu({
             )}
           </li>
         ))}
-        {query.trim() !== "" && items.length === 0 && <li className="px-2 py-1 text-sm text-muted-foreground">{emptyMessage}</li>}
+        {query.trim() !== "" && items.length === 0 && (
+          <li className="px-2 py-1 text-sm text-muted-foreground">
+            {emptyMessage}
+          </li>
+        )}
       </ul>
     </>
   )

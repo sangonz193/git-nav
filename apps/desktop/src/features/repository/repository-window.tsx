@@ -8,7 +8,15 @@ import {
 } from "dockview-react"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { FileDiff, GitGraph, Plus } from "lucide-react"
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ComponentType } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
 import { toast } from "@workspace/shadcn/components/sonner"
@@ -27,7 +35,16 @@ import { closedTabHistory, reopenedPanel } from "../../lib/closed-tabs"
 import { panelId } from "../../lib/panel-id"
 import { useTabShortcuts } from "../../lib/tab-shortcuts"
 import { invoke, isDesktop } from "../../lib/ipc"
-import { closeRepositoryWindowAfterSaving, listenForRepositoryLayoutPageHide, repositoryLayoutRestoreController, repositoryLayoutSaveScheduler, REPOSITORY_LAYOUT_VERSION, restoreRepositoryLayout, unresolvablePanelIds, usableRepositoryLayout } from "../../lib/repository-layout"
+import {
+  closeRepositoryWindowAfterSaving,
+  listenForRepositoryLayoutPageHide,
+  repositoryLayoutRestoreController,
+  repositoryLayoutSaveScheduler,
+  REPOSITORY_LAYOUT_VERSION,
+  restoreRepositoryLayout,
+  unresolvablePanelIds,
+  usableRepositoryLayout,
+} from "../../lib/repository-layout"
 import { settingsClientId } from "../../lib/settings"
 import type { RepositoryPanelParams } from "../../lib/panel-params"
 
@@ -54,18 +71,30 @@ const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
 // way their parameters do.
 const ReopenTabContext = createContext<(() => void) | undefined>(undefined)
 
-function addGraphPanel(containerApi: IWatermarkPanelProps["containerApi"] | IDockviewHeaderActionsProps["containerApi"], params: RepositoryPanelParams, referencePanel?: IDockviewHeaderActionsProps["activePanel"]) {
+function addGraphPanel(
+  containerApi:
+    | IWatermarkPanelProps["containerApi"]
+    | IDockviewHeaderActionsProps["containerApi"],
+  params: RepositoryPanelParams,
+  referencePanel?: IDockviewHeaderActionsProps["activePanel"],
+) {
   containerApi.addPanel({
     component: "graph",
     id: panelId("graph"),
     params,
-    ...(referencePanel ? { position: { direction: "within" as const, referencePanel } } : {}),
+    ...(referencePanel ?
+      { position: { direction: "within" as const, referencePanel } }
+    : {}),
     tabComponent: "graph",
     title: "Graph",
   })
 }
 
-function addDiffPanel(containerApi: IDockviewHeaderActionsProps["containerApi"], params: RepositoryPanelParams, referencePanel: IDockviewHeaderActionsProps["activePanel"]) {
+function addDiffPanel(
+  containerApi: IDockviewHeaderActionsProps["containerApi"],
+  params: RepositoryPanelParams,
+  referencePanel: IDockviewHeaderActionsProps["activePanel"],
+) {
   containerApi.addPanel({
     component: "diff",
     id: panelId("diff"),
@@ -76,7 +105,10 @@ function addDiffPanel(containerApi: IDockviewHeaderActionsProps["containerApi"],
   })
 }
 
-function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
+function NewTabAction({
+  activePanel,
+  containerApi,
+}: IDockviewHeaderActionsProps) {
   const params = useContext(RepositoryContext)
   if (!params) {
     return null
@@ -91,11 +123,15 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
         <Plus className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent>
-        <DropdownMenuItem onSelect={() => addGraphPanel(containerApi, params, activePanel)}>
+        <DropdownMenuItem
+          onSelect={() => addGraphPanel(containerApi, params, activePanel)}
+        >
           <GitGraph />
           Graph
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => addDiffPanel(containerApi, params, activePanel)}>
+        <DropdownMenuItem
+          onSelect={() => addDiffPanel(containerApi, params, activePanel)}
+        >
           <FileDiff />
           Diff
         </DropdownMenuItem>
@@ -105,14 +141,23 @@ function NewTabAction({ activePanel, containerApi }: IDockviewHeaderActionsProps
 }
 
 function RepositoryHeaderActions(props: IDockviewHeaderActionsProps) {
-  const { appMenu, sharingIndicator } = repositoryHeaderControls({ desktop: isDesktop, isGroupActive: props.isGroupActive, location: props.location })
+  const { appMenu, sharingIndicator } = repositoryHeaderControls({
+    desktop: isDesktop,
+    isGroupActive: props.isGroupActive,
+    location: props.location,
+  })
   const reopenTab = useContext(ReopenTabContext)
   const activePanel = props.activePanel
   return (
     <div className="flex items-center gap-0.5">
       {sharingIndicator && <SharingIndicator />}
       <NewTabAction {...props} />
-      {appMenu && <AppMenuButton onCloseTab={activePanel && (() => activePanel.api.close())} onReopenTab={reopenTab} />}
+      {appMenu && (
+        <AppMenuButton
+          onCloseTab={activePanel && (() => activePanel.api.close())}
+          onReopenTab={reopenTab}
+        />
+      )}
     </div>
   )
 }
@@ -157,14 +202,18 @@ export function RepositoryWindow({ path }: { path: string }) {
   const disposeDockviewListeners = useRef<() => void>(() => undefined)
   const closedTabs = useRef<ReturnType<typeof closedTabHistory> | null>(null)
   const [canReopenTab, setCanReopenTab] = useState(false)
-  const name = repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath
+  const name =
+    repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath
   const params = { name, path: repositoryPath }
 
-  useEffect(() => () => {
-    disposeDockviewListeners.current()
-    activeDockview.current = null
-    closedTabs.current = null
-  }, [])
+  useEffect(
+    () => () => {
+      disposeDockviewListeners.current()
+      activeDockview.current = null
+      closedTabs.current = null
+    },
+    [],
+  )
 
   const reopenTab = useCallback(() => {
     const api = activeDockview.current
@@ -172,7 +221,8 @@ export function RepositoryWindow({ path }: { path: string }) {
     if (!api || !history) return
     const tab = history.reopenPanel()
     setCanReopenTab(history.size > 0)
-    const panel = tab && reopenedPanel(tab, (groupId) => Boolean(api.getGroup(groupId)))
+    const panel =
+      tab && reopenedPanel(tab, (groupId) => Boolean(api.getGroup(groupId)))
     if (panel) api.addPanel(panel)
   }, [])
 
@@ -202,13 +252,23 @@ export function RepositoryWindow({ path }: { path: string }) {
               let repositoryParams = params
               const isCurrent = () => activeDockview.current === event.api
               const layoutSave = repositoryLayoutSaveScheduler(
-                (keepalive) => invoke<void>("save_repository_layout", {
-                  clientId,
-                  layout: { version: REPOSITORY_LAYOUT_VERSION, layout: event.api.toJSON() },
-                  path: repositoryParams.path,
-                }, { keepalive }),
+                (keepalive) =>
+                  invoke<void>(
+                    "save_repository_layout",
+                    {
+                      clientId,
+                      layout: {
+                        version: REPOSITORY_LAYOUT_VERSION,
+                        layout: event.api.toJSON(),
+                      },
+                      path: repositoryParams.path,
+                    },
+                    { keepalive },
+                  ),
                 (error) => {
-                  toast.error("Could not save repository layout", { description: String(error) })
+                  toast.error("Could not save repository layout", {
+                    description: String(error),
+                  })
                 },
                 isCurrent,
               )
@@ -225,28 +285,46 @@ export function RepositoryWindow({ path }: { path: string }) {
               const layoutSubscription = event.api.onDidLayoutChange(() => {
                 save()
               })
-              const panelAddedSubscription = event.api.onDidAddPanel(() => layoutRestore.userAction())
+              const panelAddedSubscription = event.api.onDidAddPanel(() =>
+                layoutRestore.userAction(),
+              )
               const history = closedTabHistory()
               closedTabs.current = history
               const syncReopenTab = () => setCanReopenTab(history.size > 0)
-              const willMutateSubscription = event.api.onWillMutateLayout((mutation) => history.beginMutation(mutation.kind, event.api.panels))
+              const willMutateSubscription = event.api.onWillMutateLayout(
+                (mutation) =>
+                  history.beginMutation(mutation.kind, event.api.panels),
+              )
               const didMutateSubscription = event.api.onDidMutateLayout(() => {
                 history.endMutation()
                 syncReopenTab()
               })
-              const panelRemovedSubscription = event.api.onDidRemovePanel((panel) => history.closePanel(panel))
+              const panelRemovedSubscription = event.api.onDidRemovePanel(
+                (panel) => history.closePanel(panel),
+              )
               let closeUnlisten: (() => void) | undefined
-              const pageHideUnlisten = listenForRepositoryLayoutPageHide(window, layoutSave.flushOnPageHide)
+              const pageHideUnlisten = listenForRepositoryLayoutPageHide(
+                window,
+                layoutSave.flushOnPageHide,
+              )
               let listenersDisposed = false
               if (isDesktop) {
                 const repositoryWindow = getCurrentWindow()
-                void repositoryWindow.onCloseRequested((event) => closeRepositoryWindowAfterSaving(event, layoutSave.flush, () => repositoryWindow.destroy())).then((unlisten) => {
-                  if (listenersDisposed) {
-                    unlisten()
-                  } else {
-                    closeUnlisten = unlisten
-                  }
-                })
+                void repositoryWindow
+                  .onCloseRequested((event) =>
+                    closeRepositoryWindowAfterSaving(
+                      event,
+                      layoutSave.flush,
+                      () => repositoryWindow.destroy(),
+                    ),
+                  )
+                  .then((unlisten) => {
+                    if (listenersDisposed) {
+                      unlisten()
+                    } else {
+                      closeUnlisten = unlisten
+                    }
+                  })
               }
               disposeDockviewListeners.current = () => {
                 listenersDisposed = true
@@ -260,24 +338,57 @@ export function RepositoryWindow({ path }: { path: string }) {
                 layoutSave.dispose()
               }
               const addFallbackPanel = () => {
-                event.api.addPanel({ component: "graph", id: "repository-graph", params: repositoryParams, tabComponent: "graph", title: "Graph" })
+                event.api.addPanel({
+                  component: "graph",
+                  id: "repository-graph",
+                  params: repositoryParams,
+                  tabComponent: "graph",
+                  title: "Graph",
+                })
               }
               void (async () => {
                 try {
-                  const stored = await invoke<{ path: string, layout: unknown }>("repository_layout", { clientId, path: repositoryParams.path })
+                  const stored = await invoke<{
+                    path: string
+                    layout: unknown
+                  }>("repository_layout", {
+                    clientId,
+                    path: repositoryParams.path,
+                  })
                   if (!isCurrent() || !layoutRestore.pending) {
                     return
                   }
-                  repositoryParams = { name: stored.path.split("/").filter(Boolean).at(-1) ?? stored.path, path: stored.path }
+                  repositoryParams = {
+                    name:
+                      stored.path.split("/").filter(Boolean).at(-1) ??
+                      stored.path,
+                    path: stored.path,
+                  }
                   setRepositoryPath(stored.path)
-                  const layout = usableRepositoryLayout(stored.layout, stored.path)
+                  const layout = usableRepositoryLayout(
+                    stored.layout,
+                    stored.path,
+                  )
                   if (layout) {
-                    const invalidPanelIds = await unresolvablePanelIds(layout, (panelPath, revision) => invoke("resolve_revision", { repoPath: panelPath, revision }))
+                    const invalidPanelIds = await unresolvablePanelIds(
+                      layout,
+                      (panelPath, revision) =>
+                        invoke("resolve_revision", {
+                          repoPath: panelPath,
+                          revision,
+                        }),
+                    )
                     if (!isCurrent()) {
                       return
                     }
                     layoutRestore.restored(() => {
-                      if (!restoreRepositoryLayout(event.api, layout, invalidPanelIds)) {
+                      if (
+                        !restoreRepositoryLayout(
+                          event.api,
+                          layout,
+                          invalidPanelIds,
+                        )
+                      ) {
                         addFallbackPanel()
                       }
                       // A tab the restore drops points at a revision that is gone, and nobody closed it.
@@ -291,7 +402,9 @@ export function RepositoryWindow({ path }: { path: string }) {
                   if (!isCurrent() || !layoutRestore.failed(addFallbackPanel)) {
                     return
                   }
-                  toast.error("Could not load repository layout", { description: String(error) })
+                  toast.error("Could not load repository layout", {
+                    description: String(error),
+                  })
                 }
               })()
             }}

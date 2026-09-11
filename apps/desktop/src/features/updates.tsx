@@ -48,7 +48,7 @@ export function useAvailableUpdate() {
       }
     },
     () => availableVersion,
-    () => null
+    () => null,
   )
 }
 

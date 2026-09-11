@@ -25,16 +25,18 @@ export const defaultSharingSettings: SharingSettings = {
 }
 
 export function sharingPort(value: unknown) {
-  return typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= 1024 &&
-    value <= 65535
-    ? value
+  return (
+      typeof value === "number" &&
+        Number.isInteger(value) &&
+        value >= 1024 &&
+        value <= 65535
+    ) ?
+      value
     : null
 }
 
 export function sharingSettings(
-  settings: Record<string, unknown>
+  settings: Record<string, unknown>,
 ): SharingSettings {
   const host = settings["serve.host"]
   const storedPort = settings["serve.port"]
@@ -43,9 +45,9 @@ export function sharingSettings(
     host: host === "0.0.0.0" ? host : "127.0.0.1",
     port: port ?? defaultSharingSettings.port,
     publicUrl:
-      typeof settings["serve.publicUrl"] === "string"
-        ? settings["serve.publicUrl"]
-        : "",
+      typeof settings["serve.publicUrl"] === "string" ?
+        settings["serve.publicUrl"]
+      : "",
     startSharing: settings["serve.startSharing"] === true,
   }
 }
@@ -61,7 +63,7 @@ export function storedPortNeedsRepair(settings: Record<string, unknown>) {
 // The running port may be one only the command line can use, such as a privileged one.
 export function repairedSharingPort(
   settings: Record<string, unknown>,
-  state: SharingState | null
+  state: SharingState | null,
 ) {
   if (!storedPortNeedsRepair(settings)) return null
   const runningPort = state?.sharing === true ? sharingPort(state.port) : null
@@ -76,7 +78,7 @@ function reachableFrom(host: string | null): SharingSettings["host"] | null {
 
 export function displayedSharingSettings(
   settings: SharingSettings,
-  state: SharingState | null
+  state: SharingState | null,
 ): SharingSettings {
   if (state?.sharing !== true) return settings
   return {

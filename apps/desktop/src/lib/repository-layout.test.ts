@@ -2,11 +2,24 @@ import { describe, expect, test } from "bun:test"
 import type { GroupviewPanelState } from "dockview-react"
 import { readFileSync } from "node:fs"
 
-import { closeRepositoryWindowAfterSaving, listenForRepositoryLayoutPageHide, repositoryLayoutRestoreController, repositoryLayoutSaveScheduler, REPOSITORY_LAYOUT_VERSION, restoreRepositoryLayout, unresolvablePanelIds, usableRepositoryLayout } from "./repository-layout"
+import {
+  closeRepositoryWindowAfterSaving,
+  listenForRepositoryLayoutPageHide,
+  repositoryLayoutRestoreController,
+  repositoryLayoutSaveScheduler,
+  REPOSITORY_LAYOUT_VERSION,
+  restoreRepositoryLayout,
+  unresolvablePanelIds,
+  usableRepositoryLayout,
+} from "./repository-layout"
 
 const path = "/projects/git-nav"
 
-function serializedPanel(id: string, contentComponent: "graph" | "diff", params: Record<string, unknown>): GroupviewPanelState {
+function serializedPanel(
+  id: string,
+  contentComponent: "graph" | "diff",
+  params: Record<string, unknown>,
+): GroupviewPanelState {
   return { id, contentComponent, params }
 }
 
@@ -14,9 +27,18 @@ function storedLayout(params: Record<string, unknown> = {}) {
   return {
     version: REPOSITORY_LAYOUT_VERSION,
     layout: {
-      grid: { root: { type: "branch", data: [] }, height: 700, width: 900, orientation: "HORIZONTAL" },
+      grid: {
+        root: { type: "branch", data: [] },
+        height: 700,
+        width: 900,
+        orientation: "HORIZONTAL",
+      },
       panels: {
-        graph: serializedPanel("graph", "graph", { name: "git-nav", path, ...params }),
+        graph: serializedPanel("graph", "graph", {
+          name: "git-nav",
+          path,
+          ...params,
+        }),
       },
     },
   }
@@ -29,58 +51,98 @@ describe("usableRepositoryLayout", () => {
 
   test("rejects the addPanel component key that dockview does not serialize", () => {
     const value = storedLayout()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: { ...value.layout, panels: { graph: { id: "graph", component: "graph", params: { path } } } },
-    }, path)).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: {
+            ...value.layout,
+            panels: {
+              graph: { id: "graph", component: "graph", params: { path } },
+            },
+          },
+        },
+        path,
+      ),
+    ).toBeNull()
   })
 
   test("rejects layouts from another version or worktree", () => {
-    expect(usableRepositoryLayout({ ...storedLayout(), version: 2 }, path)).toBeNull()
-    expect(usableRepositoryLayout(storedLayout({ path: "/moved/git-nav" }), path)).toBeNull()
+    expect(
+      usableRepositoryLayout({ ...storedLayout(), version: 2 }, path),
+    ).toBeNull()
+    expect(
+      usableRepositoryLayout(storedLayout({ path: "/moved/git-nav" }), path),
+    ).toBeNull()
   })
 
   test("rejects a grid root that Dockview cannot restore", () => {
     const value = storedLayout()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: { ...value.layout, grid: { ...value.layout.grid, root: {} } },
-    }, path)).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: { ...value.layout, grid: { ...value.layout.grid, root: {} } },
+        },
+        path,
+      ),
+    ).toBeNull()
   })
 
   test("accepts a diff scoped to a sibling worktree", () => {
     const value = storedLayout()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: {
-        ...value.layout,
-        panels: {
-          ...value.layout.panels,
-          diff: serializedPanel("diff", "diff", { baseRef: "HEAD", headRef: ":worktree", name: "git-nav", path: "/projects/git-nav-feature" }),
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: {
+            ...value.layout,
+            panels: {
+              ...value.layout.panels,
+              diff: serializedPanel("diff", "diff", {
+                baseRef: "HEAD",
+                headRef: ":worktree",
+                name: "git-nav",
+                path: "/projects/git-nav-feature",
+              }),
+            },
+          },
         },
-      },
-    }, path)).not.toBeNull()
+        path,
+      ),
+    ).not.toBeNull()
   })
 
   test("identifies only panels with unresolvable persisted revisions", async () => {
     const value = storedLayout({ selectedCommitHashes: ["abc"] })
-    const layout = usableRepositoryLayout({
-      ...value,
-      layout: {
-        ...value.layout,
-        panels: {
-          ...value.layout.panels,
-          diff: serializedPanel("diff", "diff", { baseRef: "main", headRef: "feature", mergeBase: true, name: "git-nav", path: "/projects/git-nav-feature" }),
+    const layout = usableRepositoryLayout(
+      {
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            ...value.layout.panels,
+            diff: serializedPanel("diff", "diff", {
+              baseRef: "main",
+              headRef: "feature",
+              mergeBase: true,
+              name: "git-nav",
+              path: "/projects/git-nav-feature",
+            }),
+          },
         },
       },
-    }, path)
+      path,
+    )
     const revisions: [string, string][] = []
-    expect(await unresolvablePanelIds(layout!, async (panelPath, revision) => {
-      revisions.push([panelPath, revision])
-      if (revision === "feature") {
-        throw new Error("deleted")
-      }
-    })).toEqual(["diff"])
+    expect(
+      await unresolvablePanelIds(layout!, async (panelPath, revision) => {
+        revisions.push([panelPath, revision])
+        if (revision === "feature") {
+          throw new Error("deleted")
+        }
+      }),
+    ).toEqual(["diff"])
     expect(revisions).toEqual([
       ["/projects/git-nav-feature", "main"],
       ["/projects/git-nav-feature", "feature"],
@@ -88,80 +150,153 @@ describe("usableRepositoryLayout", () => {
   })
 
   test("keeps a graph panel when its persisted selection no longer resolves", async () => {
-    const layout = usableRepositoryLayout(storedLayout({ selectedCommitHashes: ["deleted-a", "deleted-b"] }), path)
+    const layout = usableRepositoryLayout(
+      storedLayout({ selectedCommitHashes: ["deleted-a", "deleted-b"] }),
+      path,
+    )
     let resolutions = 0
 
-    expect(await unresolvablePanelIds(layout!, async () => {
-      resolutions++
-      throw new Error("deleted")
-    })).toEqual([])
+    expect(
+      await unresolvablePanelIds(layout!, async () => {
+        resolutions++
+        throw new Error("deleted")
+      }),
+    ).toEqual([])
     expect(resolutions).toBe(0)
   })
 
   test("rejects an invalid persisted merge-base mode", () => {
     const value = storedLayout()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: {
-        ...value.layout,
-        panels: {
-          graph: serializedPanel("graph", "diff", { baseRef: "main", headRef: "feature", mergeBase: "yes", name: "git-nav", path }),
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: {
+            ...value.layout,
+            panels: {
+              graph: serializedPanel("graph", "diff", {
+                baseRef: "main",
+                headRef: "feature",
+                mergeBase: "yes",
+                name: "git-nav",
+                path,
+              }),
+            },
+          },
         },
-      },
-    }, path)).toBeNull()
+        path,
+      ),
+    ).toBeNull()
   })
 
   test("validates all persisted preference fields", () => {
-    expect(usableRepositoryLayout(storedLayout({ userPreferences: { columnWidths: { subject: 300 } } }), path)).not.toBeNull()
-    expect(usableRepositoryLayout(storedLayout({ userPreferences: { columnWidths: { subject: -1 } } }), path)).toBeNull()
-    expect(usableRepositoryLayout(storedLayout({ columnWidths: { subject: 300 } }), path)).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        storedLayout({ userPreferences: { columnWidths: { subject: 300 } } }),
+        path,
+      ),
+    ).not.toBeNull()
+    expect(
+      usableRepositoryLayout(
+        storedLayout({ userPreferences: { columnWidths: { subject: -1 } } }),
+        path,
+      ),
+    ).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        storedLayout({ columnWidths: { subject: 300 } }),
+        path,
+      ),
+    ).toBeNull()
 
     const value = storedLayout()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: {
-        ...value.layout,
-        panels: {
-          diff: serializedPanel("diff", "diff", {
-            baseLabel: "Base subject",
-            baseRef: "a".repeat(40),
-            headLabel: "Stash changes",
-            headRef: "b".repeat(40),
-            name: "git-nav",
-            path,
-            selectedFilePath: "src/index.ts",
-            userPreferences: { fileTreeOpen: true, hideViewed: true, ignoreWhitespace: true, mode: "unified", wrap: true },
-          }),
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: {
+            ...value.layout,
+            panels: {
+              diff: serializedPanel("diff", "diff", {
+                baseLabel: "Base subject",
+                baseRef: "a".repeat(40),
+                headLabel: "Stash changes",
+                headRef: "b".repeat(40),
+                name: "git-nav",
+                path,
+                selectedFilePath: "src/index.ts",
+                userPreferences: {
+                  fileTreeOpen: true,
+                  hideViewed: true,
+                  ignoreWhitespace: true,
+                  mode: "unified",
+                  wrap: true,
+                },
+              }),
+            },
+          },
         },
-      },
-    }, path)).not.toBeNull()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: {
-        ...value.layout,
-        panels: {
-          diff: serializedPanel("diff", "diff", { baseRef: "main", headRef: "feature", name: "git-nav", path, userPreferences: { wrap: "yes" } }),
+        path,
+      ),
+    ).not.toBeNull()
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: {
+            ...value.layout,
+            panels: {
+              diff: serializedPanel("diff", "diff", {
+                baseRef: "main",
+                headRef: "feature",
+                name: "git-nav",
+                path,
+                userPreferences: { wrap: "yes" },
+              }),
+            },
+          },
         },
-      },
-    }, path)).toBeNull()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: {
-        ...value.layout,
-        panels: {
-          diff: serializedPanel("diff", "diff", { headRef: "feature", name: "git-nav", path }),
+        path,
+      ),
+    ).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: {
+            ...value.layout,
+            panels: {
+              diff: serializedPanel("diff", "diff", {
+                headRef: "feature",
+                name: "git-nav",
+                path,
+              }),
+            },
+          },
         },
-      },
-    }, path)).toBeNull()
-    expect(usableRepositoryLayout({
-      ...value,
-      layout: {
-        ...value.layout,
-        panels: {
-          diff: serializedPanel("diff", "diff", { baseRef: "main", headRef: "feature", mode: "split", name: "git-nav", path }),
+        path,
+      ),
+    ).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        {
+          ...value,
+          layout: {
+            ...value.layout,
+            panels: {
+              diff: serializedPanel("diff", "diff", {
+                baseRef: "main",
+                headRef: "feature",
+                mode: "split",
+                name: "git-nav",
+                path,
+              }),
+            },
+          },
         },
-      },
-    }, path)).toBeNull()
+        path,
+      ),
+    ).toBeNull()
   })
 })
 
@@ -181,7 +316,12 @@ function event<T>() {
 describe("repositoryLayoutSaveScheduler", () => {
   test("flushes a pending save on dispose", async () => {
     let saves = 0
-    const scheduler = repositoryLayoutSaveScheduler(async () => { saves++ }, () => undefined)
+    const scheduler = repositoryLayoutSaveScheduler(
+      async () => {
+        saves++
+      },
+      () => undefined,
+    )
 
     scheduler.schedule()
     scheduler.dispose()
@@ -195,12 +335,13 @@ describe("repositoryLayoutSaveScheduler", () => {
     let finishSave = () => undefined
     let saved = false
     const scheduler = repositoryLayoutSaveScheduler(
-      () => new Promise<void>((resolve) => {
-        finishSave = () => {
-          saved = true
-          resolve()
-        }
-      }),
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = () => {
+            saved = true
+            resolve()
+          }
+        }),
       () => undefined,
     )
 
@@ -216,7 +357,12 @@ describe("repositoryLayoutSaveScheduler", () => {
 
   test("handles a failed save", async () => {
     const errors: unknown[] = []
-    const scheduler = repositoryLayoutSaveScheduler(async () => { throw new Error("disk full") }, (error) => errors.push(error))
+    const scheduler = repositoryLayoutSaveScheduler(
+      async () => {
+        throw new Error("disk full")
+      },
+      (error) => errors.push(error),
+    )
 
     scheduler.schedule()
     scheduler.dispose()
@@ -229,7 +375,13 @@ describe("repositoryLayoutSaveScheduler", () => {
   test("does not flush a disposed dockview after it stops being current", async () => {
     let current = true
     let saves = 0
-    const scheduler = repositoryLayoutSaveScheduler(async () => { saves++ }, () => undefined, () => current)
+    const scheduler = repositoryLayoutSaveScheduler(
+      async () => {
+        saves++
+      },
+      () => undefined,
+      () => current,
+    )
 
     scheduler.schedule()
     scheduler.dispose()
@@ -241,9 +393,17 @@ describe("repositoryLayoutSaveScheduler", () => {
 
   test("starts a keepalive save synchronously on pagehide", async () => {
     const keepalive: (boolean | undefined)[] = []
-    const scheduler = repositoryLayoutSaveScheduler(async (value) => { keepalive.push(value) }, () => undefined)
+    const scheduler = repositoryLayoutSaveScheduler(
+      async (value) => {
+        keepalive.push(value)
+      },
+      () => undefined,
+    )
     const target = new EventTarget()
-    const unlisten = listenForRepositoryLayoutPageHide(target, scheduler.flushOnPageHide)
+    const unlisten = listenForRepositoryLayoutPageHide(
+      target,
+      scheduler.flushOnPageHide,
+    )
 
     scheduler.schedule()
     target.dispatchEvent(new Event("pagehide"))
@@ -264,9 +424,11 @@ describe("repositoryLayoutSaveScheduler", () => {
     const scheduler = repositoryLayoutSaveScheduler(
       (value) => {
         keepalive.push(value)
-        return value
-          ? Promise.resolve()
-          : new Promise<void>((resolve) => { finishSave = resolve })
+        return value ?
+            Promise.resolve()
+          : new Promise<void>((resolve) => {
+              finishSave = resolve
+            })
       },
       () => undefined,
     )
@@ -286,7 +448,12 @@ describe("repositoryLayoutSaveScheduler", () => {
   test("saves parameter updates through Dockview's layout change event", async () => {
     const layoutChanges = event<void>()
     let saves = 0
-    const scheduler = repositoryLayoutSaveScheduler(async () => { saves++ }, () => undefined)
+    const scheduler = repositoryLayoutSaveScheduler(
+      async () => {
+        saves++
+      },
+      () => undefined,
+    )
     const restore = repositoryLayoutRestoreController(scheduler.schedule)
     const subscription = layoutChanges.event(restore.changed)
     const panel = { api: { updateParameters: () => layoutChanges.fire() } }
@@ -308,9 +475,18 @@ describe("repository window close", () => {
     let prevented = false
     let destroyed = false
     const closing = closeRepositoryWindowAfterSaving(
-      { preventDefault: () => { prevented = true } },
-      () => new Promise<void>((resolve) => { finishSave = resolve }),
-      async () => { destroyed = true },
+      {
+        preventDefault: () => {
+          prevented = true
+        },
+      },
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve
+        }),
+      async () => {
+        destroyed = true
+      },
     )
 
     await Promise.resolve()
@@ -328,7 +504,9 @@ describe("repository window close", () => {
     await closeRepositoryWindowAfterSaving(
       { preventDefault: () => undefined },
       () => new Promise<void>(() => undefined),
-      async () => { destroyed = true },
+      async () => {
+        destroyed = true
+      },
       0,
     )
 
@@ -336,7 +514,12 @@ describe("repository window close", () => {
   })
 
   test("grants destroy permission to every window that can register the close handler", () => {
-    const capability = JSON.parse(readFileSync(new URL("../../src-tauri/capabilities/default.json", import.meta.url), "utf8"))
+    const capability = JSON.parse(
+      readFileSync(
+        new URL("../../src-tauri/capabilities/default.json", import.meta.url),
+        "utf8",
+      ),
+    )
 
     expect(capability.windows).toContain("main")
     expect(capability.windows).toContain("repository-*")
@@ -353,7 +536,11 @@ describe("repositoryLayoutRestoreController", () => {
     expect(restore.userAction()).toBe(true)
     restore.changed()
 
-    expect(restore.restored(() => { state.layout = "stored" })).toBe(false)
+    expect(
+      restore.restored(() => {
+        state.layout = "stored"
+      }),
+    ).toBe(false)
     restore.changed()
     expect(state.layout).toBe("user")
     expect(saves).toBe(2)
@@ -364,7 +551,11 @@ describe("repositoryLayoutRestoreController", () => {
     let layout = ""
     const restore = repositoryLayoutRestoreController(() => saves++)
 
-    expect(restore.failed(() => { layout = "fallback" })).toBe(true)
+    expect(
+      restore.failed(() => {
+        layout = "fallback"
+      }),
+    ).toBe(true)
     restore.changed()
 
     expect(layout).toBe("fallback")
@@ -376,8 +567,16 @@ describe("repositoryLayoutRestoreController", () => {
     let fallback = false
     const restore = repositoryLayoutRestoreController(() => saves++)
 
-    expect(() => restore.restored(() => { throw new Error("invalid layout") })).toThrow("invalid layout")
-    expect(restore.failed(() => { fallback = true })).toBe(true)
+    expect(() =>
+      restore.restored(() => {
+        throw new Error("invalid layout")
+      }),
+    ).toThrow("invalid layout")
+    expect(
+      restore.failed(() => {
+        fallback = true
+      }),
+    ).toBe(true)
     restore.changed()
 
     expect(fallback).toBe(true)
@@ -389,7 +588,11 @@ function restorableContainer(ids: string[], activeId?: string) {
   let active = activeId
   const restoredPanels = ids.map((id) => ({
     id,
-    api: { setActive: () => { active = id } },
+    api: {
+      setActive: () => {
+        active = id
+      },
+    },
   }))
   const panels: typeof restoredPanels = []
   return {
@@ -417,8 +620,15 @@ describe("restoreRepositoryLayout", () => {
     const value = storedLayout()
     const container = restorableContainer(["graph", "diff", "other"], "diff")
 
-    expect(restoreRepositoryLayout(container, usableRepositoryLayout(value, path)!, ["diff"])).toBe(true)
-    expect(container.panels.map((panel) => panel.id)).toEqual(["graph", "other"])
+    expect(
+      restoreRepositoryLayout(container, usableRepositoryLayout(value, path)!, [
+        "diff",
+      ]),
+    ).toBe(true)
+    expect(container.panels.map((panel) => panel.id)).toEqual([
+      "graph",
+      "other",
+    ])
     expect(container.activePanel?.id).toBe("graph")
   })
 
@@ -426,7 +636,12 @@ describe("restoreRepositoryLayout", () => {
     const value = storedLayout()
     const container = restorableContainer(["graph", "diff"], "graph")
 
-    expect(restoreRepositoryLayout(container, usableRepositoryLayout(value, path)!, ["graph", "diff"])).toBe(false)
+    expect(
+      restoreRepositoryLayout(container, usableRepositoryLayout(value, path)!, [
+        "graph",
+        "diff",
+      ]),
+    ).toBe(false)
     expect(container.panels).toEqual([])
   })
 })

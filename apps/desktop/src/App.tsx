@@ -28,7 +28,9 @@ export function App() {
   return (
     <TooltipProvider delayDuration={400}>
       <AppKeyboardShortcuts />
-      {path ? <RepositoryWindow path={path} /> : <LauncherWindow />}
+      {path ?
+        <RepositoryWindow path={path} />
+      : <LauncherWindow />}
       <Toaster theme={theme} />
       <UpdateCheck />
     </TooltipProvider>

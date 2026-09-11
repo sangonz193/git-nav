@@ -22,10 +22,10 @@ describe("settings client", () => {
       },
     }
     expect(settingsClientId(false, storage, () => "browser-a")).toBe(
-      "browser-a"
+      "browser-a",
     )
     expect(settingsClientId(false, storage, () => "browser-b")).toBe(
-      "browser-a"
+      "browser-a",
     )
     const otherValues = new Map<string, string>()
     const otherStorage = {
@@ -35,7 +35,7 @@ describe("settings client", () => {
       },
     }
     expect(settingsClientId(false, otherStorage, () => "browser-b")).toBe(
-      "browser-b"
+      "browser-b",
     )
   })
 })

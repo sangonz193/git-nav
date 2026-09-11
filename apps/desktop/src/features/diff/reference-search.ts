@@ -7,8 +7,14 @@ const HIT_LIMIT = 50
 // `origin/main@{1}` or a raw hash. A half-typed branch name never reaches git.
 const REVISION_EXPRESSION = /[~^:@]|^[0-9a-f]{4,40}$/i
 
-export type Reference = { date: string, kind: RefKind, name: string, sha: string, subject: string }
-export type ResolvedRevision = { sha: string, subject: string }
+export type Reference = {
+  date: string
+  kind: RefKind
+  name: string
+  sha: string
+  subject: string
+}
+export type ResolvedRevision = { sha: string; subject: string }
 
 type RefKind = "branch" | "remote" | "tag"
 export type HitKind = RefKind | "commit" | "revision" | "stash" | "worktree"
@@ -38,7 +44,13 @@ export function isRevisionExpression(query: string) {
 }
 
 function worktreeHit(): ReferenceHit {
-  return { branch: null, detail: "Uncommitted changes in this worktree", kind: "worktree", label: "Working tree", reference: WORKTREE_REF }
+  return {
+    branch: null,
+    detail: "Uncommitted changes in this worktree",
+    kind: "worktree",
+    label: "Working tree",
+    reference: WORKTREE_REF,
+  }
 }
 
 function referenceHit({ kind, name, subject }: Reference): ReferenceHit {
@@ -50,29 +62,58 @@ function referenceHit({ kind, name, subject }: Reference): ReferenceHit {
  * window, so a branch whose tip is older than the commits on hand is still reachable; the graph's own
  * search then adds the commits and stashes behind the same query.
  */
-export function searchReferences(query: string, { allowWorktree, commits, headDetail, references, remotes, revision, stashes }: ReferenceSources): ReferenceHit[] {
+export function searchReferences(
+  query: string,
+  {
+    allowWorktree,
+    commits,
+    headDetail,
+    references,
+    remotes,
+    revision,
+    stashes,
+  }: ReferenceSources,
+): ReferenceHit[] {
   const needle = query.trim().toLowerCase()
   const stashesByBase = new Map<string, StashEntry[]>()
   for (const entry of stashes) {
     if (entry.base) {
-      stashesByBase.set(entry.base, [...(stashesByBase.get(entry.base) ?? []), entry])
+      stashesByBase.set(entry.base, [
+        ...(stashesByBase.get(entry.base) ?? []),
+        entry,
+      ])
     }
   }
 
   const hits: ReferenceHit[] = []
   if (revision) {
-    hits.push({ branch: null, detail: `${revision.sha.slice(0, 8)} · ${revision.subject}`, kind: "revision", label: query.trim(), reference: query.trim() })
+    hits.push({
+      branch: null,
+      detail: `${revision.sha.slice(0, 8)} · ${revision.subject}`,
+      kind: "revision",
+      label: query.trim(),
+      reference: query.trim(),
+    })
   }
   if (allowWorktree && "working tree".includes(needle)) {
     hits.push(worktreeHit())
   }
   if (headDetail && "head".includes(needle)) {
-    hits.push({ branch: "HEAD", detail: headDetail, kind: "branch", label: "HEAD", reference: "HEAD" })
+    hits.push({
+      branch: "HEAD",
+      detail: headDetail,
+      kind: "branch",
+      label: "HEAD",
+      reference: "HEAD",
+    })
   }
 
   const named = new Set(hits.map((hit) => hit.reference))
   for (const reference of references) {
-    if (reference.name.toLowerCase().includes(needle) && !named.has(reference.name)) {
+    if (
+      reference.name.toLowerCase().includes(needle) &&
+      !named.has(reference.name)
+    ) {
       named.add(reference.name)
       hits.push(referenceHit(reference))
     }
@@ -82,15 +123,35 @@ export function searchReferences(query: string, { allowWorktree, commits, headDe
   for (const hit of searchGraph(commits, query, { remotes, stashesByBase })) {
     const commit = commits[hit.commitIndex]
     if (hit.kind === "commit") {
-      hits.push({ branch: null, detail: hit.detail, kind: "commit", label: hit.label, reference: commit.hash })
+      hits.push({
+        branch: null,
+        detail: hit.detail,
+        kind: "commit",
+        label: hit.label,
+        reference: commit.hash,
+      })
     } else if (hit.kind === "stash") {
-      const entry = stashesByBase.get(commit.hash)?.find((candidate) => candidate.name === hit.label)
+      const entry = stashesByBase
+        .get(commit.hash)
+        ?.find((candidate) => candidate.name === hit.label)
       if (entry) {
-        hits.push({ branch: null, detail: hit.detail, kind: "stash", label: hit.label, reference: entry.sha })
+        hits.push({
+          branch: null,
+          detail: hit.detail,
+          kind: "stash",
+          label: hit.label,
+          reference: entry.sha,
+        })
       }
     } else if (!named.has(hit.label)) {
       named.add(hit.label)
-      hits.push({ branch: hit.label, detail: hit.detail, kind: hit.kind, label: hit.label, reference: hit.label })
+      hits.push({
+        branch: hit.label,
+        detail: hit.detail,
+        kind: hit.kind,
+        label: hit.label,
+        reference: hit.label,
+      })
     }
   }
 
