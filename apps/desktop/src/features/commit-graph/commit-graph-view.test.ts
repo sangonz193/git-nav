@@ -98,7 +98,7 @@ describe("loadViewConfig", () => {
     expect(config).toEqual({
       chipKinds: { branch: true, remote: true, stash: true, tag: false },
       cleanOptions: DEFAULT_VIEW_CONFIG.cleanOptions,
-      collapseUnmarked: false,
+      collapseUnmarked: true,
     })
   })
 })
