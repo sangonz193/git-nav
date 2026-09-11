@@ -69,8 +69,8 @@ const commitColumnHelper = createColumnHelper<typeof commitTableFeatures, Commit
 const commitColumns = commitColumnHelper.columns([
   commitColumnHelper.accessor("subject", { header: "Commit", maxSize: 1_600, minSize: 400, size: 920 }),
   commitColumnHelper.accessor("author", { header: "Author", maxSize: 360, minSize: 100, size: 180 }),
-  commitColumnHelper.accessor("date", { header: "Date", maxSize: 180, minSize: 80, size: 110 }),
-  commitColumnHelper.accessor("hash", { header: "Commit", maxSize: 160, minSize: 68, size: 84 }),
+  commitColumnHelper.accessor("date", { header: "Date", maxSize: 180, minSize: 80, size: 124 }),
+  commitColumnHelper.accessor("hash", { header: "Commit", maxSize: 160, minSize: 68, size: 96 }),
 ])
 
 // Context menu content stays behind this boundary so its render cost does not grow with history depth.

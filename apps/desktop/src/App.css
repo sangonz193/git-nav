@@ -98,14 +98,14 @@
 :root {
   --dv-tabs-and-actions-container-height: 36px;
   color-scheme: light;
-  font-size: 14px;
+  font-size: 16px;
   /* Overscrolling the viewport would pull-to-refresh and discard the loaded graph. */
   overscroll-behavior: none;
   scrollbar-color: var(--muted-foreground) var(--background);
 }
 
 body {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 
 /* Without this the panels hand their overscroll to the viewport, which pulls to refresh on touch. */
