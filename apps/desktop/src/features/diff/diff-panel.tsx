@@ -606,11 +606,16 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     rowVirtualizer.scrollToOffset(0)
   }, [comparison, rowVirtualizer])
 
-  // A fold changes the heights the scroller was measured at, so they are dropped and taken again. Only a
-  // fold that moved what sits above the scroller asks to be put back where it was, and marking a file
-  // viewed while viewed files are hidden takes that card out of the list before it can be aimed at.
+  // A fold changes the heights the scroller was measured at, so they are dropped and taken again. Dropping
+  // them leaves the cards still on screen at their estimates, which only a resize would correct, so they
+  // are measured back right away, once the estimates have replaced the sizes a measurement is compared
+  // against. Only a fold that moved what sits above the scroller asks to be put back where it was, and
+  // marking a file viewed while viewed files are hidden takes that card out of the list before it can be
+  // aimed at.
   useEffect(() => {
     rowVirtualizer.measure()
+    rowVirtualizer.getTotalSize()
+    scrollElement.current?.querySelectorAll<HTMLElement>(".diff-file-row").forEach((row) => rowVirtualizer.measureElement(row))
     const key = pendingAnchor.current
     pendingAnchor.current = null
     const index = key === null ? -1 : files.findIndex((file) => fileKey(file) === key)
