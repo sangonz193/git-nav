@@ -3,11 +3,12 @@ import { invoke } from "@/lib/ipc"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { IDockviewPanelProps } from "dockview-react"
-import { Archive, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cloud, Columns2, FilePen, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, PanelLeft, RefreshCw, Rows3, SlidersHorizontal, Tag } from "lucide-react"
-import { type ComponentType, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Archive, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Cloud, Columns2, FilePen, Folder, FolderOpen, FoldVertical, GitBranch, GitCompareArrows, Hash, PanelLeft, RefreshCw, Rows3, SlidersHorizontal, Tag, UnfoldVertical } from "lucide-react"
+import { type ComponentRef, type ComponentType, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
+import { Checkbox } from "@workspace/shadcn/components/checkbox"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@workspace/shadcn/components/resizable"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
@@ -28,6 +29,7 @@ const DIFF_FONT_SIZE = 11
 const DIFF_ROW_HEIGHT = DIFF_FONT_SIZE * 1.6
 const HUNK_ROW_HEIGHT = 30
 const FILE_HEADER_HEIGHT = 30
+const FILE_ROW_GAP = 8
 const COLLAPSED_BODY_HEIGHT = 40
 const SEARCH_DEBOUNCE = 120
 const PICKER_MENU_WIDTH = 320
@@ -333,7 +335,26 @@ function useDiffLoader(repoPath: string, comparison: Comparison | null, ignoreWh
   return { entries, request, reset }
 }
 
-function FileDiffCard({ collapsed, entry, expanded, file, mode, onExpand, onToggleCollapsed, onToggleViewed, theme, viewed, wrap }: { collapsed: boolean; entry: DiffEntry | undefined; expanded: boolean; file: ChangedFile; mode: DiffModeEnum; onExpand: () => void; onToggleCollapsed: () => void; onToggleViewed: () => void; theme: "light" | "dark"; viewed: boolean; wrap: boolean }) {
+function FileDiffCard({ allExpanded, collapsed, entry, expanded, file, mode, onExpand, onToggleAllExpanded, onToggleCollapsed, onToggleViewed, theme, viewed, wrap }: { allExpanded: boolean; collapsed: boolean; entry: DiffEntry | undefined; expanded: boolean; file: ChangedFile; mode: DiffModeEnum; onExpand: () => void; onToggleAllExpanded: () => void; onToggleCollapsed: () => void; onToggleViewed: () => void; theme: "light" | "dark"; viewed: boolean; wrap: boolean }) {
+  const diffView = useRef<ComponentRef<typeof DiffView>>(null)
+  const loaded = entry?.state === "loaded"
+
+  // The diff view holds its unfolded context, and a card scrolled out of the virtual window loses that view,
+  // so the choice is kept up here and replayed onto whichever view is mounted.
+  useEffect(() => {
+    const instance = diffView.current?.getDiffFileInstance()
+    if (!instance) {
+      return
+    }
+    const modeName = mode & DiffModeEnum.Split ? "split" : "unified"
+    const isExpanded = modeName === "split" ? instance.hasExpandSplitAll : instance.hasExpandUnifiedAll
+    if (allExpanded && !isExpanded) {
+      instance.onAllExpand(modeName)
+    } else if (!allExpanded && isExpanded) {
+      instance.onAllCollapse(modeName)
+    }
+  }, [allExpanded, collapsed, loaded, mode])
+
   const body = () => {
     if (file.isBinary) {
       return <p className="diff-file-card-notice">Binary file changed</p>
@@ -342,7 +363,7 @@ function FileDiffCard({ collapsed, entry, expanded, file, mode, onExpand, onTogg
       return <p className="diff-file-card-notice text-destructive">{entry.message}</p>
     }
     if (entry?.state === "loaded") {
-      return <DiffView data={entry.data} diffViewFontSize={DIFF_FONT_SIZE} diffViewHighlight diffViewMode={mode} diffViewTheme={theme} diffViewWrap={wrap} />
+      return <DiffView data={entry.data} diffViewFontSize={DIFF_FONT_SIZE} diffViewHighlight diffViewMode={mode} diffViewTheme={theme} diffViewWrap={wrap} ref={diffView} />
     }
     if (isLargeDiff(file) && !expanded) {
       return (
@@ -356,19 +377,25 @@ function FileDiffCard({ collapsed, entry, expanded, file, mode, onExpand, onTogg
   }
 
   return (
-    <article className="diff-file-card">
+    <article className={`diff-file-card${viewed ? " is-viewed" : ""}`}>
       <header className="diff-file-card-header">
         <button aria-expanded={!collapsed} className="diff-file-card-toggle" onClick={onToggleCollapsed} type="button">
           {collapsed ? <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />}
           <span className={`diff-file-status ${STATUS_COLORS[statusLetter(file)] ?? "text-muted-foreground"}`}>{statusLetter(file)}</span>
           <span className="diff-file-card-path truncate">{fileName(file)}</span>
         </button>
+        {loaded && !collapsed && (
+          <Hinted hint={allExpanded ? "Collapse unchanged lines" : "Expand all lines"}>
+            <Button aria-label={allExpanded ? "Collapse unchanged lines" : "Expand all lines"} aria-pressed={allExpanded} onClick={onToggleAllExpanded} size="icon-xs" type="button" variant="ghost">
+              {allExpanded ? <FoldVertical className="text-muted-foreground" /> : <UnfoldVertical className="text-muted-foreground" />}
+            </Button>
+          </Hinted>
+        )}
         {!file.isBinary && <FileStat additions={file.additions} deletions={file.deletions} />}
-        <Hinted hint={viewed ? "Mark as not viewed" : "Mark as viewed"}>
-          <Button aria-label="Viewed" aria-pressed={viewed} className={viewed ? "bg-muted" : undefined} onClick={onToggleViewed} size="icon-xs" type="button" variant="ghost">
-            <Check className={viewed ? "text-emerald-400" : "text-muted-foreground"} />
-          </Button>
-        </Hinted>
+        <label className="diff-file-card-viewed">
+          <Checkbox checked={viewed} onCheckedChange={onToggleViewed} />
+          Viewed
+        </label>
       </header>
       {!collapsed && body()}
     </article>
@@ -383,6 +410,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const [mode, setMode] = useState(params.userPreferences?.mode === "unified" ? DiffModeEnum.Unified : DiffModeEnum.Split)
   const [wrap, setWrap] = useState(false)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+  const [allExpanded, setAllExpanded] = useState<ReadonlySet<string>>(new Set())
   const [handFolds, setHandFolds] = useState<ReadonlyMap<string, boolean>>(new Map())
   const [viewed, setViewed] = useState<ReadonlyMap<string, string>>(new Map())
   const [hideViewed, setHideViewed] = useState(params.userPreferences?.hideViewed ?? false)
@@ -468,7 +496,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const rowVirtualizer = useVirtualizer({
     count: files.length,
     getScrollElement: () => scrollElement.current,
-    estimateSize: (index) => FILE_HEADER_HEIGHT + estimatedBodyHeight(files[index], mode, isFolded(files[index])),
+    estimateSize: (index) => FILE_ROW_GAP + FILE_HEADER_HEIGHT + estimatedBodyHeight(files[index], mode, isFolded(files[index])),
     getItemKey: (index) => fileKey(files[index]),
     overscan: 2,
   })
@@ -521,6 +549,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
         if (!cancelled) {
           reset()
           setExpanded(new Set())
+          setAllExpanded(new Set())
           setHandFolds(new Map())
           setComparison(nextComparison)
           setError(null)
@@ -658,7 +687,8 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   )
 
   const scrollOffset = rowVirtualizer.scrollOffset ?? 0
-  const activeIndex = virtualRows.find((row) => row.end > scrollOffset + 1)?.index
+  // Past the last card only the tail is left to scroll, and that still belongs to the last file.
+  const activeIndex = virtualRows.find((row) => row.end > scrollOffset + 1)?.index ?? (files.length > 0 ? files.length - 1 : undefined)
   const activeKey = activeIndex === undefined ? null : fileKey(files[activeIndex])
   const scrollToFile = useCallback((file: ChangedFile) => {
     pendingScroll.current = fileKey(file)
@@ -680,6 +710,15 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     const key = fileKey(file)
     const row = virtualRows.find((candidate) => fileKey(files[candidate.index]) === key)
     pendingAnchor.current = row && row.start < scrollOffset ? key : null
+  }
+
+  function toggleAllExpanded(file: ChangedFile) {
+    const key = fileKey(file)
+    const next = new Set(allExpanded)
+    if (!next.delete(key)) {
+      next.add(key)
+    }
+    setAllExpanded(next)
   }
 
   function toggleCollapsed(file: ChangedFile) {
@@ -804,12 +843,14 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
           return (
             <div className="diff-file-row" data-index={row.index} key={row.key} ref={rowVirtualizer.measureElement} style={{ top: row.start }}>
               <FileDiffCard
+                allExpanded={allExpanded.has(fileKey(file))}
                 collapsed={isFolded(file)}
                 entry={entries[fileKey(file)]}
                 expanded={expanded.has(fileKey(file))}
                 file={file}
                 mode={mode}
                 onExpand={() => setExpanded((current) => new Set(current).add(fileKey(file)))}
+                onToggleAllExpanded={() => toggleAllExpanded(file)}
                 onToggleCollapsed={() => toggleCollapsed(file)}
                 onToggleViewed={() => toggleViewed(file)}
                 theme={theme}
@@ -820,6 +861,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
           )
         })}
       </div>
+      {files.length > 0 && <div className="diff-scroll-tail" />}
     </div>
   )
 
