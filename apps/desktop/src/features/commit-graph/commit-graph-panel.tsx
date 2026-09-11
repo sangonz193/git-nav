@@ -75,7 +75,7 @@ function Hinted({ children, hint }: { children: ReactNode, hint: string }) {
 const commitTableFeatures = tableFeatures({ columnSizingFeature, columnResizingFeature })
 const commitColumnHelper = createColumnHelper<typeof commitTableFeatures, Commit>()
 const commitColumns = commitColumnHelper.columns([
-  commitColumnHelper.accessor("subject", { header: "Commit", maxSize: 1_600, minSize: 400, size: 920 }),
+  commitColumnHelper.accessor("subject", { header: "Commit", maxSize: 1_600, minSize: 400, size: 760 }),
   commitColumnHelper.accessor("author", { header: "Author", maxSize: 360, minSize: 100, size: 180 }),
   commitColumnHelper.accessor("date", { header: "Date", maxSize: 180, minSize: 80, size: 124 }),
   commitColumnHelper.accessor("hash", { header: "Commit", maxSize: 160, minSize: 68, size: 96 }),
@@ -1686,8 +1686,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--commit-row-height": `${rowHeight}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
           <div className="commit-graph-header-content" role="row" style={{ minWidth: tableWidth }}>
-            <div className="commit-graph-header-spacer" role="columnheader">
-              Graph
+            <div aria-label="Graph" className="commit-graph-header-spacer" role="columnheader">
               <div
                 aria-label="Resize Graph column"
                 className={`commit-graph-resize-handle${isResizingGraph ? " is-resizing" : ""}`}

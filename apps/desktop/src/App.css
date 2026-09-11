@@ -171,15 +171,8 @@ body {
 }
 
 .commit-graph-header-spacer {
-  align-items: center;
-  color: #71717a;
-  display: flex;
   flex: 0 0 var(--graph-width, 112px);
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding-left: 16px;
   position: relative;
-  text-transform: uppercase;
 }
 
 .commit-graph-header-columns {
@@ -439,9 +432,10 @@ body {
 }
 
 /* The lane colour is carried by the leading edge and the kind icon, so the label itself stays at full
-   reading contrast however many chips a row holds. */
+   reading contrast however many chips a row holds. The smaller sync and pull request text sits on the
+   name's baseline rather than floating at its centre; glyphs and badges centre themselves instead. */
 .commit-ref {
-  align-items: center;
+  align-items: baseline;
   background: color-mix(in srgb, var(--foreground) 6%, transparent);
   border: 1px solid color-mix(in srgb, var(--foreground) 12%, transparent);
   border-left: 3px solid var(--commit-ref-color);
@@ -457,6 +451,7 @@ body {
 }
 
 .commit-ref svg {
+  align-self: center;
   color: var(--commit-ref-color);
   flex: none;
   height: 12px;
@@ -494,7 +489,7 @@ body {
    size below it. The glyph is what carries the state, which leaves the number quiet and legible without
    colour. */
 .commit-ref-pull-request {
-  align-items: center;
+  align-items: baseline;
   border-left: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
   color: var(--muted-foreground);
   display: inline-flex;
@@ -508,6 +503,7 @@ body {
 
 /* A chip kind that recolours its icons, as a remote chip does, would otherwise reach the state glyph too. */
 .commit-ref .commit-ref-pull-request svg {
+  align-self: center;
   height: 11px;
   width: 11px;
 }
