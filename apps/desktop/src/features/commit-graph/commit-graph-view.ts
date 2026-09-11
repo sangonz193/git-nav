@@ -25,7 +25,7 @@ export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
 export const DEFAULT_VIEW_CONFIG: ViewConfig = {
   chipKinds: { branch: true, remote: true, stash: true, tag: true },
   cleanOptions: { deleteMergedPullRequestBranches: true, deleteMergedBranches: false, deleteSquashMergedBranches: false },
-  collapseUnmarked: false,
+  collapseUnmarked: true,
 }
 
 const LEGACY_VIEW_CONFIG_KEY = "git-nav.commit-graph.view"
