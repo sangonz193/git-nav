@@ -5,44 +5,87 @@ import { Button } from "@workspace/shadcn/components/button"
 import { TriangleAlert } from "lucide-react"
 import { Fragment, useEffect, useMemo, useState } from "react"
 
-import type { Selection } from "./commit-graph"
-import { applicableOperations, flag, operationById, predictConflicts, resolveFields, type BranchOperationState, type CompletedOperation, type Operand, type OperationRequest, type OperationResult, type OperationState, type Plan, type Values, type RefMenuComponents, type RepositoryState } from "./commit-operations"
+import { splitRefLabel, type Selection } from "./commit-graph"
+import { applicableOperations, CHIP_ICONS, flag, OPERATION_GROUPS, operationById, operationTitle, predictConflicts, resolveFields, selectionLabel, type BranchOperationState, type CompletedOperation, type Label, type NameKind, type Operand, type OperationGroup, type OperationRequest, type OperationResult, type OperationState, type Plan, type Values, type RefMenuComponents, type RepositoryState } from "./commit-operations"
 
 const PREDICTION_DEBOUNCE = 200
 
-export function OperationMenuItems({ components, onSelect, repository, source, target }: {
+// A ref name is told apart by its tail, so the tail stays put and the middle gives way. A name with a kind is
+// boxed with its icon the way the graph chips are, so the two read as one thing inside a sentence.
+export function RefName({ kind, name }: { kind?: NameKind, name: string }) {
+  const { start, end } = kind === "worktree" || kind === "stash" ? { start: name, end: "" } : splitRefLabel(name)
+  const Icon = kind && CHIP_ICONS[kind]
+  return (
+    <span className={`flex min-w-0 items-center${Icon ? " rounded-sm bg-foreground/10 px-1 [&_svg]:size-3!" : ""}`}>
+      {Icon && <Icon className="mr-1" />}
+      <span className="min-w-0 truncate whitespace-pre">{start}</span>
+      {end && <span className="shrink-0 whitespace-pre">{end}</span>}
+    </span>
+  )
+}
+
+export function LabelText({ label }: { label: Label }) {
+  if (typeof label === "string") {
+    return <span className="min-w-0 truncate">{label}</span>
+  }
+  return (
+    <span className="flex min-w-0">
+      {label.before && <span className="shrink-0 whitespace-pre">{label.before}</span>}
+      <RefName kind={label.kind} name={label.name} />
+      {label.after && <span className="shrink-0 whitespace-pre">{label.after}</span>}
+    </span>
+  )
+}
+
+// The separator goes on the side that faces the rest of the menu, so a slot at the bottom does not end in one.
+export function OperationMenuItems({ components, groups = OPERATION_GROUPS, onSelect, repository, separator = "after", source, target }: {
   components: RefMenuComponents
+  groups?: readonly OperationGroup[]
   onSelect: (request: OperationRequest) => void
   repository: RepositoryState | null
+  separator?: "after" | "before"
   source: Selection | null
   target: Operand
 }) {
-  const { Item, Separator } = components
+  const { Item, Label, Separator } = components
   if (!repository) {
     return null
   }
-  const entries = applicableOperations(repository, source, target)
+  const entries = applicableOperations(repository, source, target).filter(({ operation }) => groups.includes(operation.group))
+  if (entries.length === 0) {
+    return null
+  }
   return (
     <>
-      {entries.map(({ operation, request }, index) => {
+      {separator === "before" && <Separator />}
+      {entries.map(({ operation, request, unavailable }, index) => {
         const Icon = operation.icon
-        const previous = entries[index - 1]?.operation.group
+        const opensGroup = entries[index - 1]?.operation.group !== operation.group
         return (
           <Fragment key={operation.id}>
-            {previous && previous !== operation.group && <Separator />}
+            {index > 0 && opensGroup && <Separator />}
+            {opensGroup && operation.group === "selection" && source && (
+              <Label>
+                <span className="flex max-w-80">
+                  <span className="shrink-0 whitespace-pre">Selected: </span>
+                  <LabelText label={selectionLabel(source)} />
+                </span>
+              </Label>
+            )}
             <Item
               className={`max-w-80${operation.destructive ? " text-destructive" : ""}`}
+              disabled={unavailable !== null}
               // The menu closes on the same gesture that picks an item, so a dialog opened here would still be under
               // the pointer when the click that follows lands and would take that click as a dismissal.
               onSelect={() => window.setTimeout(() => onSelect(request))}
             >
               <Icon />
-              <span className="min-w-0 truncate">{operation.label(request)}</span>
+              <LabelText label={unavailable ?? operation.label(request)} />
             </Item>
           </Fragment>
         )
       })}
-      {entries.length > 0 && <Separator />}
+      {separator === "after" && <Separator />}
     </>
   )
 }
@@ -125,7 +168,7 @@ export function OperationDialog({ onClose, onCompleted, onFailed, repoPath, requ
     <AlertDialog onOpenChange={(open) => !open && onClose()} open>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{operation.label(request)}</AlertDialogTitle>
+          <AlertDialogTitle>{operationTitle(operation, request)}</AlertDialogTitle>
           <AlertDialogDescription>{operation.description(request, values)}</AlertDialogDescription>
         </AlertDialogHeader>
         {fields.length > 0 && (

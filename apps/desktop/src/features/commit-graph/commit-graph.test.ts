@@ -663,7 +663,7 @@ describe("branch sync", () => {
     expect(refSyncLabel(ref(sync({ upstream: null })))).toBe("local")
     expect(syncDescription(ref(sync({ upstream: null })))).toBe("Not pushed to a remote")
     expect(refSyncLabel(ref(sync({ isGone: true })))).toBe("gone")
-    expect(syncDescription(ref(sync({ isGone: true })))).toBe("origin/feature is gone from the remote")
+    expect(syncDescription(ref(sync({ isGone: true })))).toBe("Upstream gone from the remote")
   })
 
   test("reports no state without sync data", () => {
