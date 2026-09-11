@@ -78,11 +78,11 @@ describe("loadViewConfig", () => {
         throw new Error("unreachable")
       },
       async () => undefined,
-      JSON.stringify({ chipKinds: { tag: false }, collapseUnmarked: true }),
+      JSON.stringify({ chipKinds: { tag: false }, collapseUnmarked: false }),
       "desktop"
     )
     expect(config.chipKinds).toEqual({ branch: true, remote: true, stash: true, tag: false })
-    expect(config.collapseUnmarked).toBe(true)
+    expect(config.collapseUnmarked).toBe(false)
     expect(config.cleanOptions).toEqual(DEFAULT_VIEW_CONFIG.cleanOptions)
   })
 
@@ -147,7 +147,7 @@ describe("loadViewConfig", () => {
       async () => ({
         [keys.chipKinds.tag]: false,
         [keys.cleanOptions.deleteMergedBranches]: true,
-        [keys.collapseUnmarked]: true,
+        [keys.collapseUnmarked]: false,
       }),
       async () => undefined,
       null,
@@ -156,7 +156,7 @@ describe("loadViewConfig", () => {
     expect(config.chipKinds.tag).toBe(false)
     expect(config.chipKinds.branch).toBe(true)
     expect(config.cleanOptions.deleteMergedBranches).toBe(true)
-    expect(config.collapseUnmarked).toBe(true)
+    expect(config.collapseUnmarked).toBe(false)
   })
 
   test("ignores a per-setting value with the wrong type", async () => {

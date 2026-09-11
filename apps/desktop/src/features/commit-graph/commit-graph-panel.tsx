@@ -1585,7 +1585,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
         </div>
         <div className="flex items-center gap-1">
           <Hinted hint={config.collapseUnmarked ? "Show every commit" : "Collapse commits nothing points at"}>
-            <Button aria-label={config.collapseUnmarked ? "Show every commit" : "Collapse commits nothing points at"} aria-pressed={config.collapseUnmarked} className={config.collapseUnmarked ? "bg-muted" : undefined} onClick={() => collapseUnmarkedCommits(!config.collapseUnmarked)} size="icon-sm" type="button" variant="outline">
+            <Button aria-label="Collapse commits nothing points at" aria-pressed={config.collapseUnmarked} className={config.collapseUnmarked ? "bg-muted" : undefined} onClick={() => collapseUnmarkedCommits(!config.collapseUnmarked)} size="icon-sm" type="button" variant="outline">
               {config.collapseUnmarked ? <UnfoldVertical /> : <FoldVertical />}
             </Button>
           </Hinted>

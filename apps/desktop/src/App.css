@@ -635,6 +635,7 @@ button.commit-ref-selected:hover {
    an operation was left half finished. */
 .commit-ref-worktree {
   align-items: center;
+  align-self: center;
   color: color-mix(in srgb, var(--commit-ref-color) 60%, var(--muted-foreground));
   display: inline-flex;
   flex: none;
