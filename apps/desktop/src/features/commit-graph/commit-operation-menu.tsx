@@ -6,29 +6,32 @@ import { TriangleAlert } from "lucide-react"
 import { Fragment, useEffect, useMemo, useState } from "react"
 
 import { splitRefLabel, type Selection } from "./commit-graph"
-import { applicableOperations, flag, OPERATION_GROUPS, operationById, operationTitle, predictConflicts, resolveFields, selectionLabel, type BranchOperationState, type CompletedOperation, type Label, type Operand, type OperationGroup, type OperationRequest, type OperationResult, type OperationState, type Plan, type Values, type RefMenuComponents, type RepositoryState } from "./commit-operations"
+import { applicableOperations, CHIP_ICONS, flag, OPERATION_GROUPS, operationById, operationTitle, predictConflicts, resolveFields, selectionLabel, type BranchOperationState, type CompletedOperation, type Label, type NameKind, type Operand, type OperationGroup, type OperationRequest, type OperationResult, type OperationState, type Plan, type Values, type RefMenuComponents, type RepositoryState } from "./commit-operations"
 
 const PREDICTION_DEBOUNCE = 200
 
-// A ref name is told apart by its tail, so the tail stays put and the middle gives way.
-export function RefName({ name }: { name: string }) {
-  const { start, end } = splitRefLabel(name)
+// A ref name is told apart by its tail, so the tail stays put and the middle gives way. A name with a kind is
+// boxed with its icon the way the graph chips are, so the two read as one thing inside a sentence.
+export function RefName({ kind, name }: { kind?: NameKind, name: string }) {
+  const { start, end } = kind === "worktree" || kind === "stash" ? { start: name, end: "" } : splitRefLabel(name)
+  const Icon = kind && CHIP_ICONS[kind]
   return (
-    <span className="flex min-w-0">
+    <span className={`flex min-w-0 items-center${Icon ? " rounded-sm bg-foreground/10 px-1 [&_svg]:size-3!" : ""}`}>
+      {Icon && <Icon className="mr-1" />}
       <span className="min-w-0 truncate whitespace-pre">{start}</span>
-      {end && <span className="shrink-0">{end}</span>}
+      {end && <span className="shrink-0 whitespace-pre">{end}</span>}
     </span>
   )
 }
 
-function LabelText({ label }: { label: Label }) {
+export function LabelText({ label }: { label: Label }) {
   if (typeof label === "string") {
     return <span className="min-w-0 truncate">{label}</span>
   }
   return (
     <span className="flex min-w-0">
       {label.before && <span className="shrink-0 whitespace-pre">{label.before}</span>}
-      <RefName name={label.name} />
+      <RefName kind={label.kind} name={label.name} />
       {label.after && <span className="shrink-0 whitespace-pre">{label.after}</span>}
     </span>
   )
@@ -65,7 +68,7 @@ export function OperationMenuItems({ components, groups = OPERATION_GROUPS, onSe
               <Label>
                 <span className="flex max-w-80">
                   <span className="shrink-0 whitespace-pre">Selected: </span>
-                  <RefName name={selectionLabel(source)} />
+                  <LabelText label={selectionLabel(source)} />
                 </span>
               </Label>
             )}
@@ -77,7 +80,7 @@ export function OperationMenuItems({ components, groups = OPERATION_GROUPS, onSe
               onSelect={() => window.setTimeout(() => onSelect(request))}
             >
               <Icon />
-              {unavailable === null ? <LabelText label={operation.label(request)} /> : <span className="min-w-0 truncate">{unavailable}</span>}
+              <LabelText label={unavailable ?? operation.label(request)} />
             </Item>
           </Fragment>
         )

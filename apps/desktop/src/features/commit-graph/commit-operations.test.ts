@@ -68,7 +68,8 @@ function titleOf(source: Selection | null, target: Operand, id: string) {
 }
 
 function unavailableOf(source: Selection | null, target: Operand, id: string) {
-  return applicableOperations(repository, source, target).find(({ operation }) => operation.id === id)?.unavailable
+  const unavailable = applicableOperations(repository, source, target).find(({ operation }) => operation.id === id)?.unavailable
+  return unavailable ? labelText(unavailable) : unavailable
 }
 
 const topic = ref(["topic"], "b")
@@ -124,8 +125,8 @@ describe("applicableOperations", () => {
   })
 
   test("names the selection the selection group acts with", () => {
-    expect(selectionLabel(topic)).toBe("topic")
-    expect(selectionLabel(range)).toBe("2 commits on topic")
+    expect(selectionLabel(topic)).toEqual({ kind: "branch", name: "topic" })
+    expect(selectionLabel(range)).toEqual({ before: "2 commits on ", kind: "branch", name: "topic" })
   })
 
   test("offers commit operations on a selected range", () => {

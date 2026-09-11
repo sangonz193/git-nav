@@ -1,8 +1,8 @@
 import { invoke } from "@/lib/ipc"
-import { ArrowDownToLine, ArrowUpFromLine, Copy, GitBranch, GitGraph, GitMerge, LogIn, Pencil, Scissors, Tag, Trash2, Undo2 } from "lucide-react"
+import { AppWindow, Archive, ArrowDownToLine, ArrowUpFromLine, Cloud, Copy, GitBranch, GitGraph, GitMerge, LogIn, Pencil, Scissors, Tag, Trash2, Undo2 } from "lucide-react"
 import type { ComponentType, ReactNode } from "react"
 
-import { PENDING_OPERATION_LABELS, refName, remoteBranchName, type Commit, type CommitSelection, type PendingOperation, type RefSelection, type Selection, type StashEntry } from "./commit-graph"
+import { PENDING_OPERATION_LABELS, refName, remoteBranchName, type Commit, type CommitSelection, type PendingOperation, type RefKind, type RefSelection, type Selection, type StashEntry } from "./commit-graph"
 
 export type Block = { reason: string }
 export type Warning = { files?: string[], message: string }
@@ -68,7 +68,10 @@ export type Plan = {
 export const OPERATION_GROUPS = ["navigate", "sync", "selection", "integrate", "refs", "danger"] as const
 export type OperationGroup = (typeof OPERATION_GROUPS)[number]
 // A ref name is the part of a label that can run long, so it is kept apart for the menu to shorten on its own.
-export type Label = string | { after?: string, before?: string, name: string }
+// A worktree name looks just like a branch name, so the kind marks the name the way the chips already do.
+export type NameKind = RefKind | "stash" | "worktree"
+export const CHIP_ICONS = { branch: GitBranch, remote: Cloud, stash: Archive, tag: Tag, worktree: AppWindow }
+export type Label = string | { after?: string, before?: string, kind?: NameKind, name: string }
 export type Operation = {
   action: (request: OperationRequest, values: Values) => string
   applicable: (request: OperationRequest) => boolean
@@ -86,7 +89,7 @@ export type Operation = {
   // A label that leans on the menu around it ("Merge here") needs a title that stands alone in a dialog.
   title?: (request: OperationRequest) => string
   // What the menu shows in place of the label when the ref alone already rules the operation out.
-  unavailable?: (request: OperationRequest) => string | null
+  unavailable?: (request: OperationRequest) => Label | null
   // Required, so every operation has to answer where it leaves the repository rather than let the user find out.
   warnings: (request: OperationRequest, state: OperationState, values: Values) => Warning[]
 }
@@ -100,12 +103,12 @@ export function operationTitle(operation: Operation, request: OperationRequest) 
 }
 
 // The selection is what the selection group acts with, so the group names it once and its items only say where.
-export function selectionLabel(source: Selection) {
+export function selectionLabel(source: Selection): Label {
   if (source.kind !== "commits") {
-    return refName(source.ref)
+    return { kind: source.kind, name: refName(source.ref) }
   }
   const branch = source.branches[0]?.branch
-  return branch ? `${operandName(source)} on ${branch}` : operandName(source)
+  return branch ? { before: `${operandName(source)} on `, kind: "branch", name: branch } : operandName(source)
 }
 export type RefMenuComponents = {
   Item: ComponentType<{ children: ReactNode, className?: string, disabled?: boolean, onSelect?: () => void, title?: string }>
@@ -225,7 +228,7 @@ const checkout: Operation = {
     : target.kind === "remote"
       ? "Check out as a local branch"
       : "Check out (detached)",
-  unavailable: ({ target }) => isRef(target) && target.ref.worktrees.length > 0 ? `Checked out in ${target.ref.worktrees[0].name}` : null,
+  unavailable: ({ target }) => isRef(target) && target.ref.worktrees.length > 0 ? { before: "Checked out in ", kind: "worktree", name: target.ref.worktrees[0].name } : null,
   description: ({ repository, target }) => repository.isDirty
     ? `This moves the working tree to ${operandName(target)}, and the uncommitted changes have to go somewhere.`
     : `This moves the working tree to ${operandName(target)}.`,
@@ -370,7 +373,7 @@ const pull: Operation = {
     if (sync.behind === 0) {
       return "Nothing to fast-forward"
     }
-    return sync.ahead > 0 ? `Diverged from ${sync.upstream}` : null
+    return sync.ahead > 0 ? { before: "Diverged from ", name: sync.upstream ?? "" } : null
   },
   description: ({ target }) => `This fetches ${isRef(target) ? target.ref.sync?.upstream : ""} and moves ${operandName(target)} up to it without creating a merge.`,
   blocks: ({ target }, state) => {
