@@ -520,7 +520,7 @@ export function syncDescription({ sync }: DisplayRef) {
     return null
   }
   if (sync.isGone) {
-    return `${sync.upstream} is gone from the remote`
+    return "Upstream gone from the remote"
   }
   if (!sync.upstream) {
     return "Not pushed to a remote"

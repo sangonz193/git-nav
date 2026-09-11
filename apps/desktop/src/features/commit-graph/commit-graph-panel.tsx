@@ -18,11 +18,11 @@ import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDow
 import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, persistedGraphPanelParams, persistedSelectionHashes, persistedSelectionRestore, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
+import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, persistedGraphPanelParams, persistedSelectionHashes, persistedSelectionRestore, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type PullRequestState, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
 import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit, type ViewConfig, type ViewConfigChange } from "./commit-graph-view"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
-import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
-import { clearConflictPredictions, type CompletedOperation, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
+import { OperationDialog, OperationMenuItems, RefName } from "./commit-operation-menu"
+import { clearConflictPredictions, OPERATION_GROUPS, type CompletedOperation, type OperationGroup, type OperationRequest, type RefMenuComponents, type RefUpdate, type RepositoryState } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type { Project, Worktree as ProjectWorktree } from "../repository/project"
@@ -52,9 +52,18 @@ type GraphWindowComplete = { hasMore: boolean }
 const contextMenuComponents: RefMenuComponents = { Item: ContextMenuItem, Label: ContextMenuLabel, Separator: ContextMenuSeparator, Sub: ContextMenuSub, SubContent: ContextMenuSubContent, SubTrigger: ContextMenuSubTrigger }
 const dropdownMenuComponents: RefMenuComponents = { Item: DropdownMenuItem, Label: DropdownMenuLabel, Separator: DropdownMenuSeparator, Sub: DropdownMenuSub, SubContent: DropdownMenuSubContent, SubTrigger: DropdownMenuSubTrigger }
 const SELECTION_LABELS = { branch: "Branch", remote: "Remote branch", tag: "Tag" }
+// Destructive operations sit at the bottom of a menu, after anything that only reads the repository.
+const DANGER_GROUPS: OperationGroup[] = ["danger"]
+const SAFE_GROUPS = OPERATION_GROUPS.filter((group) => !DANGER_GROUPS.includes(group))
 const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
 const CHIP_ICONS = { branch: GitBranch, remote: Cloud, stash: Archive, tag: Tag, worktree: AppWindow }
 const PULL_REQUEST_ICONS = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed }
+
+function PullRequestIcon({ state }: { state: PullRequestState }) {
+  const Icon = PULL_REQUEST_ICONS[state]
+  return <Icon />
+}
+
 function Hinted({ children, hint }: { children: ReactNode, hint: string }) {
   return (
     <Tooltip>
@@ -107,7 +116,7 @@ function RowContextMenuBody({ canSelectRange, chipMenuEntry, chips, commit, copy
           Select range to here
         </ContextMenuItem>
       )}
-      <OperationMenuItems components={contextMenuComponents} onSelect={onRequest} repository={repository} source={source} target={target} />
+      <OperationMenuItems components={contextMenuComponents} groups={SAFE_GROUPS} onSelect={onRequest} repository={repository} source={source} target={target} />
       <ContextMenuItem disabled={commit.parents.length === 0} onSelect={() => openCommitDiff(commit)}>
         <FileDiff />
         Show commit diff
@@ -139,6 +148,7 @@ function RowContextMenuBody({ canSelectRange, chipMenuEntry, chips, commit, copy
         <Copy />
         Copy commit subject
       </ContextMenuItem>
+      <OperationMenuItems components={contextMenuComponents} groups={DANGER_GROUPS} onSelect={onRequest} repository={repository} separator="before" source={source} target={target} />
     </>
   )
 }
@@ -1244,8 +1254,8 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     return (
       <>
         <Label>
-          <span className="block max-w-64 truncate text-foreground">{name}</span>
-          {detail && <span className="block max-w-64 truncate font-normal">{detail}</span>}
+          <span className="block max-w-80 text-foreground"><RefName name={name} /></span>
+          {detail && <span className="block max-w-80 truncate font-normal">{detail}</span>}
         </Label>
         <Separator />
       </>
@@ -1259,18 +1269,20 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     return (
       <>
         {menuHeader(components, reference, syncDescription(ref) ?? SELECTION_LABELS[ref.kind])}
-        <OperationMenuItems components={components} onSelect={setRequest} repository={repository} source={selection} target={refSelection(ref, sha)} />
-        <Item onSelect={() => openRefDiff(reference)}>
-          <GitCompareArrows />
-          {`Compare with ${repository?.defaultBranch ?? "the default branch"}`}
-        </Item>
+        <OperationMenuItems components={components} groups={SAFE_GROUPS} onSelect={setRequest} repository={repository} source={selection} target={refSelection(ref, sha)} />
+        {reference !== repository?.defaultBranch && (
+          <Item onSelect={() => openRefDiff(reference)}>
+            <GitCompareArrows />
+            {`Compare with ${repository?.defaultBranch ?? "the default branch"}`}
+          </Item>
+        )}
         <Item onSelect={() => copyText(reference)}>
           <Copy />
-          Copy ref name
+          {`Copy ${SELECTION_LABELS[ref.kind].toLowerCase()} name`}
         </Item>
         {pullRequest && (
           <Item onSelect={() => openPullRequestMutation.mutate(pullRequest.url)}>
-            <GitPullRequest />
+            <PullRequestIcon state={pullRequest.state} />
             {`Open pull request #${pullRequest.number}`}
           </Item>
         )}
@@ -1278,7 +1290,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
           <Sub>
             <SubTrigger>
               <ExternalLink />
-              Open
+              {ref.worktrees.length === 1 && !ref.worktrees[0].isCurrent ? `Open ${ref.worktrees[0].name} in` : "Open in"}
             </SubTrigger>
             <SubContent>
               {ref.worktrees.flatMap((worktree) => {
@@ -1305,6 +1317,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
             </SubContent>
           </Sub>
         )}
+        <OperationMenuItems components={components} groups={DANGER_GROUPS} onSelect={setRequest} repository={repository} separator="before" source={selection} target={refSelection(ref, sha)} />
       </>
     )
   }
@@ -1330,11 +1343,12 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     return (
       <>
         {menuHeader(components, entry.name, entry.message)}
-        <OperationMenuItems components={components} onSelect={setRequest} repository={repository} source={null} target={{ kind: "stash", entry }} />
+        <OperationMenuItems components={components} groups={SAFE_GROUPS} onSelect={setRequest} repository={repository} source={null} target={{ kind: "stash", entry }} />
         <Item onSelect={() => openStashDiff(entry)}>
           <FileDiff />
           Show stashed changes
         </Item>
+        <OperationMenuItems components={components} groups={DANGER_GROUPS} onSelect={setRequest} repository={repository} separator="before" source={null} target={{ kind: "stash", entry }} />
       </>
     )
   }
@@ -1392,7 +1406,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       <Sub>
         <SubTrigger>
           <ExternalLink />
-          Open
+          Open in
         </SubTrigger>
         <SubContent>
           <Item onSelect={() => openWorktreeMutation.mutate({ path: worktree.path, target: "git-nav" })}>
@@ -1472,7 +1486,6 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     const { start, end } = ref ? splitRefLabel(ref.label) : { start: chipLabel(chip), end: "" }
     const sync = ref && refSyncLabel(ref)
     const pullRequest = ref?.pullRequest ?? null
-    const PullRequestIcon = PULL_REQUEST_ICONS[pullRequest?.state ?? "open"]
     // A worktree holding no branch is a chip of its own; one holding a branch is a marker inside that chip.
     const chipWorktrees = chip.kind === "worktree" ? [chip.worktree] : ref?.worktrees ?? []
     const selected = ref !== null && selectedRef !== null && refName(selectedRef.ref) === refName(ref) && selectedRef.sha === sha
@@ -1516,7 +1529,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
             </span>
                 {pullRequest && (
                   <span className={`commit-ref-pull-request commit-ref-pull-request-${pullRequest.state}`}>
-                    <PullRequestIcon />
+                    <PullRequestIcon state={pullRequest.state} />
                     {`#${pullRequest.number}`}
                   </span>
                 )}

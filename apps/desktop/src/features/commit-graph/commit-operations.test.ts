@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { commitSelection, displayRefs, refSelection, type BranchSync, type Commit, type Selection } from "./commit-graph"
-import { applicableOperations, initialValues, OPERATION_GROUPS, resolveFields, type Operand, type OperationState, type RepositoryState } from "./commit-operations"
+import { applicableOperations, initialValues, labelText, OPERATION_GROUPS, operationTitle, resolveFields, selectionLabel, type Operand, type OperationState, type RepositoryState } from "./commit-operations"
 
 function commit(hash: string, parents: string[] = [], refs: string[] = []): Commit {
   return {
@@ -59,7 +59,16 @@ function entryFor(source: Selection | null, target: Operand, id: string) {
 
 function labelOf(source: Selection | null, target: Operand, id: string) {
   const entry = applicableOperations(repository, source, target).find(({ operation }) => operation.id === id)
-  return entry ? entry.operation.label(entry.request) : null
+  return entry ? labelText(entry.operation.label(entry.request)) : null
+}
+
+function titleOf(source: Selection | null, target: Operand, id: string) {
+  const entry = applicableOperations(repository, source, target).find(({ operation }) => operation.id === id)
+  return entry ? operationTitle(entry.operation, entry.request) : null
+}
+
+function unavailableOf(source: Selection | null, target: Operand, id: string) {
+  return applicableOperations(repository, source, target).find(({ operation }) => operation.id === id)?.unavailable
 }
 
 const topic = ref(["topic"], "b")
@@ -69,7 +78,11 @@ const range = commitSelection(history, 1, 2)!
 
 describe("applicableOperations", () => {
   test("offers branch operations on a local branch", () => {
-    expect(ids(null, topic)).toEqual(["checkout", "push", "merge", "createBranch", "createTag", "renameBranch", "resetCurrent", "deleteBranch"])
+    expect(ids(null, topic)).toEqual(["checkout", "push", "mergeIntoCurrent", "createBranch", "createTag", "renameBranch", "resetCurrent", "deleteBranch"])
+  })
+
+  test("does not offer to check out the branch that is already checked out", () => {
+    expect(ids(null, ref(["HEAD -> main"], "a"))).not.toContain("checkout")
   })
 
   test("drops the operations a tag cannot take part in", () => {
@@ -91,25 +104,35 @@ describe("applicableOperations", () => {
   })
 
   test("rebases a selected range onto the clicked ref", () => {
-    expect(labelOf(range, tag, "rebaseOnto")).toBe("Rebase topic (2 commits) onto here")
+    expect(labelOf(range, tag, "rebaseOnto")).toBe("Rebase onto here")
+    expect(titleOf(range, tag, "rebaseOnto")).toBe("Rebase topic (2 commits) onto v1.0.0")
   })
 
   test("refuses to move a tag onto something else", () => {
     expect(ids(tag, topic)).not.toContain("rebaseOnto")
   })
 
-  test("names both operands when a selection meets a branch", () => {
-    expect(labelOf(topic, ref(["main"], "a"), "merge")).toBe("Merge topic here")
+  test("merges the selection into the clicked branch", () => {
+    expect(labelOf(topic, ref(["main"], "a"), "mergeSelectedHere")).toBe("Merge here")
+    expect(titleOf(topic, ref(["main"], "a"), "mergeSelectedHere")).toBe("Merge topic into main")
   })
 
-  test("merges into the current branch when nothing is selected", () => {
-    expect(labelOf(null, topic, "merge")).toBe("Merge into main")
+  test("merges into the current branch whether or not something is selected", () => {
+    expect(labelOf(null, topic, "mergeIntoCurrent")).toBe("Merge into main")
+    expect(titleOf(null, topic, "mergeIntoCurrent")).toBe("Merge topic into main")
+    expect(ids(tag, topic)).toEqual(expect.arrayContaining(["mergeSelectedHere", "mergeIntoCurrent"]))
+  })
+
+  test("names the selection the selection group acts with", () => {
+    expect(selectionLabel(topic)).toBe("topic")
+    expect(selectionLabel(range)).toBe("2 commits on topic")
   })
 
   test("offers commit operations on a selected range", () => {
     const offered = ids(range, range)
 
     expect(offered).toContain("dropCommits")
+    expect(entryFor(range, range, "dropCommits").operation.group).toBe("danger")
     expect(offered).toContain("cherryPick")
     expect(offered).toContain("revert")
     expect(offered).not.toContain("rebaseOnto")
@@ -127,15 +150,44 @@ describe("applicableOperations", () => {
   })
 })
 
+describe("unavailable", () => {
+  test("says there is nothing to push or fast-forward when a branch matches its upstream", () => {
+    const synced = ref(["feature"], "b", { branch: "feature", upstream: "origin/feature", ahead: 0, behind: 0, isGone: false })
+
+    expect(unavailableOf(null, synced, "push")).toBe("Nothing to push")
+    expect(unavailableOf(null, synced, "pull")).toBe("Nothing to fast-forward")
+  })
+
+  test("says a fast-forward has nowhere to go once both sides have moved", () => {
+    const diverged = ref(["feature"], "b", { branch: "feature", upstream: "origin/feature", ahead: 2, behind: 3, isGone: false })
+
+    expect(unavailableOf(null, diverged, "pull")).toBe("Diverged from origin/feature")
+    expect(unavailableOf(null, diverged, "push")).toBe(null)
+  })
+
+  test("leaves a push and a fast-forward open when only one side has moved", () => {
+    const ahead = ref(["feature"], "b", { branch: "feature", upstream: "origin/feature", ahead: 2, behind: 0, isGone: false })
+    const behind = ref(["feature"], "b", { branch: "feature", upstream: "origin/feature", ahead: 0, behind: 3, isGone: false })
+
+    expect(unavailableOf(null, ahead, "push")).toBe(null)
+    expect(labelOf(null, ahead, "push")).toBe("Push 2 commits to origin/feature")
+    expect(unavailableOf(null, behind, "pull")).toBe(null)
+  })
+
+  test("names the worktree that holds a branch instead of offering to check it out", () => {
+    const worktree = { branch: "feature", changedFiles: 0, head: "b", isCurrent: false, isOpen: false, name: "feature-tree", path: "/tmp/feature-tree", pendingOperation: null, untrackedFiles: 0 }
+    const [entry] = displayRefs(["feature"], { worktrees: [worktree] })
+
+    expect(unavailableOf(null, refSelection(entry, "b"), "checkout")).toBe("Checked out in feature-tree")
+    expect(unavailableOf(null, topic, "checkout")).toBe(null)
+  })
+})
+
 describe("blocks", () => {
   function blocksFor(source: Selection | null, target: Operand, id: string, values: Record<string, string> = {}) {
     const entry = applicableOperations(repository, source, target).find(({ operation }) => operation.id === id)!
     return entry.operation.blocks(entry.request, { branch: null, mergeBase: null, prediction: null }, values).map((block) => block.reason)
   }
-
-  test("blocks checking out the branch that is already checked out", () => {
-    expect(blocksFor(null, ref(["HEAD -> main"], "a"), "checkout")).toEqual(["main is already checked out here"])
-  })
 
   test("blocks pushing a branch the remote already has", () => {
     const synced = ref(["feature"], "b", { branch: "feature", upstream: "origin/feature", ahead: 0, behind: 0, isGone: false })
@@ -192,7 +244,7 @@ describe("deleting a remote branch", () => {
 
 describe("outcome prediction", () => {
   test("asks for the commit message a squash merge needs before it can be run", () => {
-    const { operation, request } = entryFor(null, topic, "merge")
+    const { operation, request } = entryFor(null, topic, "mergeIntoCurrent")
     const squashing = resolveFields(operation, request, { mode: "squash" })
 
     expect(resolveFields(operation, request, {}).fields.map((field) => field.key)).toEqual(["mode"])
@@ -203,7 +255,7 @@ describe("outcome prediction", () => {
   })
 
   test("commits the squash rather than leaving it staged", () => {
-    const { operation, request } = entryFor(null, topic, "merge")
+    const { operation, request } = entryFor(null, topic, "mergeIntoCurrent")
     const plan = operation.plan(request, { mode: "squash", message: " one commit " }, IDLE)
 
     expect(plan.argv).toEqual(["git", "merge", "--squash", "topic", "&&", "git", "commit", "--message", "one commit"])
@@ -211,7 +263,7 @@ describe("outcome prediction", () => {
   })
 
   test("keeps a message typed for a squash out of a merge that is no longer squashing", () => {
-    const { operation, request } = entryFor(null, topic, "merge")
+    const { operation, request } = entryFor(null, topic, "mergeIntoCurrent")
     const typed = { mode: "squash", message: "one commit" }
 
     expect(resolveFields(operation, request, typed).values).toEqual(typed)
@@ -221,7 +273,7 @@ describe("outcome prediction", () => {
   })
 
   test("warns that a fast-forward only merge has no fast-forward to make", () => {
-    const { operation, request } = entryFor(null, topic, "merge")
+    const { operation, request } = entryFor(null, topic, "mergeIntoCurrent")
     const state = { ...IDLE, branch: { exists: true, isCurrentWorktree: true, isDirty: false, pendingOperation: null, sha: "a", worktreePath: "/repo" }, mergeBase: "b" }
     const messages = operation.warnings(request, state, { mode: "fastForwardOnly" }).map((warning) => warning.message)
 
@@ -247,7 +299,7 @@ describe("outcome prediction", () => {
     expect(needsOf(range, range, "cherryPick")).toBe("rebase")
     expect(needsOf(range, range, "revert")).toBe("revert")
     expect(needsOf(range, range, "dropCommits")).toBe("rebase")
-    expect(needsOf(null, topic, "merge")).toBe("merge")
+    expect(needsOf(null, topic, "mergeIntoCurrent")).toBe("merge")
   })
 
   test("makes every offered operation answer where it lands", () => {
