@@ -606,7 +606,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     rowVirtualizer.scrollToOffset(0)
   }, [comparison, rowVirtualizer])
 
-  // A fold changes the heights the scroller was measured at, so they are dropped and taken again. Dropping
+  // A fold or changed expanded context changes the heights the scroller was measured at, so they are dropped and taken again. Dropping
   // them leaves the cards still on screen at their estimates, which only a resize would correct, so they
   // are measured back right away, once the estimates have replaced the sizes a measurement is compared
   // against. Only a fold that moved what sits above the scroller asks to be put back where it was, and
@@ -622,7 +622,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     if (index !== -1) {
       rowVirtualizer.scrollToIndex(index, { align: "start" })
     }
-  }, [files, isFolded, mode, rowVirtualizer, wrap])
+  }, [allExpanded, files, isFolded, mode, rowVirtualizer, wrap])
 
   useEffect(() => {
     request(virtualRows.map((row) => files[row.index]).filter((file) => !file.isBinary && !isFolded(file) && (!isLargeDiff(file) || expanded.has(fileKey(file)))))
@@ -720,7 +720,9 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   function toggleAllExpanded(file: ChangedFile) {
     const key = fileKey(file)
     const next = new Set(allExpanded)
-    if (!next.delete(key)) {
+    if (next.delete(key)) {
+      anchorFold(file)
+    } else {
       next.add(key)
     }
     setAllExpanded(next)
