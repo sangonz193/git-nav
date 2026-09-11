@@ -132,6 +132,12 @@ export function graphCanvasHeight(viewportHeight: number, headerHeight = GRAPH_H
   return visible === 0 ? 0 : visible + 2 * GRAPH_CANVAS_OVERSCAN
 }
 
+// A transformed canvas still counts toward the scrollable area, so one that hangs past the last row would
+// make the graph scrollable by its own overhang on every frame.
+export function graphCanvasTop(scrollTop: number, viewportHeight: number, contentHeight: number, headerHeight = GRAPH_HEADER_HEIGHT) {
+  return Math.min(scrollTop - GRAPH_CANVAS_OVERSCAN, headerHeight + contentHeight - graphCanvasHeight(viewportHeight, headerHeight))
+}
+
 export function clampGraphWidth(width: number) {
   return Math.round(Math.max(GRAPH_MIN_WIDTH, Math.min(GRAPH_MAX_WIDTH, width)))
 }
