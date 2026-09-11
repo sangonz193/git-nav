@@ -1535,38 +1535,41 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
     <main className="relative flex h-full flex-col overflow-hidden bg-background" onKeyDown={onPanelKeyDown}>
       <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
         <div className="flex items-center gap-1">
-          <Hinted hint="Find a branch, tag or commit">
-            <Popover onOpenChange={(open) => (open ? openSearch() : setIsSearchOpen(false))} open={isSearchOpen}>
+          <Popover onOpenChange={(open) => (open ? openSearch() : setIsSearchOpen(false))} open={isSearchOpen}>
+            <Tooltip>
               <PopoverTrigger asChild>
-                <Button aria-label="Search the graph" size="icon-sm" type="button" variant="outline">
-                  <Search />
-                </Button>
+                <TooltipTrigger asChild>
+                  <Button aria-label="Search the graph" size="icon-sm" type="button" variant="outline">
+                    <Search />
+                  </Button>
+                </TooltipTrigger>
               </PopoverTrigger>
-              <PopoverContent align="start" className="w-80" onOpenAutoFocus={(event) => event.preventDefault()}>
-                <SearchMenu
-                  activeIndex={searchHitIndex}
-                  inputLabel="Search refs and commits"
-                  inputRef={searchField}
-                  items={searchMenuItems}
-                  onClose={() => setIsSearchOpen(false)}
-                  onHighlight={(index) => {
-                    setSearchHitIndex(index)
-                    activateSearchHit(searchHits[index])
-                  }}
-                  onQueryChange={setSearchInput}
-                  onSelect={(index, source) => {
-                    setSearchHitIndex(index)
-                    activateSearchHit(searchHits[index])
-                    if (source === "enter") {
-                      setIsSearchOpen(false)
-                    }
-                  }}
-                  placeholder="Branch, tag or commit"
-                  query={searchInput}
-                />
-              </PopoverContent>
-            </Popover>
-          </Hinted>
+              <TooltipContent>Find a branch, tag or commit</TooltipContent>
+            </Tooltip>
+            <PopoverContent align="start" className="w-80" onOpenAutoFocus={(event) => event.preventDefault()}>
+              <SearchMenu
+                activeIndex={searchHitIndex}
+                inputLabel="Search refs and commits"
+                inputRef={searchField}
+                items={searchMenuItems}
+                onClose={() => setIsSearchOpen(false)}
+                onHighlight={(index) => {
+                  setSearchHitIndex(index)
+                  activateSearchHit(searchHits[index])
+                }}
+                onQueryChange={setSearchInput}
+                onSelect={(index, source) => {
+                  setSearchHitIndex(index)
+                  activateSearchHit(searchHits[index])
+                  if (source === "enter") {
+                    setIsSearchOpen(false)
+                  }
+                }}
+                placeholder="Branch, tag or commit"
+                query={searchInput}
+              />
+            </PopoverContent>
+          </Popover>
         </div>
         <div className="flex items-center gap-1">
           <DropdownMenu>
