@@ -869,7 +869,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   )
 
   const pickerMenu = (side: PickerSide) => (
-    <PopoverContent align="start" className="w-auto" collisionBoundary={panel.current} onOpenAutoFocus={(event) => event.preventDefault()} style={{ width: isNarrow ? panelWidth - 16 : PICKER_MENU_WIDTH }}>
+    <PopoverContent align="start" className="w-auto" collisionBoundary={panel.current} collisionPadding={8} onOpenAutoFocus={(event) => event.preventDefault()} style={{ width: isNarrow ? panelWidth - 16 : PICKER_MENU_WIDTH }}>
       <SearchMenu
         activeIndex={hitIndex}
         emptyMessage="No branch, tag, commit or revision matches"
