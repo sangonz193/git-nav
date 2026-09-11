@@ -989,7 +989,7 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
             {isSidebarOpen && (
               <>
                 <ResizablePanel defaultSize="22%" maxSize="40%" minSize="15%">{sidebar}</ResizablePanel>
-                <ResizableHandle withHandle />
+                <ResizableHandle />
               </>
             )}
             <ResizablePanel minSize="40%">{diffScroll}</ResizablePanel>
