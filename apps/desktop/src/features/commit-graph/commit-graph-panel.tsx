@@ -11,6 +11,7 @@ import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@workspace/shadcn/components/context-menu"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@workspace/shadcn/components/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
 import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDownUp, Cloud, CodeXml, Copy, ExternalLink, FileDiff, FilePen, FolderOpen, GitBranch, GitCompareArrows, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, LoaderCircle, RefreshCw, Search, SlidersHorizontal, Tag, Terminal, Undo2, X } from "lucide-react"
@@ -1535,9 +1536,36 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
       <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
         <div className="flex items-center gap-1">
           <Hinted hint="Find a branch, tag or commit">
-            <Button aria-label="Search the graph" onClick={openSearch} size="icon-sm" type="button" variant="outline">
-              <Search />
-            </Button>
+            <Popover onOpenChange={(open) => (open ? openSearch() : setIsSearchOpen(false))} open={isSearchOpen}>
+              <PopoverTrigger asChild>
+                <Button aria-label="Search the graph" size="icon-sm" type="button" variant="outline">
+                  <Search />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-80" onOpenAutoFocus={(event) => event.preventDefault()}>
+                <SearchMenu
+                  activeIndex={searchHitIndex}
+                  inputLabel="Search refs and commits"
+                  inputRef={searchField}
+                  items={searchMenuItems}
+                  onClose={() => setIsSearchOpen(false)}
+                  onHighlight={(index) => {
+                    setSearchHitIndex(index)
+                    activateSearchHit(searchHits[index])
+                  }}
+                  onQueryChange={setSearchInput}
+                  onSelect={(index, source) => {
+                    setSearchHitIndex(index)
+                    activateSearchHit(searchHits[index])
+                    if (source === "enter") {
+                      setIsSearchOpen(false)
+                    }
+                  }}
+                  placeholder="Branch, tag or commit"
+                  query={searchInput}
+                />
+              </PopoverContent>
+            </Popover>
           </Hinted>
         </div>
         <div className="flex items-center gap-1">
@@ -1640,31 +1668,6 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
           </ButtonGroup>
         </div>
       </div>
-      {isSearchOpen && (
-        <div className="absolute top-11 left-2 z-10 w-80">
-          <SearchMenu
-            activeIndex={searchHitIndex}
-            inputLabel="Search refs and commits"
-            inputRef={searchField}
-            items={searchMenuItems}
-            onClose={() => setIsSearchOpen(false)}
-            onHighlight={(index) => {
-              setSearchHitIndex(index)
-              activateSearchHit(searchHits[index])
-            }}
-            onQueryChange={setSearchInput}
-            onSelect={(index, source) => {
-              setSearchHitIndex(index)
-              activateSearchHit(searchHits[index])
-              if (source === "enter") {
-                setIsSearchOpen(false)
-              }
-            }}
-            placeholder="Branch, tag or commit"
-            query={searchInput}
-          />
-        </div>
-      )}
       <div aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits." aria-multiselectable className={`commit-graph-scroll${rangeDrag ? " is-selecting" : ""}${rangeDrag && !selection ? " is-unrelated" : ""}`} onScroll={onScroll} ref={scrollElement} role="grid" style={{ "--commit-row-height": `${rowHeight}px`, "--graph-width": `${graphWidth}px` } as CSSProperties}>
         <div className="commit-graph-header">
           <div className="commit-graph-header-content" role="row" style={{ minWidth: tableWidth }}>

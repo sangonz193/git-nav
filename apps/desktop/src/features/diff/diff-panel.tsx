@@ -10,6 +10,7 @@ import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { Checkbox } from "@workspace/shadcn/components/checkbox"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@workspace/shadcn/components/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@workspace/shadcn/components/popover"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@workspace/shadcn/components/resizable"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@workspace/shadcn/components/tooltip"
 import { toast } from "@workspace/shadcn/components/sonner"
@@ -427,7 +428,6 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   const [isNarrow, setIsNarrow] = useState(false)
   const [panelWidth, setPanelWidth] = useState(0)
   const panel = useRef<HTMLElement>(null)
-  const pickerButtons = useRef<Record<PickerSide, HTMLButtonElement | null>>({ base: null, head: null })
   const scrollElement = useRef<HTMLDivElement>(null)
   const pendingScroll = useRef<string | null>(null)
   const pendingAnchor = useRef<string | null>(null)
@@ -804,10 +804,6 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
   }
 
   const isSplit = (mode & DiffModeEnum.Split) !== 0
-  const pickerAnchor = pickerButtons.current[picker ?? "base"]
-  const pickerLeft = isNarrow || !pickerAnchor
-    ? 8
-    : Math.max(8, Math.min(pickerAnchor.offsetLeft, panelWidth - PICKER_MENU_WIDTH - 8))
 
   const emptyNotice = comparison && files.length === 0 && (
     changedCount === 0
@@ -865,6 +861,26 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
     </div>
   )
 
+  const pickerMenu = (side: PickerSide) => (
+    <PopoverContent align="start" className="w-auto" collisionBoundary={panel.current} onOpenAutoFocus={(event) => event.preventDefault()} style={{ width: isNarrow ? panelWidth - 16 : PICKER_MENU_WIDTH }}>
+      <SearchMenu
+        activeIndex={hitIndex}
+        emptyMessage="No branch, tag, commit or revision matches"
+        inputLabel={side === "base" ? "Search for a base to compare from" : "Search for a head to compare to"}
+        items={menuItems}
+        onClose={() => setPicker(null)}
+        onHighlight={setHitIndex}
+        onQueryChange={setSearchInput}
+        onSelect={(index) => {
+          setHitIndex(index)
+          selectHit(hits[index])
+        }}
+        placeholder="Branch, tag, commit or revision"
+        query={searchInput}
+      />
+    </PopoverContent>
+  )
+
   return (
     <section className="diff-panel" ref={panel}>
       <div className="diff-toolbar">
@@ -875,20 +891,30 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
             <PanelLeft />
           </Button>
         </Hinted>
-        <Button aria-expanded={picker === "base"} className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} onClick={() => openPicker("base")} ref={(element) => { pickerButtons.current.base = element }} size="sm" type="button" variant="outline">
-          <span className="truncate">{refs.baseLabel}</span>
-          <ChevronDown />
-        </Button>
+        <Popover onOpenChange={(open) => (open ? openPicker("base") : setPicker(null))} open={picker === "base"}>
+          <PopoverTrigger asChild>
+            <Button className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} size="sm" type="button" variant="outline">
+              <span className="truncate">{refs.baseLabel}</span>
+              <ChevronDown />
+            </Button>
+          </PopoverTrigger>
+          {pickerMenu("base")}
+        </Popover>
         <Hinted hint={refs.mergeBase ? `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}` : `Changes between ${refs.baseLabel} and ${refs.headLabel}`}>
           <Button aria-label="Compare since the two sides forked" aria-pressed={refs.mergeBase} className={refs.mergeBase ? "bg-muted" : undefined} onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })} size="sm" type="button" variant="ghost">
             <span className="text-muted-foreground">{rangeMarker(refs)}</span>
             {panelWidth >= WIDE_DIFF_PANEL_WIDTH && (refs.mergeBase ? "Since fork" : "Direct")}
           </Button>
         </Hinted>
-        <Button aria-expanded={picker === "head"} className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} onClick={() => openPicker("head")} ref={(element) => { pickerButtons.current.head = element }} size="sm" type="button" variant="outline">
-          <HeadPickerLabel label={refs.headLabel} reference={refs.head} />
-          <ChevronDown />
-        </Button>
+        <Popover onOpenChange={(open) => (open ? openPicker("head") : setPicker(null))} open={picker === "head"}>
+          <PopoverTrigger asChild>
+            <Button className={isNarrow ? "min-w-0 flex-1 justify-between" : "w-45 justify-between"} size="sm" type="button" variant="outline">
+              <HeadPickerLabel label={refs.headLabel} reference={refs.head} />
+              <ChevronDown />
+            </Button>
+          </PopoverTrigger>
+          {pickerMenu("head")}
+        </Popover>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {!isNarrow && (
             <ButtonGroup>
@@ -958,25 +984,6 @@ export function DiffPanel({ api, params }: IDockviewPanelProps<DiffPanelParams>)
           </Hinted>
         </div>
       </div>
-      {picker !== null && (
-        <div className="absolute top-11 z-20" style={{ left: pickerLeft, right: isNarrow ? 8 : undefined, width: isNarrow ? undefined : PICKER_MENU_WIDTH }}>
-          <SearchMenu
-            activeIndex={hitIndex}
-            emptyMessage="No branch, tag, commit or revision matches"
-            inputLabel={picker === "base" ? "Search for a base to compare from" : "Search for a head to compare to"}
-            items={menuItems}
-            onClose={() => setPicker(null)}
-            onHighlight={setHitIndex}
-            onQueryChange={setSearchInput}
-            onSelect={(index) => {
-              setHitIndex(index)
-              selectHit(hits[index])
-            }}
-            placeholder="Branch, tag, commit or revision"
-            query={searchInput}
-          />
-        </div>
-      )}
       <div className="diff-content">
         {isNarrow ? (
           <>
