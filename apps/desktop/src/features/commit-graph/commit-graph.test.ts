@@ -14,6 +14,7 @@ import {
   GRAPH_MIN_WIDTH,
   GRAPH_CANVAS_OVERSCAN,
   graphCanvasHeight,
+  graphCanvasTop,
   isCurrentCheckout,
   laneColor,
   parentEdgeColor,
@@ -523,6 +524,22 @@ describe("graphCanvasHeight", () => {
 
   test("stays at zero for a viewport shorter than the header", () => {
     expect(graphCanvasHeight(0)).toBe(0)
+  })
+})
+
+describe("graphCanvasTop", () => {
+  test("starts an overscan above the scroll position", () => {
+    expect(graphCanvasTop(1_000, 400, 10_000)).toBe(1_000 - GRAPH_CANVAS_OVERSCAN)
+  })
+
+  test("ends at the last row when the scroll position nears the end", () => {
+    const contentHeight = 1_200
+    const top = graphCanvasTop(contentHeight - 400 + GRAPH_HEADER_HEIGHT, 400, contentHeight)
+    expect(top + graphCanvasHeight(400)).toBe(GRAPH_HEADER_HEIGHT + contentHeight)
+  })
+
+  test("ends at the last row when the rows fit in the viewport", () => {
+    expect(graphCanvasTop(0, 400, 100) + graphCanvasHeight(400)).toBe(GRAPH_HEADER_HEIGHT + 100)
   })
 })
 

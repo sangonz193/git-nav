@@ -19,7 +19,7 @@ import { AppWindow, Archive, ArrowDown, ArrowUp, Broom, ChevronDown, ChevronsDow
 import { type CSSProperties, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { drawCommitGraph } from "./commit-graph-canvas"
-import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_CANVAS_OVERSCAN, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, isCurrentCheckout, laneColor, persistedGraphPanelParams, persistedSelectionHashes, persistedSelectionRestore, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type PullRequestState, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
+import { ancestryPath, chipLabel, chipName, clampGraphWidth, commitFromTuple, commitSelection, displayRefs, fitGraphWidth, GRAPH_HEADER_HEIGHT, GRAPH_WIDTH, graphCanvasHeight, graphCanvasTop, isCurrentCheckout, laneColor, persistedGraphPanelParams, persistedSelectionHashes, persistedSelectionRestore, pullRequestDescription, REF_BUDGET_SHARE, refName, refSelection, refSyncLabel, relativeDate, ROW_HEIGHT, splitRefLabel, syncDescription, worktreeChanges, worktreeDescription, unpushedHashes, unpushedLanes, visibleChipCount, type BranchPullRequest, type BranchSync, type PullRequestState, type RowWorktree, type Commit, type CommitBatch, type CommitSelection, type DisplayRef, type RowChip, type PendingOperation, type Selection, type SquashMergeInference, type StashEntry } from "./commit-graph"
 import { appendGraphRows, CHIP_KIND_LABELS, commitChips, isMarkedCommit, rowIndexOfCommit, searchGraph, useViewConfig, type ChipContext, type ChipKind, type CleanOptions, type GraphRow, type GraphRows, type SearchHit, type ViewConfig, type ViewConfigChange } from "./commit-graph-view"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { LabelText, OperationDialog, OperationMenuItems } from "./commit-operation-menu"
@@ -450,7 +450,7 @@ function CommitGraphPanelContent({ api, containerApi, params, config, updateConf
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
   const virtualScrollTop = rowVirtualizer.scrollOffset ?? 0
-  const graphScrollTop = virtualScrollTop - GRAPH_CANVAS_OVERSCAN
+  const graphScrollTop = graphCanvasTop(virtualScrollTop, scroll.height, rowVirtualizer.getTotalSize())
   const currentCheckoutRow = currentCheckoutIndex === -1 ? -1 : rowOfCommit(currentCheckoutIndex)
   // The brackets are drawn on rows while the drag they adjust is anchored on commits, so an endpoint carries both.
   const selectionRowEdges = selectionEdges && {
