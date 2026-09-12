@@ -40,7 +40,7 @@ type CommitDetails = {
 type DiffStatFile = {
   path: string
   oldPath: string | null
-  status: string | null
+  status: string
   additions: number | null
   deletions: number | null
 }
@@ -136,7 +136,7 @@ function FileList({
               }
               type="button"
             >
-              {file.status && <FileStatusLetter letter={file.status} />}
+              <FileStatusLetter letter={file.status} />
               <span className="commit-graph-details-path">{file.path}</span>
               {file.additions !== null && file.deletions !== null && (
                 <FileStat

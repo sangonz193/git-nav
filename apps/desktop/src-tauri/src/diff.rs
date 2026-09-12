@@ -1,6 +1,6 @@
 use base64::Engine;
 use serde::Serialize;
-use std::{collections::{HashMap, HashSet}, fs, io::Read, path::Path};
+use std::{collections::HashSet, fs, io::Read, path::Path};
 use crate::git::{WORKTREE_REF, git_output, git_output_allow_empty, git_output_bytes, git_result, worktree_path};
 
 #[derive(Serialize)]
@@ -117,25 +117,34 @@ const RAW_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--
 const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
 
 const NUMSTAT_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z"];
-const NAME_STATUS_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--name-status", "-z"];
+const DIFF_STAT_ARGUMENTS: [&str; 8] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--raw", "--abbrev=40", "--numstat", "-z"];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiffStatFile {
     path: String,
     old_path: Option<String>,
-    // The letter git gives the change: A, M, D, R, C or T.
-    status: Option<String>,
+    status: String,
     // A binary file has no line counts.
     additions: Option<u32>,
     deletions: Option<u32>,
 }
 
-fn parse_numstat(output: &[u8]) -> Vec<DiffStatFile> {
-    let mut fields = output
+struct NumstatFile {
+    path: String,
+    old_path: Option<String>,
+    additions: Option<u32>,
+    deletions: Option<u32>,
+}
+
+fn parse_numstat(output: &[u8]) -> Vec<NumstatFile> {
+    parse_numstat_fields(output
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty())
-        .map(|field| String::from_utf8_lossy(field).into_owned());
+        .map(|field| String::from_utf8_lossy(field).into_owned()))
+}
+
+fn parse_numstat_fields(mut fields: impl Iterator<Item = String>) -> Vec<NumstatFile> {
     let mut files = Vec::new();
     while let Some(record) = fields.next() {
         let mut columns = record.splitn(3, '\t');
@@ -150,32 +159,42 @@ fn parse_numstat(output: &[u8]) -> Vec<DiffStatFile> {
                 (Some(old_path), path)
             }
         };
-        files.push(DiffStatFile { path, old_path, status: None, additions, deletions });
+        files.push(NumstatFile { path, old_path, additions, deletions });
     }
     files
 }
 
-// "M\0path\0" for most changes; a rename or copy carries a score and both paths, "R100\0old\0new\0".
-fn parse_name_status(output: &[u8]) -> HashMap<String, String> {
-    let mut fields = output
+fn parse_diff_stat(output: &[u8]) -> Vec<DiffStatFile> {
+    let fields: Vec<_> = output
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty())
-        .map(|field| String::from_utf8_lossy(field).into_owned());
-    let mut statuses = HashMap::new();
-    while let Some(status) = fields.next() {
-        let Some(first_path) = fields.next() else {
+        .collect();
+    let mut files = Vec::new();
+    let mut index = 0;
+    while let Some(record) = fields.get(index).filter(|record| record.starts_with(b":")) {
+        index += 1;
+        let Some(status) = String::from_utf8_lossy(record).split_ascii_whitespace().last().and_then(|status| status.chars().next()).map(|status| status.to_string()) else {
             break;
         };
-        let letter = status.chars().next().unwrap_or_default().to_string();
-        let path = if matches!(letter.as_str(), "R" | "C") {
-            let Some(new_path) = fields.next() else { break };
-            new_path
-        } else {
-            first_path
+        let Some(first_path) = fields.get(index) else {
+            break;
         };
-        statuses.insert(path, letter);
+        index += 1;
+        let first_path = String::from_utf8_lossy(first_path).into_owned();
+        let (old_path, path) = if matches!(status.as_str(), "R" | "C") {
+            let Some(path) = fields.get(index) else { break };
+            index += 1;
+            (Some(first_path), String::from_utf8_lossy(path).into_owned())
+        } else {
+            (None, first_path)
+        };
+        files.push(DiffStatFile { path, old_path, status, additions: None, deletions: None });
     }
-    statuses
+    files
+        .into_iter()
+        .zip(parse_numstat_fields(fields[index..].iter().map(|field| String::from_utf8_lossy(field).into_owned())))
+        .map(|(file, stat)| DiffStatFile { additions: stat.additions, deletions: stat.deletions, ..file })
+        .collect()
 }
 
 fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
@@ -472,15 +491,9 @@ pub(crate) fn diff_stat(repo_path: String, base: String, head: String) -> Result
     let base = crate::git::resolve_commit(&repo_path, &base)?;
     let head = crate::git::resolve_commit(&repo_path, &head)?;
     let revisions = [base.as_str(), head.as_str()];
-    let numstat = git_output_bytes(&repo_path, &[&NUMSTAT_ARGUMENTS[..], &revisions].concat())
+    let output = git_output_bytes(&repo_path, &[&DIFF_STAT_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    let name_status = git_output_bytes(&repo_path, &[&NAME_STATUS_ARGUMENTS[..], &revisions].concat())
-        .ok_or_else(|| "git diff failed.".to_string())?;
-    let mut statuses = parse_name_status(&name_status);
-    Ok(parse_numstat(&numstat)
-        .into_iter()
-        .map(|file| DiffStatFile { status: statuses.remove(&file.path), ..file })
-        .collect())
+    Ok(parse_diff_stat(&output))
 }
 
 #[cfg(test)]
@@ -499,14 +512,23 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_status_letter_of_each_changed_path() {
-        let statuses = parse_name_status(b"M\0src/a.rs\0A\0image.png\0R100\0old.txt\0new.txt\0D\0gone.txt\0");
+    fn reads_counts_statuses_and_paths_from_combined_diff_output() {
+        let files = parse_diff_stat(concat!(
+            ":100644 100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb M\0src/a.rs\0",
+            ":000000 100644 0000000000000000000000000000000000000000 cccccccccccccccccccccccccccccccccccccccc A\0src/new.rs\0",
+            ":100644 100644 dddddddddddddddddddddddddddddddddddddddd eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee R100\0old.txt\0new.txt\0",
+            ":100644 100644 ffffffffffffffffffffffffffffffffffffffff 1111111111111111111111111111111111111111 M\0image.png\0",
+            "3\t1\tsrc/a.rs\0",
+            "4\t0\tsrc/new.rs\0",
+            "0\t0\t\0old.txt\0new.txt\0",
+            "-\t-\timage.png\0",
+        ).as_bytes());
 
-        assert_eq!(statuses.get("src/a.rs").map(String::as_str), Some("M"));
-        assert_eq!(statuses.get("image.png").map(String::as_str), Some("A"));
-        assert_eq!(statuses.get("new.txt").map(String::as_str), Some("R"));
-        assert_eq!(statuses.get("gone.txt").map(String::as_str), Some("D"));
-        assert_eq!(statuses.len(), 4);
+        assert_eq!(files.len(), 4);
+        assert_eq!((files[0].path.as_str(), files[0].status.as_str(), files[0].additions, files[0].deletions), ("src/a.rs", "M", Some(3), Some(1)));
+        assert_eq!((files[1].path.as_str(), files[1].status.as_str(), files[1].additions, files[1].deletions), ("src/new.rs", "A", Some(4), Some(0)));
+        assert_eq!((files[2].old_path.as_deref(), files[2].path.as_str(), files[2].status.as_str()), (Some("old.txt"), "new.txt", "R"));
+        assert_eq!((files[3].path.as_str(), files[3].status.as_str(), files[3].additions, files[3].deletions), ("image.png", "M", None, None));
     }
 
     #[test]
