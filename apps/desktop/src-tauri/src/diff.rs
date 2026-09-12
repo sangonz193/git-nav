@@ -393,6 +393,7 @@ fn worktree_binary_content(root: &str, path: &str) -> Result<BinaryContent, Stri
     let size = metadata.len();
     let bytes = metadata.file_type().is_file().then_some(())
         .and(image_mime_type(path))
+        .filter(|_| size <= IMAGE_PREVIEW_LIMIT as u64)
         .map(|_| {
             let mut bytes = Vec::new();
             file.take(IMAGE_PREVIEW_LIMIT as u64 + 1)
