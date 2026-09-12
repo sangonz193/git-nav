@@ -90,6 +90,7 @@ const DIFF_PREFERENCE_CHECKS = {
 } satisfies Checks<DiffPanelUserPreferences>
 
 const GRAPH_PREFERENCE_CHECKS = {
+  collapseUnmarked: isBoolean,
   columnWidths: (value): value is Record<string, number> =>
     isObject(value) &&
     Object.values(value).every(

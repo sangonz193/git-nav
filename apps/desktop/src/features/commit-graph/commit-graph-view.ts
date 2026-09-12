@@ -22,12 +22,10 @@ export type CleanOptions = {
 export type ViewConfig = {
   chipKinds: Record<ChipKind, boolean>
   cleanOptions: CleanOptions
-  collapseUnmarked: boolean
 }
 export type ViewConfigChange = {
   chipKinds?: Partial<Record<ChipKind, boolean>>
   cleanOptions?: Partial<CleanOptions>
-  collapseUnmarked?: boolean
 }
 
 export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
@@ -44,7 +42,6 @@ export const DEFAULT_VIEW_CONFIG: ViewConfig = {
     deleteMergedBranches: false,
     deleteSquashMergedBranches: false,
   },
-  collapseUnmarked: true,
 }
 
 const LEGACY_VIEW_CONFIG_KEY = "git-nav.commit-graph.view"
@@ -94,10 +91,6 @@ function parsedViewConfig(stored: unknown): ViewConfig | null {
           DEFAULT_VIEW_CONFIG.cleanOptions.deleteSquashMergedBranches,
         ),
       },
-      collapseUnmarked: booleanOr(
-        value.collapseUnmarked,
-        DEFAULT_VIEW_CONFIG.collapseUnmarked,
-      ),
     }
   } catch {
     return null
@@ -118,7 +111,6 @@ export function viewConfigSettingKeys(clientId: string) {
       deleteMergedBranches: `${prefix}.clean-options.delete-merged-branches`,
       deleteSquashMergedBranches: `${prefix}.clean-options.delete-squash-merged-branches`,
     },
-    collapseUnmarked: `${prefix}.collapse-unmarked`,
   }
 }
 
@@ -144,7 +136,6 @@ function viewConfigSettings(
       keys.cleanOptions.deleteSquashMergedBranches,
       config.cleanOptions.deleteSquashMergedBranches,
     ],
-    [keys.collapseUnmarked, config.collapseUnmarked],
   ]
 }
 
@@ -184,10 +175,6 @@ function viewConfigFromSettings(
         fallback.cleanOptions.deleteSquashMergedBranches,
       ),
     },
-    collapseUnmarked: booleanOr(
-      settings[keys.collapseUnmarked],
-      fallback.collapseUnmarked,
-    ),
   }
 }
 
@@ -292,9 +279,6 @@ function viewConfigChanges(change: ViewConfigChange, clientId: string) {
         value,
       ])
     }
-  }
-  if (typeof change.collapseUnmarked === "boolean") {
-    changedSettings.push([keys.collapseUnmarked, change.collapseUnmarked])
   }
   return changedSettings
 }

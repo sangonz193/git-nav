@@ -525,6 +525,9 @@ function CommitGraphPanelContent({
   const [columnSizing, setColumnSizing] = useState<Record<string, number>>(
     () => params.userPreferences?.columnWidths ?? {},
   )
+  const [collapseUnmarked, setCollapseUnmarked] = useState(
+    params.userPreferences?.collapseUnmarked ?? true,
+  )
   const selectionRestore = useRef(
     createUserWinningRestore(params.selectedCommitHashes !== undefined),
   ).current
@@ -769,6 +772,7 @@ function CommitGraphPanelContent({
           params.path,
           restored.selectedCommitHashes,
           columnSizing,
+          collapseUnmarked,
         ),
       )
       setSelectionRange(restored.range)
@@ -776,6 +780,7 @@ function CommitGraphPanelContent({
     })
   }, [
     api,
+    collapseUnmarked,
     columnSizing,
     commits,
     isGraphWindowLoading,
@@ -795,10 +800,12 @@ function CommitGraphPanelContent({
         params.path,
         selectedCommitHashes,
         columnSizing,
+        collapseUnmarked,
       ),
     )
   }, [
     api,
+    collapseUnmarked,
     columnSizing,
     params.name,
     params.path,
@@ -895,7 +902,7 @@ function CommitGraphPanelContent({
     value: GraphRows
   } | null>(null)
   const rows = useMemo(() => {
-    if (!config.collapseUnmarked) {
+    if (!collapseUnmarked) {
       rowsCache.current = null
       return null
     }
@@ -917,7 +924,7 @@ function CommitGraphPanelContent({
     )
     rowsCache.current = { commits, marksKey, revealed, value }
     return value.rows
-  }, [chipContext, commits, config.collapseUnmarked, marksKey, revealed])
+  }, [chipContext, collapseUnmarked, commits, marksKey, revealed])
   const searchHits = useMemo(
     () =>
       isSearchOpen ?
@@ -1538,7 +1545,7 @@ function CommitGraphPanelContent({
       ]
     pendingScrollHash.current = top?.hash ?? null
     setRevealed(new Set())
-    updateConfig({ collapseUnmarked: collapse })
+    setCollapseUnmarked(collapse)
   }
 
   function revealRun(startHash: string) {
@@ -2514,21 +2521,21 @@ function CommitGraphPanelContent({
         <div className="flex items-center gap-1">
           <Hinted
             hint={
-              config.collapseUnmarked ? "Show every commit" : (
+              collapseUnmarked ? "Show every commit" : (
                 "Collapse commits nothing points at"
               )
             }
           >
             <Button
               aria-label="Collapse commits nothing points at"
-              aria-pressed={config.collapseUnmarked}
-              className={config.collapseUnmarked ? "bg-muted" : undefined}
-              onClick={() => collapseUnmarkedCommits(!config.collapseUnmarked)}
+              aria-pressed={collapseUnmarked}
+              className={collapseUnmarked ? "bg-muted" : undefined}
+              onClick={() => collapseUnmarkedCommits(!collapseUnmarked)}
               size="icon-sm"
               type="button"
               variant="outline"
             >
-              {config.collapseUnmarked ?
+              {collapseUnmarked ?
                 <UnfoldVertical />
               : <FoldVertical />}
             </Button>

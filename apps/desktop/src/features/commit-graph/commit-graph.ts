@@ -430,13 +430,16 @@ export function persistedGraphPanelParams(
   path: string,
   selectedCommitHashes: string[],
   columnWidths: Record<string, number>,
+  collapseUnmarked: boolean,
 ) {
   return {
     name,
     path,
     selectedCommitHashes,
-    userPreferences:
-      Object.keys(columnWidths).length > 0 ? { columnWidths } : undefined,
+    userPreferences: {
+      collapseUnmarked,
+      ...(Object.keys(columnWidths).length > 0 ? { columnWidths } : {}),
+    },
   }
 }
 
