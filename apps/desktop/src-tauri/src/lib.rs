@@ -114,6 +114,8 @@ commands![
     operations::reset_current,
     stash::stash_list,
     graph::commit_details,
+    graph::ref_divergence,
+    graph::tag_details,
     diff::diff_stat,
     stash::stash_changes,
     stash::stash_action,

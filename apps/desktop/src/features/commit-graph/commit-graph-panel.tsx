@@ -785,6 +785,13 @@ function CommitGraphPanelContent({
     },
     [commitIndexesByHash, commits, scrollToCommit, selectCommit],
   )
+  const commitByHash = useCallback(
+    (hash: string) => {
+      const index = commitIndexesByHash.get(hash)
+      return index === undefined ? null : (commits[index] ?? null)
+    },
+    [commitIndexesByHash, commits],
+  )
 
   function scrollToCurrentCheckout() {
     if (currentCheckoutIndex === -1) {
@@ -1338,8 +1345,12 @@ function CommitGraphPanelContent({
           onPeekHeightChange={setSheetPeekHeight}
           openSelectionDiff={openSelectionDiff}
           repoPath={params.path}
+          refreshKey={graphVersion}
           selectCommit={selectCommitByHash}
           selection={selection}
+          tipCommit={
+            selection.kind === "commits" ? null : commitByHash(selection.sha)
+          }
         />
       )}
       {commits.length === 0 && !error && (

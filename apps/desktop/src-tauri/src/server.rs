@@ -165,6 +165,8 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::reset_current => Exposure::Api(post(crate::operations::__http_reset_current)),
         IpcCommand::stash_list => Exposure::Api(post(crate::stash::__http_stash_list)),
         IpcCommand::commit_details => Exposure::Api(post(crate::graph::__http_commit_details)),
+        IpcCommand::ref_divergence => Exposure::Api(post(crate::graph::__http_ref_divergence)),
+        IpcCommand::tag_details => Exposure::Api(post(crate::graph::__http_tag_details)),
         IpcCommand::diff_stat => Exposure::Api(post(crate::diff::__http_diff_stat)),
         IpcCommand::stash_changes => Exposure::Api(post(crate::stash::__http_stash_changes)),
         IpcCommand::stash_action => Exposure::Api(post(crate::stash::__http_stash_action)),

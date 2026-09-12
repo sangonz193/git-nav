@@ -282,6 +282,116 @@ pub(crate) fn commit_details(repo_path: String, hash: String) -> Result<CommitDe
     parse_commit_details(&output).ok_or_else(|| format!("Could not read {hash}."))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommitSummary {
+    hash: String,
+    subject: String,
+    author: String,
+    date: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RefDivergence {
+    ahead: Vec<CommitSummary>,
+    behind: Vec<CommitSummary>,
+    ahead_total: u32,
+    behind_total: u32,
+}
+
+fn parse_commit_summaries(output: &str) -> Vec<CommitSummary> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(4, '\0');
+            Some(CommitSummary {
+                hash: fields.next()?.to_string(),
+                subject: fields.next()?.to_string(),
+                author: fields.next()?.to_string(),
+                date: fields.next()?.trim_end().to_string(),
+            })
+        })
+        .collect()
+}
+
+fn parse_divergence_counts(output: &str) -> Option<(u32, u32)> {
+    let mut counts = output.split_whitespace();
+    Some((counts.next()?.parse().ok()?, counts.next()?.parse().ok()?))
+}
+
+fn divergence_commits(repo_path: &str, range: &str) -> Result<Vec<CommitSummary>, String> {
+    let output = git_output_allow_empty(
+        repo_path,
+        &[
+            "log",
+            "--format=%H%x00%s%x00%an%x00%aI",
+            "--max-count=100",
+            range,
+        ],
+    )?;
+    Ok(parse_commit_summaries(&output))
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+pub(crate) fn ref_divergence(repo_path: String, reference: String, against: String) -> Result<RefDivergence, String> {
+    let reference_sha = resolve_commit(&repo_path, &reference)?;
+    let against_sha = resolve_commit(&repo_path, &against)?;
+    let symmetric_range = format!("{against_sha}...{reference_sha}");
+    let counts = git_output_allow_empty(&repo_path, &["rev-list", "--left-right", "--count", &symmetric_range])?;
+    let (behind_total, ahead_total) = parse_divergence_counts(&counts)
+        .ok_or_else(|| "Could not count ref divergence.".to_string())?;
+    let ahead_range = format!("{against_sha}..{reference_sha}");
+    let behind_range = format!("{reference_sha}..{against_sha}");
+
+    Ok(RefDivergence {
+        ahead: divergence_commits(&repo_path, &ahead_range)?,
+        behind: divergence_commits(&repo_path, &behind_range)?,
+        ahead_total,
+        behind_total,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagDetails {
+    tagger: String,
+    tagger_email: String,
+    date: String,
+    subject: String,
+    body: String,
+}
+
+fn parse_tag_details(output: &str) -> Option<TagDetails> {
+    let mut fields = output.splitn(6, '\0');
+    if fields.next()? != "tag" {
+        return None;
+    }
+    Some(TagDetails {
+        tagger: fields.next()?.to_string(),
+        tagger_email: fields.next()?.to_string(),
+        date: fields.next()?.to_string(),
+        subject: fields.next()?.to_string(),
+        body: fields.next()?.to_string(),
+    })
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+pub(crate) fn tag_details(repo_path: String, tag: String) -> Result<Option<TagDetails>, String> {
+    let reference = format!("refs/tags/{tag}");
+    let output = git_output_allow_empty(
+        &repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(objecttype)%00%(taggername)%00%(taggeremail:trim)%00%(taggerdate:iso-strict)%00%(contents:subject)%00%(contents:body)",
+            &reference,
+        ],
+    )?;
+    Ok(parse_tag_details(&output))
+}
+
 #[tauri::command]
 pub(crate) fn stream_commit_graph(
     repo_path: String,
@@ -330,6 +440,59 @@ mod tests {
         assert_eq!(details.author_name, "Ada\u{1f}");
         assert_eq!(details.committer_email, "bob@example.com");
         assert_eq!(details.body, "body with \u{1f} inside");
+    }
+
+    #[test]
+    fn reads_commit_summaries_and_divergence_counts() {
+        let commits = parse_commit_summaries(concat!(
+            "abc\0first \u{1f} subject\0Ada\0" ,
+            "2026-01-01T00:00:00+00:00\n",
+        ));
+        let counts = parse_divergence_counts("3\t2\n");
+
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].hash, "abc");
+        assert_eq!(commits[0].subject, "first \u{1f} subject");
+        assert_eq!(commits[0].author, "Ada");
+        assert_eq!(commits[0].date, "2026-01-01T00:00:00+00:00");
+        assert_eq!(counts, Some((3, 2)));
+    }
+
+    #[test]
+    fn reads_divergence_between_refs() {
+        let (path, run) = scratch_repository("ref-divergence");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["branch", "feature"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "main ahead"]);
+        run(&["checkout", "--quiet", "feature"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "feature ahead one"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "feature ahead two"]);
+        run(&["branch", "--set-upstream-to", "main", "feature"]);
+
+        let divergence = ref_divergence(path.clone(), "feature".to_string(), "feature@{upstream}".to_string()).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!((divergence.ahead_total, divergence.behind_total), (2, 1));
+        assert_eq!(divergence.ahead.iter().map(|commit| commit.subject.as_str()).collect::<Vec<_>>(), ["feature ahead two", "feature ahead one"]);
+        assert_eq!(divergence.behind[0].subject, "main ahead");
+    }
+
+    #[test]
+    fn reads_annotated_tag_details() {
+        let (path, run) = scratch_repository("tag-details");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["tag", "--annotate", "release", "--message", "release subject", "--message", "release body"]);
+        run(&["tag", "lightweight"]);
+
+        let details = tag_details(path.clone(), "release".to_string()).unwrap().unwrap();
+        let lightweight = tag_details(path.clone(), "lightweight".to_string()).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(details.tagger, "Tests");
+        assert_eq!(details.tagger_email, "tests@example.com");
+        assert_eq!(details.subject, "release subject");
+        assert_eq!(details.body, "release body\n\n");
+        assert!(lightweight.is_none());
     }
 
     #[test]
