@@ -16,15 +16,6 @@ import {
   openWorktree,
   type WorktreeTarget,
 } from "@/lib/navigation"
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
 import { cn } from "@workspace/shadcn/lib/utils"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
@@ -106,6 +97,7 @@ import {
   useState,
 } from "react"
 
+import { BranchCleanupDialog } from "./branch-cleanup-dialog"
 import { drawCommitGraph } from "./commit-graph-canvas"
 import {
   ancestryPath,
@@ -163,7 +155,6 @@ import {
   useViewConfig,
   type ChipContext,
   type ChipKind,
-  type CleanOptions,
   type GraphRow,
   type GraphRows,
   type SearchHit,
@@ -190,6 +181,7 @@ import {
   type RepositoryState,
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
+import { useBranchCleanup } from "./use-branch-cleanup"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type {
   Project,
@@ -207,18 +199,7 @@ const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TOAST_DURATION = 10_000
 const SEARCH_DEBOUNCE = 120
-type BranchCleanup = {
-  candidates: string[]
-  deleted: string[]
-  failed: string[]
-}
 type BranchSelection = { baseRef: string; headRef: string }
-type CleanResult = { report: string } | { result: BranchCleanup }
-type CleanupCandidate = { branch: string; reasons: CleanupReason[] }
-type CleanupReason =
-  | "squashMergedPullRequest"
-  | "mergedIntoDefaultBranch"
-  | "squashedIntoDefaultBranch"
 type RangeDrag = { anchorIndex: number; focusIndex: number }
 type SelectedRef = { ref: DisplayRef; sha: string }
 type SelectionRange = { anchorHash: string; focusHash: string }
@@ -481,14 +462,7 @@ function CommitGraphPanelContent({
     SquashMergeInference[]
   >([])
   const [error, setError] = useState<string | null>(null)
-  const [isCleanConfirmationOpen, setIsCleanConfirmationOpen] = useState(false)
   const cleanOptions = config.cleanOptions
-  const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(
-    null,
-  )
-  const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(
-    null,
-  )
   const [request, setRequest] = useState<OperationRequest | null>(null)
   const [graphVersion, setGraphVersion] = useState(0)
   const [graphOffset, setGraphOffset] = useState(0)
@@ -925,7 +899,6 @@ function CommitGraphPanelContent({
       })),
     [searchHits],
   )
-  const cleanCandidateCount = cleanPreview?.length ?? 0
   const rowCount = rows ? rows.length : commits.length
   const commitIndexAtRow = useCallback(
     (row: number) => (rows ? (rows[row]?.index ?? 0) : row),
@@ -1004,55 +977,6 @@ function CommitGraphPanelContent({
     onSuccess: () => refreshGraph(),
     onError: (message) => setError(String(message)),
   })
-  const cleanMutation = useMutation({
-    mutationFn: async (): Promise<CleanResult> => {
-      if (!Object.values(cleanOptions).some(Boolean)) {
-        return { report: "Select at least one cleanup option." }
-      }
-      return {
-        result: await invoke<BranchCleanup>("delete_squashed_branches", {
-          repoPath: params.path,
-          options: cleanOptions,
-        }),
-      }
-    },
-    onMutate: () => setError(null),
-    onSuccess: (outcome) => {
-      setIsCleanConfirmationOpen(false)
-      if ("report" in outcome) {
-        toast(outcome.report)
-        return
-      }
-      const { result } = outcome
-      const details = [
-        result.deleted.length ?
-          `Deleted ${result.deleted.length} merged PR branch${result.deleted.length === 1 ? "" : "es"}.`
-        : null,
-        result.failed.length ?
-          `Could not delete: ${result.failed.join(", ")}`
-        : null,
-        !result.deleted.length && !result.failed.length ?
-          "No branches were deleted because the candidate list changed."
-        : null,
-      ].filter(Boolean)
-      const [title, ...description] = details
-      toast(title, { description: description.join("\n") })
-      refreshGraph()
-    },
-    onError: (message) => setError(String(message)),
-  })
-  const { isPending: isCleanPreviewPending, mutate: previewCleanCandidates } =
-    useMutation({
-      mutationFn: (options: CleanOptions) =>
-        invoke<CleanupCandidate[]>("preview_cleanup_candidates", {
-          repoPath: params.path,
-          options,
-        }),
-      // The count stands until a newer one replaces it, so a refresh does not blank the badge on its way through.
-      onMutate: () => setCleanPreviewError(null),
-      onSuccess: setCleanPreview,
-      onError: (message) => setCleanPreviewError(String(message)),
-    })
   const openWorktreeMutation = useMutation({
     mutationFn: ({ path, target }: { path: string; target: WorktreeTarget }) =>
       openWorktree(path, target),
@@ -1074,6 +998,13 @@ function CommitGraphPanelContent({
       undoInFlight.current = false
       setError(String(message))
     },
+  })
+  const cleanup = useBranchCleanup({
+    cleanOptions,
+    graphVersion,
+    onError: setError,
+    refreshGraph,
+    repoPath: params.path,
   })
 
   const updateScroll = useCallback(() => {
@@ -1332,12 +1263,6 @@ function CommitGraphPanelContent({
     element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
     refreshAnchor.current = null
   }, [commits, rowHeight, rowOfCommit])
-
-  // The badge counts what the dialog would delete, so the candidates are read for the options in force and
-  // re-read when the repository changes rather than on a timer of their own.
-  useEffect(() => {
-    previewCleanCandidates(cleanOptions)
-  }, [cleanOptions, graphVersion, previewCleanCandidates])
 
   useEffect(() => {
     const timeout = window.setTimeout(
@@ -2624,24 +2549,24 @@ function CommitGraphPanelContent({
           </DropdownMenu>
           <Hinted
             hint={
-              cleanCandidateCount > 0 ?
-                `${cleanCandidateCount} branch${cleanCandidateCount === 1 ? "" : "es"} can be cleaned`
+              cleanup.candidateCount > 0 ?
+                `${cleanup.candidateCount} branch${cleanup.candidateCount === 1 ? "" : "es"} can be cleaned`
               : "Clean merged branches"
             }
           >
             <Button
               aria-label="Clean merged branches"
-              disabled={fetchMutation.isPending || cleanMutation.isPending}
-              onClick={() => setIsCleanConfirmationOpen(true)}
+              disabled={fetchMutation.isPending || cleanup.isPending}
+              onClick={() => cleanup.setIsConfirmationOpen(true)}
               size="sm"
               type="button"
               variant="outline"
             >
-              {cleanMutation.isPending ?
+              {cleanup.isPending ?
                 <LoaderCircle className="animate-spin" />
               : <Broom />}
-              {cleanCandidateCount > 0 && (
-                <span className="tabular-nums">{cleanCandidateCount}</span>
+              {cleanup.candidateCount > 0 && (
+                <span className="tabular-nums">{cleanup.candidateCount}</span>
               )}
             </Button>
           </Hinted>
@@ -2649,7 +2574,7 @@ function CommitGraphPanelContent({
             <Hinted hint="Refresh graph">
               <Button
                 aria-label="Refresh graph"
-                disabled={fetchMutation.isPending || cleanMutation.isPending}
+                disabled={fetchMutation.isPending || cleanup.isPending}
                 onClick={() => refreshGraph()}
                 size="icon-sm"
                 type="button"
@@ -2667,9 +2592,7 @@ function CommitGraphPanelContent({
                     <Button
                       aria-label="Fetch options"
                       className="w-6"
-                      disabled={
-                        fetchMutation.isPending || cleanMutation.isPending
-                      }
+                      disabled={fetchMutation.isPending || cleanup.isPending}
                       size="icon-sm"
                       type="button"
                       variant="outline"
@@ -3039,135 +2962,11 @@ function CommitGraphPanelContent({
           {error}
         </p>
       )}
-      <AlertDialog
-        onOpenChange={setIsCleanConfirmationOpen}
-        open={isCleanConfirmationOpen}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Clean merged branches?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Selected local branches will be permanently deleted.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="grid gap-3 text-sm">
-            <label className="flex items-start gap-2">
-              <input
-                checked={cleanOptions.deleteMergedPullRequestBranches}
-                className="mt-0.5 size-4 accent-primary"
-                onChange={(event) =>
-                  updateConfig({
-                    cleanOptions: {
-                      deleteMergedPullRequestBranches: event.target.checked,
-                    },
-                  })
-                }
-                type="checkbox"
-              />
-              <span>
-                Delete branches whose merged pull request head matches the local
-                tip.
-              </span>
-            </label>
-            <label className="flex items-start gap-2">
-              <input
-                checked={cleanOptions.deleteMergedBranches}
-                className="mt-0.5 size-4 accent-primary"
-                onChange={(event) =>
-                  updateConfig({
-                    cleanOptions: {
-                      deleteMergedBranches: event.target.checked,
-                    },
-                  })
-                }
-                type="checkbox"
-              />
-              <span>
-                Delete branches with no commits ahead of the default branch that
-                are not checked out in any worktree.
-              </span>
-            </label>
-            <label className="flex items-start gap-2">
-              <input
-                checked={cleanOptions.deleteSquashMergedBranches}
-                className="mt-0.5 size-4 accent-primary"
-                onChange={(event) =>
-                  updateConfig({
-                    cleanOptions: {
-                      deleteSquashMergedBranches: event.target.checked,
-                    },
-                  })
-                }
-                type="checkbox"
-              />
-              <span>
-                Delete branches whose changes already sit on the default branch
-                as one squashed commit, matched by content rather than by a
-                record of the merge.
-              </span>
-            </label>
-          </div>
-          <div className="max-h-52 overflow-y-auto rounded-lg border p-3 text-sm">
-            {isCleanPreviewPending && (
-              <p className="text-muted-foreground">
-                Finding branches to clean…
-              </p>
-            )}
-            {cleanPreviewError && (
-              <p className="text-destructive">{cleanPreviewError}</p>
-            )}
-            {cleanPreview?.length === 0 && (
-              <p className="text-muted-foreground">
-                No branches match the selected cleanup options.
-              </p>
-            )}
-            {cleanPreview && cleanPreview.length > 0 && (
-              <div className="grid gap-3">
-                {[
-                  ["Squash-merged pull requests", "squashMergedPullRequest"],
-                  ["Merged into the default branch", "mergedIntoDefaultBranch"],
-                  [
-                    "Squashed into the default branch",
-                    "squashedIntoDefaultBranch",
-                  ],
-                ].map(([label, reason]) => {
-                  const candidates = cleanPreview.filter((candidate) =>
-                    candidate.reasons.includes(reason as CleanupReason),
-                  )
-                  return candidates.length === 0 ?
-                      null
-                    : <section className="grid gap-1" key={reason}>
-                        <h3 className="font-medium">{label}</h3>
-                        <ul className="font-mono text-xs text-muted-foreground">
-                          {candidates.map((candidate) => (
-                            <li key={candidate.branch}>{candidate.branch}</li>
-                          ))}
-                        </ul>
-                      </section>
-                })}
-              </div>
-            )}
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={cleanMutation.isPending}>
-              Cancel
-            </AlertDialogCancel>
-            <Button
-              disabled={
-                cleanMutation.isPending ||
-                !cleanPreview ||
-                cleanPreview.length === 0 ||
-                Boolean(cleanPreviewError)
-              }
-              onClick={() => cleanMutation.mutate()}
-              type="button"
-              variant="destructive"
-            >
-              {cleanMutation.isPending ? "Cleaning…" : "Clean branches"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <BranchCleanupDialog
+        cleanOptions={cleanOptions}
+        cleanup={cleanup}
+        updateConfig={updateConfig}
+      />
       {request && (
         <OperationDialog
           onClose={() => setRequest(null)}
