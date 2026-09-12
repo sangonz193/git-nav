@@ -170,6 +170,7 @@ import {
   type ViewConfig,
   type ViewConfigChange,
 } from "./commit-graph-view"
+import { Hinted } from "@/components/hinted"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import {
   LabelText,
@@ -269,15 +270,6 @@ const PULL_REQUEST_ICONS = {
 function PullRequestIcon({ state }: { state: PullRequestState }) {
   const Icon = PULL_REQUEST_ICONS[state]
   return <Icon />
-}
-
-function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  )
 }
 
 const commitTableFeatures = tableFeatures({
