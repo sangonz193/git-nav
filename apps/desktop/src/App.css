@@ -920,11 +920,11 @@ button.commit-ref-selected:hover {
   height: 50%;
 }
 
-/* Clipping with overflow would turn the card into the scroller its header sticks to. */
+/* overflow: hidden would turn the card into the scroller its header sticks to; clip does not. */
 .diff-file-card {
   border: 1px solid var(--border);
   border-radius: 8px;
-  clip-path: inset(0 round 8px);
+  overflow: clip;
 }
 
 .diff-file-card.is-viewed .diff-file-card-path {
@@ -944,6 +944,10 @@ button.commit-ref-selected:hover {
   position: sticky;
   top: 0;
   z-index: 2;
+}
+
+.diff-file-card-header:last-child {
+  box-shadow: none;
 }
 
 .diff-file-card-viewed {
