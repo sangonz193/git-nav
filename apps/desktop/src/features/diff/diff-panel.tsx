@@ -893,8 +893,8 @@ function FileDiffCard({
           <FileStat additions={file.additions} deletions={file.deletions} />
         )}
         <label className="diff-file-card-viewed">
-          <Checkbox checked={viewed} onCheckedChange={onToggleViewed} />
           Viewed
+          <Checkbox checked={viewed} onCheckedChange={onToggleViewed} />
         </label>
       </header>
       {!collapsed && body()}
