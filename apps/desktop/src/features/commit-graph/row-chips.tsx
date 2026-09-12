@@ -58,6 +58,7 @@ import {
   type StashEntry,
 } from "./commit-graph"
 import { LabelText, OperationMenuItems } from "./commit-operation-menu"
+import { sameRef } from "./use-graph-selection"
 import {
   CHIP_ICONS,
   OPERATION_GROUPS,
@@ -146,16 +147,29 @@ function refMenuItems(
   sha: string,
   components: RefMenuComponents,
 ) {
+  return (
+    <>
+      {menuHeader(
+        components,
+        { kind: ref.kind, name: refName(ref) },
+        syncDescription(ref) ?? SELECTION_LABELS[ref.kind],
+      )}
+      {refMenuActions(menus, ref, sha, components)}
+    </>
+  )
+}
+
+export function refMenuActions(
+  menus: ChipMenuContext,
+  ref: DisplayRef,
+  sha: string,
+  components: RefMenuComponents,
+) {
   const { Item, Sub, SubContent, SubTrigger } = components
   const reference = refName(ref)
   const pullRequest = ref.pullRequest
   return (
     <>
-      {menuHeader(
-        components,
-        { kind: ref.kind, name: reference },
-        syncDescription(ref) ?? SELECTION_LABELS[ref.kind],
-      )}
       <OperationMenuItems
         components={components}
         groups={SAFE_GROUPS}
@@ -518,7 +532,7 @@ export function rowChip(
   const selected =
     ref !== null &&
     menus.selectedRef !== null &&
-    refName(menus.selectedRef.ref) === refName(ref) &&
+    sameRef(menus.selectedRef.ref, ref) &&
     menus.selectedRef.sha === sha
   // Neither a stash nor a worktree has a place in a selection, so their chips go straight to their changes.
   const activate = () => {

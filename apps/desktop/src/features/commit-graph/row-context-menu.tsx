@@ -14,6 +14,7 @@ import {
   type RowChip,
 } from "./commit-graph"
 import { OperationMenuItems } from "./commit-operation-menu"
+import { rangeBaseHash } from "./selection-diff"
 import {
   chipMenuEntry,
   contextMenuComponents,
@@ -90,7 +91,7 @@ export function RowContextMenuBody({
         diffSelectedRange &&
         diffSelectedRange.commits.length > 1 && (
           <ContextMenuItem
-            disabled={!diffSelectedRange.base}
+            disabled={rangeBaseHash(diffSelectedRange) === null}
             onSelect={() => openRangeDiff(diffSelectedRange)}
           >
             <FileDiff />

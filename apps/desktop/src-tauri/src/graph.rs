@@ -2,6 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher, hash::Hash, hash::Hasher, io::BufRead, io::BufReader,
     process::Stdio,
 };
+use serde::Serialize;
 use tauri::ipc::Channel;
 use crate::process::external_command;
 use crate::git::{
@@ -245,6 +246,42 @@ pub(crate) fn repository_fingerprint(repo_path: String) -> String {
     fingerprint(&[&refs, &head])
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommitDetails {
+    author_name: String,
+    author_email: String,
+    author_date: String,
+    committer_name: String,
+    committer_email: String,
+    committer_date: String,
+    body: String,
+}
+
+fn parse_commit_details(output: &str) -> Option<CommitDetails> {
+    let mut fields = output.splitn(7, '\0');
+    Some(CommitDetails {
+        author_name: fields.next()?.to_string(),
+        author_email: fields.next()?.to_string(),
+        author_date: fields.next()?.to_string(),
+        committer_name: fields.next()?.to_string(),
+        committer_email: fields.next()?.to_string(),
+        committer_date: fields.next()?.to_string(),
+        body: fields.next()?.trim_end().to_string(),
+    })
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+pub(crate) fn commit_details(repo_path: String, hash: String) -> Result<CommitDetails, String> {
+    let sha = resolve_commit(&repo_path, &hash)?;
+    let output = git_output_allow_empty(
+        &repo_path,
+        &["show", "--no-patch", "--no-show-signature", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%b", &sha],
+    )?;
+    parse_commit_details(&output).ok_or_else(|| format!("Could not read {hash}."))
+}
+
 #[tauri::command]
 pub(crate) fn stream_commit_graph(
     repo_path: String,
@@ -280,6 +317,20 @@ mod tests {
     use crate::git::git_result;
     use crate::stash::stash_list;
     use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+    #[test]
+    fn reads_the_people_and_body_of_a_commit() {
+        let details = parse_commit_details(concat!(
+            "Ada\u{1f}\0ada@example.com\02026-01-01T00:00:00+00:00\0",
+            "Bob\u{1f}\0bob@example.com\02026-01-02T00:00:00+00:00\0",
+            "body with \u{1f} inside\n",
+        ))
+        .unwrap();
+
+        assert_eq!(details.author_name, "Ada\u{1f}");
+        assert_eq!(details.committer_email, "bob@example.com");
+        assert_eq!(details.body, "body with \u{1f} inside");
+    }
 
     #[test]
     fn assigns_a_lane_and_reuses_it_for_the_first_parent() {

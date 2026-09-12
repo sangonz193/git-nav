@@ -117,6 +117,85 @@ const RAW_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--
 const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
 
 const NUMSTAT_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z"];
+const DIFF_STAT_ARGUMENTS: [&str; 8] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--raw", "--abbrev=40", "--numstat", "-z"];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiffStatFile {
+    path: String,
+    old_path: Option<String>,
+    status: String,
+    // A binary file has no line counts.
+    additions: Option<u32>,
+    deletions: Option<u32>,
+}
+
+struct NumstatFile {
+    path: String,
+    old_path: Option<String>,
+    additions: Option<u32>,
+    deletions: Option<u32>,
+}
+
+fn parse_numstat(output: &[u8]) -> Vec<NumstatFile> {
+    parse_numstat_fields(output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| String::from_utf8_lossy(field).into_owned()))
+}
+
+fn parse_numstat_fields(mut fields: impl Iterator<Item = String>) -> Vec<NumstatFile> {
+    let mut files = Vec::new();
+    while let Some(record) = fields.next() {
+        let mut columns = record.splitn(3, '\t');
+        let additions = columns.next().and_then(|count| count.parse().ok());
+        let deletions = columns.next().and_then(|count| count.parse().ok());
+        // A rename carries its two paths in the fields following the counts.
+        let (old_path, path) = match columns.next() {
+            Some(path) if !path.is_empty() => (None, path.to_string()),
+            _ => {
+                let Some(old_path) = fields.next() else { break };
+                let Some(path) = fields.next() else { break };
+                (Some(old_path), path)
+            }
+        };
+        files.push(NumstatFile { path, old_path, additions, deletions });
+    }
+    files
+}
+
+fn parse_diff_stat(output: &[u8]) -> Vec<DiffStatFile> {
+    let fields: Vec<_> = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .collect();
+    let mut files = Vec::new();
+    let mut index = 0;
+    while let Some(record) = fields.get(index).filter(|record| record.starts_with(b":")) {
+        index += 1;
+        let Some(status) = String::from_utf8_lossy(record).split_ascii_whitespace().last().and_then(|status| status.chars().next()).map(|status| status.to_string()) else {
+            break;
+        };
+        let Some(first_path) = fields.get(index) else {
+            break;
+        };
+        index += 1;
+        let first_path = String::from_utf8_lossy(first_path).into_owned();
+        let (old_path, path) = if matches!(status.as_str(), "R" | "C") {
+            let Some(path) = fields.get(index) else { break };
+            index += 1;
+            (Some(first_path), String::from_utf8_lossy(path).into_owned())
+        } else {
+            (None, first_path)
+        };
+        files.push(DiffStatFile { path, old_path, status, additions: None, deletions: None });
+    }
+    files
+        .into_iter()
+        .zip(parse_numstat_fields(fields[index..].iter().map(|field| String::from_utf8_lossy(field).into_owned())))
+        .map(|(file, stat)| DiffStatFile { additions: stat.additions, deletions: stat.deletions, ..file })
+        .collect()
+}
 
 fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
     if ignore_whitespace {
@@ -131,23 +210,10 @@ fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
 fn files_changed_beyond_whitespace(path: &str, revisions: &[&str]) -> Result<HashSet<String>, String> {
     let output = git_output_bytes(path, &[&NUMSTAT_ARGUMENTS[..], whitespace_arguments(true), revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    let mut fields = output
-        .split(|byte| *byte == 0)
-        .filter(|field| !field.is_empty())
-        .map(|field| String::from_utf8_lossy(field).into_owned());
-    let mut paths = HashSet::new();
-    while let Some(record) = fields.next() {
-        match record.splitn(3, '\t').nth(2) {
-            Some(path) if !path.is_empty() => {
-                paths.insert(path.to_string());
-            }
-            // A rename carries its two paths in the fields following the counts.
-            _ => {
-                paths.extend(fields.by_ref().take(2));
-            }
-        }
-    }
-    Ok(paths)
+    Ok(parse_numstat(&output)
+        .into_iter()
+        .flat_map(|file| file.old_path.into_iter().chain(std::iter::once(file.path)))
+        .collect())
 }
 
 // A blob of nothing is what git reports for a side a file does not have, and for a working tree file it
@@ -419,9 +485,51 @@ pub(crate) fn diff_file(
     file_diff(&repo_path, &base_sha, &head_sha, old_path, new_path, ignore_whitespace)
 }
 
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+pub(crate) fn diff_stat(repo_path: String, base: String, head: String) -> Result<Vec<DiffStatFile>, String> {
+    let base = crate::git::resolve_commit(&repo_path, &base)?;
+    let head = crate::git::resolve_commit(&repo_path, &head)?;
+    let revisions = [base.as_str(), head.as_str()];
+    let output = git_output_bytes(&repo_path, &[&DIFF_STAT_ARGUMENTS[..], &revisions].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    Ok(parse_diff_stat(&output))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_counts_renames_and_binaries_from_numstat() {
+        let files = parse_numstat(b"3\t1\tsrc/a.rs\0-\t-\timage.png\00\t0\t\0old.txt\0new.txt\0");
+
+        assert_eq!(files.len(), 3);
+        assert_eq!((files[0].path.as_str(), files[0].additions, files[0].deletions), ("src/a.rs", Some(3), Some(1)));
+        assert_eq!((files[1].path.as_str(), files[1].additions, files[1].deletions), ("image.png", None, None));
+        assert_eq!(files[2].old_path.as_deref(), Some("old.txt"));
+        assert_eq!(files[2].path, "new.txt");
+    }
+
+    #[test]
+    fn reads_counts_statuses_and_paths_from_combined_diff_output() {
+        let files = parse_diff_stat(concat!(
+            ":100644 100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb M\0src/a.rs\0",
+            ":000000 100644 0000000000000000000000000000000000000000 cccccccccccccccccccccccccccccccccccccccc A\0src/new.rs\0",
+            ":100644 100644 dddddddddddddddddddddddddddddddddddddddd eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee R100\0old.txt\0new.txt\0",
+            ":100644 100644 ffffffffffffffffffffffffffffffffffffffff 1111111111111111111111111111111111111111 M\0image.png\0",
+            "3\t1\tsrc/a.rs\0",
+            "4\t0\tsrc/new.rs\0",
+            "0\t0\t\0old.txt\0new.txt\0",
+            "-\t-\timage.png\0",
+        ).as_bytes());
+
+        assert_eq!(files.len(), 4);
+        assert_eq!((files[0].path.as_str(), files[0].status.as_str(), files[0].additions, files[0].deletions), ("src/a.rs", "M", Some(3), Some(1)));
+        assert_eq!((files[1].path.as_str(), files[1].status.as_str(), files[1].additions, files[1].deletions), ("src/new.rs", "A", Some(4), Some(0)));
+        assert_eq!((files[2].old_path.as_deref(), files[2].path.as_str(), files[2].status.as_str()), (Some("old.txt"), "new.txt", "R"));
+        assert_eq!((files[3].path.as_str(), files[3].status.as_str(), files[3].additions, files[3].deletions), ("image.png", "M", None, None));
+    }
 
     #[test]
     fn counts_the_rows_each_file_of_a_patch_renders() {

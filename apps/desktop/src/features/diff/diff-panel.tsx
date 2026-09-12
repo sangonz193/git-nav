@@ -111,6 +111,7 @@ import {
   WIDE_DIFF_PANEL_WIDTH,
   type ChangedFile,
 } from "./diff-panel-state"
+import { FileStat, FileStatusLetter } from "./file-stat"
 import type {
   DiffPanelParams,
   DiffPanelUserPreferences,
@@ -142,16 +143,6 @@ const HIT_ICONS: Record<HitKind, ComponentType<{ className?: string }>> = {
   stash: Archive,
   tag: Tag,
   worktree: FilePen,
-}
-
-// A status is a single letter from git, so the colour has to carry what kind of change it stands for.
-const STATUS_COLORS: Record<string, string> = {
-  A: "text-emerald-400",
-  C: "text-violet-400",
-  D: "text-rose-400",
-  M: "text-blue-400",
-  R: "text-violet-400",
-  T: "text-amber-400",
 }
 
 type ViewedFile = {
@@ -319,21 +310,6 @@ function flattenTree(nodes: FileTreeNode[], files: ChangedFile[] = []) {
   return files
 }
 
-function FileStat({
-  additions,
-  deletions,
-}: {
-  additions: number
-  deletions: number
-}) {
-  return (
-    <span className="diff-file-stat">
-      <span className="text-emerald-400">+{additions.toLocaleString()}</span>
-      <span className="text-rose-400">−{deletions.toLocaleString()}</span>
-    </span>
-  )
-}
-
 function FileTree({
   files,
   onSelect,
@@ -392,11 +368,7 @@ function FileTreeNode({
         style={{ paddingLeft }}
         type="button"
       >
-        <span
-          className={`diff-file-status ${STATUS_COLORS[statusLetter(node.file)] ?? "text-muted-foreground"}`}
-        >
-          {statusLetter(node.file)}
-        </span>
+        <FileStatusLetter letter={statusLetter(node.file)} />
         <span className="truncate">{node.name}</span>
         {!node.file.isBinary && (
           <FileStat
@@ -862,11 +834,7 @@ function FileDiffCard({
           {collapsed ?
             <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
           : <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />}
-          <span
-            className={`diff-file-status ${STATUS_COLORS[statusLetter(file)] ?? "text-muted-foreground"}`}
-          >
-            {statusLetter(file)}
-          </span>
+          <FileStatusLetter letter={statusLetter(file)} />
           <span className="diff-file-card-path truncate">{fileName(file)}</span>
         </button>
         {loaded && !collapsed && (

@@ -10,6 +10,7 @@ import type {
   StashEntry,
 } from "./commit-graph"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
+import { rangeBaseHash } from "./selection-diff"
 
 type BranchSelection = { baseRef: string; headRef: string }
 
@@ -58,7 +59,7 @@ export function diffTabs({
     }
   }
 
-  function openCommitDiff(commit: Commit) {
+  function openCommitDiff(commit: Commit, selectedFilePath?: string) {
     const baseRef = commit.parents[0]
     const referencePanel = containerApi.getPanel(panel)
     if (!baseRef || !referencePanel) {
@@ -73,6 +74,7 @@ export function diffTabs({
         baseRef,
         headRef: commit.hash,
         headLabel: commit.subject || "(no subject)",
+        selectedFilePath,
       },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
@@ -124,9 +126,13 @@ export function diffTabs({
     })
   }
 
-  function openRangeDiff({ base, tip }: CommitSelection) {
+  function openRangeDiff(
+    selection: CommitSelection,
+    selectedFilePath?: string,
+  ) {
+    const baseRef = rangeBaseHash(selection)
     const referencePanel = containerApi.getPanel(panel)
-    if (!base || !referencePanel) {
+    if (!baseRef || !referencePanel) {
       onError("Could not open a range diff.")
       return
     }
@@ -135,12 +141,13 @@ export function diffTabs({
       id: panelId("diff"),
       params: {
         ...repositoryPanelParams,
-        baseRef: base.hash,
-        headRef: tip.hash,
+        baseRef,
+        headRef: selection.tip.hash,
+        selectedFilePath,
       },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
-      title: `${refLabel(base.hash)}..${refLabel(tip.hash)}`,
+      title: `${refLabel(baseRef)}..${refLabel(selection.tip.hash)}`,
     })
   }
 

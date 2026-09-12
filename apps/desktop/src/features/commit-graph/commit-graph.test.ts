@@ -692,24 +692,30 @@ describe("persistedSelectionHashes", () => {
 })
 
 describe("persistedGraphPanelParams", () => {
-  test("stores collapsing and only explicit column sizing as user preferences", () => {
+  test("stores collapsing, details and only explicit column sizing as user preferences", () => {
     expect(
-      persistedGraphPanelParams("git-nav", "/projects/git-nav", [], {}, true),
+      persistedGraphPanelParams("git-nav", "/projects/git-nav", [], {
+        collapseUnmarked: true,
+        columnWidths: {},
+        detailsExpanded: false,
+      }),
     ).toEqual({
       name: "git-nav",
       path: "/projects/git-nav",
       selectedCommitHashes: [],
-      userPreferences: { collapseUnmarked: true },
+      userPreferences: { collapseUnmarked: true, detailsExpanded: false },
     })
     expect(
-      persistedGraphPanelParams(
-        "git-nav",
-        "/projects/git-nav",
-        ["a"],
-        { subject: 300 },
-        false,
-      ).userPreferences,
-    ).toEqual({ collapseUnmarked: false, columnWidths: { subject: 300 } })
+      persistedGraphPanelParams("git-nav", "/projects/git-nav", ["a"], {
+        collapseUnmarked: false,
+        columnWidths: { subject: 300 },
+        detailsExpanded: true,
+      }).userPreferences,
+    ).toEqual({
+      collapseUnmarked: false,
+      columnWidths: { subject: 300 },
+      detailsExpanded: true,
+    })
   })
 })
 

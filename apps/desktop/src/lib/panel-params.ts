@@ -24,6 +24,7 @@ export type DiffPanelParams = RepositoryPanelParams & {
 export type GraphPanelUserPreferences = {
   collapseUnmarked?: boolean
   columnWidths?: Record<string, number>
+  detailsExpanded?: boolean
 }
 
 export type GraphPanelParams = RepositoryPanelParams & {

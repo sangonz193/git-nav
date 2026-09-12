@@ -220,6 +220,18 @@ describe("usableRepositoryLayout", () => {
         path,
       ),
     ).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        storedLayout({ userPreferences: { detailsExpanded: true } }),
+        path,
+      ),
+    ).not.toBeNull()
+    expect(
+      usableRepositoryLayout(
+        storedLayout({ userPreferences: { detailsExpanded: "yes" } }),
+        path,
+      ),
+    ).toBeNull()
 
     const value = storedLayout()
     expect(

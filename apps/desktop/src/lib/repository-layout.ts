@@ -97,6 +97,7 @@ const GRAPH_PREFERENCE_CHECKS = {
       (width) =>
         typeof width === "number" && Number.isFinite(width) && width > 0,
     ),
+  detailsExpanded: isBoolean,
 } satisfies Checks<GraphPanelUserPreferences>
 
 const DIFF_PARAM_CHECKS = {

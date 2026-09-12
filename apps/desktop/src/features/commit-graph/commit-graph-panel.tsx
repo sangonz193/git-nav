@@ -32,7 +32,7 @@ import {
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { ArrowDown, ArrowUp, ChevronsDownUp, FileDiff, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ChevronsDownUp } from "lucide-react"
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -98,11 +98,11 @@ import type { GraphPanelParams } from "@/lib/panel-params"
 import { diffTabs } from "./diff-tabs"
 import { GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
+import { NARROW_SHEET_PANEL_WIDTH, SelectionSheet } from "./selection-sheet"
 import {
   chipMenuEntry,
   dropdownMenuComponents,
   rowChip,
-  SELECTION_LABELS,
   type ChipMenuContext,
 } from "./row-chips"
 import { useBranchCleanup } from "./use-branch-cleanup"
@@ -191,6 +191,9 @@ function CommitGraphPanelContent({
   const [collapseUnmarked, setCollapseUnmarked] = useState(
     params.userPreferences?.collapseUnmarked ?? true,
   )
+  const [detailsExpanded, setDetailsExpanded] = useState(
+    params.userPreferences?.detailsExpanded ?? false,
+  )
   // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
   const scrollElement = useRef<HTMLDivElement>(null)
@@ -200,7 +203,13 @@ function CommitGraphPanelContent({
   const pendingScrollHash = useRef<string | null>(null)
   const rowsRef = useRef<GraphRow[] | null>(null)
   const isScrollElementVisible = useRef(false)
-  const [scroll, setScroll] = useState({ top: 0, height: 0 })
+  const [scroll, setScroll] = useState({
+    top: 0,
+    height: 0,
+    width: 0,
+    scrollbarHeight: 0,
+  })
+  const [sheetPeekHeight, setSheetPeekHeight] = useState(0)
   const scrollFrame = useRef<number | null>(null)
   const captureScrollAnchor = useCallback(() => {
     const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
@@ -243,11 +252,21 @@ function CommitGraphPanelContent({
           params.name,
           params.path,
           selectedCommitHashes,
-          columnSizing,
-          collapseUnmarked,
+          {
+            collapseUnmarked,
+            columnWidths: columnSizing,
+            detailsExpanded,
+          },
         ),
       ),
-    [api, collapseUnmarked, columnSizing, params.name, params.path],
+    [
+      api,
+      collapseUnmarked,
+      columnSizing,
+      detailsExpanded,
+      params.name,
+      params.path,
+    ],
   )
   const {
     beginUserSelection,
@@ -293,6 +312,10 @@ function CommitGraphPanelContent({
   // Refs share the commit column with the subject, which keeps whatever they do not take.
   const refBudget = table.getAllLeafColumns()[0].getSize() * REF_BUDGET_SHARE
   const tableWidth = graphWidth + table.getTotalSize()
+  const commitIndexesByHash = useMemo(
+    () => new Map(commits.map((commit, index) => [commit.hash, index])),
+    [commits],
+  )
   const currentCheckoutIndex = useMemo(
     () => commits.findIndex((commit) => isCurrentCheckout(commit.refs)),
     [commits],
@@ -379,15 +402,19 @@ function CommitGraphPanelContent({
     (index: number) => (rows ? rowIndexOfCommit(rows, index) : index),
     [rows],
   )
+  const expandedSheet = selection !== null && detailsExpanded
+  const expandedSheetHeight = Math.floor(scroll.height * 0.7) + sheetPeekHeight
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
     overscan: 12,
-    // Room past the last row lets it be scrolled up out of the corner, where the selection bar sits.
+    // Room past the last row reserves the expanded sheet, otherwise half the viewport, so rows can clear it.
     paddingEnd: Math.max(
       0,
-      Math.floor((scroll.height - GRAPH_HEADER_HEIGHT) / 2),
+      expandedSheet ? expandedSheetHeight : (
+        Math.floor((scroll.height - GRAPH_HEADER_HEIGHT) / 2)
+      ),
     ),
     scrollMargin: GRAPH_HEADER_HEIGHT,
     scrollPaddingStart: GRAPH_HEADER_HEIGHT,
@@ -421,12 +448,9 @@ function CommitGraphPanelContent({
     if (squashMergeInferences.length === 0) {
       return []
     }
-    const indexes = new Map(
-      commits.map((commit, index) => [commit.hash, index]),
-    )
     return squashMergeInferences.flatMap(([branchHash, targetHash]) => {
-      const branchIndex = indexes.get(branchHash)
-      const targetIndex = indexes.get(targetHash)
+      const branchIndex = commitIndexesByHash.get(branchHash)
+      const targetIndex = commitIndexesByHash.get(targetHash)
       if (branchIndex === undefined || targetIndex === undefined) {
         return []
       }
@@ -440,7 +464,13 @@ function CommitGraphPanelContent({
         },
       ]
     })
-  }, [commits, rowOfCommit, squashMergeInferences, unpushed])
+  }, [
+    commitIndexesByHash,
+    commits,
+    rowOfCommit,
+    squashMergeInferences,
+    unpushed,
+  ])
   const fetchMutation = useMutation({
     mutationFn: () =>
       invoke("fetch_and_sync_pull_requests", { repoPath: params.path }),
@@ -448,12 +478,12 @@ function CommitGraphPanelContent({
     onSuccess: () => refreshGraph(),
     onError: (message) => setError(String(message)),
   })
-  const openWorktreeMutation = useMutation({
+  const { mutate: mutateWorktree } = useMutation({
     mutationFn: ({ path, target }: { path: string; target: WorktreeTarget }) =>
       openWorktree(path, target),
     onError: (message) => setError(String(message)),
   })
-  const openPullRequestMutation = useMutation({
+  const { mutate: mutatePullRequest } = useMutation({
     mutationFn: (url: string) => openPullRequest(url),
     onError: (message) => setError(String(message)),
   })
@@ -476,13 +506,17 @@ function CommitGraphPanelContent({
     openRefDiff,
     openStashDiff,
     openWorktreeDiff,
-  } = diffTabs({
-    containerApi,
-    name: params.name,
-    onError: setError,
-    panel: api.id,
-    repoPath: params.path,
-  })
+  } = useMemo(
+    () =>
+      diffTabs({
+        containerApi,
+        name: params.name,
+        onError: setError,
+        panel: api.id,
+        repoPath: params.path,
+      }),
+    [api.id, containerApi, params.name, params.path],
+  )
   const cleanup = useBranchCleanup({
     cleanOptions,
     graphVersion,
@@ -496,7 +530,12 @@ function CommitGraphPanelContent({
     if (!element) {
       return
     }
-    setScroll({ top: element.scrollTop, height: element.clientHeight })
+    setScroll({
+      top: element.scrollTop,
+      height: element.clientHeight,
+      width: element.clientWidth,
+      scrollbarHeight: element.offsetHeight - element.clientHeight,
+    })
   }, [])
 
   useEffect(() => {
@@ -556,13 +595,15 @@ function CommitGraphPanelContent({
     if (!hash) {
       return
     }
-    const index = commits.findIndex((commit) => commit.hash === hash)
-    if (index === -1) {
+    const index = commitIndexesByHash.get(hash)
+    if (index === undefined) {
       return
     }
     pendingScrollHash.current = null
-    rowVirtualizer.scrollToIndex(rowOfCommit(index), { align: "center" })
-  }, [commits, rowOfCommit, rowVirtualizer])
+    rowVirtualizer.scrollToIndex(rowOfCommit(index), {
+      align: detailsExpanded ? "start" : "center",
+    })
+  }, [commitIndexesByHash, detailsExpanded, rowOfCommit, rowVirtualizer])
 
   useEffect(() => {
     const anchor = refreshAnchor.current
@@ -655,16 +696,21 @@ function CommitGraphPanelContent({
 
   // A commit inside a collapsed run has no row of its own, so the run it sits in is opened and the scroll
   // waits for the rows that opening it produces.
-  function scrollToCommit(index: number) {
-    const row = rowOfCommit(index)
-    if (rows && rows[row]?.hidden > 0) {
-      const start = commits[rows[row].index].hash
-      pendingScrollHash.current = commits[index].hash
-      setRevealed((current) => new Set(current).add(start))
-      return
-    }
-    rowVirtualizer.scrollToIndex(row, { align: "center" })
-  }
+  const scrollToCommit = useCallback(
+    (index: number) => {
+      const row = rowOfCommit(index)
+      if (rows && rows[row]?.hidden > 0) {
+        const start = commits[rows[row].index].hash
+        pendingScrollHash.current = commits[index].hash
+        setRevealed((current) => new Set(current).add(start))
+        return
+      }
+      rowVirtualizer.scrollToIndex(row, {
+        align: detailsExpanded ? "start" : "center",
+      })
+    },
+    [commits, detailsExpanded, rowOfCommit, rows, rowVirtualizer],
+  )
 
   function collapseUnmarkedCommits(collapse: boolean) {
     const top =
@@ -704,7 +750,10 @@ function CommitGraphPanelContent({
         pullRequests,
         remotes,
         worktrees: worktreesByHead.get(commit.hash),
-      }).find((candidate) => refName(candidate) === hit.label)
+      }).find(
+        (candidate) =>
+          candidate.kind === hit.kind && refName(candidate) === hit.label,
+      )
       if (ref) {
         setSelectionRange(null)
         setSelectedRef({ ref, sha: commit.hash })
@@ -721,6 +770,22 @@ function CommitGraphPanelContent({
     rowVirtualizer.scrollToIndex(0)
   }
 
+  const canSelectCommitByHash = useCallback(
+    (hash: string) => commitIndexesByHash.has(hash),
+    [commitIndexesByHash],
+  )
+  const selectCommitByHash = useCallback(
+    (hash: string) => {
+      const index = commitIndexesByHash.get(hash)
+      if (index === undefined) {
+        return
+      }
+      selectCommit(commits[index])
+      scrollToCommit(index)
+    },
+    [commitIndexesByHash, commits, scrollToCommit, selectCommit],
+  )
+
   function scrollToCurrentCheckout() {
     if (currentCheckoutIndex === -1) {
       return
@@ -728,19 +793,13 @@ function CommitGraphPanelContent({
     scrollToCommit(currentCheckoutIndex)
   }
 
-  async function copyText(value: string) {
+  const copyText = useCallback(async (value: string) => {
     try {
       await navigator.clipboard.writeText(value)
     } catch (message) {
       setError(String(message))
     }
-  }
-
-  function selectionSummary(selection: Selection) {
-    return selection.kind === "commits" ?
-        `${selection.commits.length} commit${selection.commits.length === 1 ? "" : "s"}${selection.branches[0] ? ` · ${selection.branches[0].branch}` : ""}`
-      : `${SELECTION_LABELS[selection.kind]} · ${refName(selection.ref)}`
-  }
+  }, [])
 
   function onOperationCompleted(result: CompletedOperation) {
     setRequest(null)
@@ -903,25 +962,59 @@ function CommitGraphPanelContent({
     window.addEventListener("pointercancel", onPointerCancel)
   }
 
-  const menus: ChipMenuContext = {
-    copyText,
-    openPullRequest: (url) => openPullRequestMutation.mutate(url),
-    openRefDiff,
-    openStashDiff,
-    openWorktree: (path, target) =>
-      openWorktreeMutation.mutate({ path, target }),
-    openWorktreeDiff,
-    repository,
-    selectRef,
-    selectedRef,
-    selection,
-    setRequest,
-  }
+  const triggerWorktree = useCallback(
+    (path: string, target: WorktreeTarget) => mutateWorktree({ path, target }),
+    [mutateWorktree],
+  )
+  const menus = useMemo<ChipMenuContext>(
+    () => ({
+      copyText,
+      openPullRequest: mutatePullRequest,
+      openRefDiff,
+      openStashDiff,
+      openWorktree: triggerWorktree,
+      openWorktreeDiff,
+      repository,
+      selectRef,
+      selectedRef,
+      selection,
+      setRequest,
+    }),
+    [
+      copyText,
+      mutatePullRequest,
+      openRefDiff,
+      openStashDiff,
+      triggerWorktree,
+      openWorktreeDiff,
+      repository,
+      selectRef,
+      selectedRef,
+      selection,
+      setRequest,
+    ],
+  )
+  const openSelectionDiff = useCallback(
+    (selected: Selection, filePath?: string) => {
+      if (selected.kind !== "commits") {
+        return openRefDiff(refName(selected.ref))
+      }
+      return selected.commits.length === 1 ?
+          openCommitDiff(selected.tip, filePath)
+        : openRangeDiff(selected, filePath)
+    },
+    [openCommitDiff, openRangeDiff, openRefDiff],
+  )
 
   return (
     <main
       className="relative flex h-full flex-col overflow-hidden bg-background"
       onKeyDown={onPanelKeyDown}
+      style={
+        {
+          "--commit-graph-sheet-peek": `${selection ? sheetPeekHeight + scroll.scrollbarHeight : 0}px`,
+        } as CSSProperties
+      }
     >
       <GraphToolbar
         cleanup={cleanup}
@@ -1231,50 +1324,23 @@ function CommitGraphPanelContent({
           </Button>
         </Hinted>
       )}
-      {selection && (
-        <div className="commit-graph-selection-bar">
-          <span className="commit-graph-selection-summary">
-            {selectionSummary(selection)}
-          </span>
-          {selection.kind === "commits" ?
-            <Hinted hint="Diff the selected range">
-              <Button
-                disabled={!selection.base}
-                onClick={() => openRangeDiff(selection)}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <FileDiff />
-                Diff
-              </Button>
-            </Hinted>
-          : <Hinted
-              hint={`Diff ${refName(selection.ref)} against the default branch`}
-            >
-              <Button
-                onClick={() => openRefDiff(refName(selection.ref))}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <FileDiff />
-                Diff
-              </Button>
-            </Hinted>
-          }
-          <Hinted hint="Clear the selection">
-            <Button
-              onClick={clearSelection}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              <X />
-              Clear
-            </Button>
-          </Hinted>
-        </div>
+      {selection && scroll.height > 0 && (
+        <SelectionSheet
+          bottomOffset={scroll.scrollbarHeight}
+          canSelectCommit={canSelectCommitByHash}
+          clearSelection={clearSelection}
+          expanded={detailsExpanded}
+          isRangeDragging={rangeDrag !== null}
+          maxBodyHeight={Math.floor(scroll.height * 0.7)}
+          menus={menus}
+          narrow={scroll.width < NARROW_SHEET_PANEL_WIDTH}
+          onExpandedChange={setDetailsExpanded}
+          onPeekHeightChange={setSheetPeekHeight}
+          openSelectionDiff={openSelectionDiff}
+          repoPath={params.path}
+          selectCommit={selectCommitByHash}
+          selection={selection}
+        />
       )}
       {commits.length === 0 && !error && (
         <p className="commit-graph-status">Loading commits…</p>

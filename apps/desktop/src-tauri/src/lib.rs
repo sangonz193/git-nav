@@ -113,6 +113,8 @@ commands![
     operations::revert_range,
     operations::reset_current,
     stash::stash_list,
+    graph::commit_details,
+    diff::diff_stat,
     stash::stash_changes,
     stash::stash_action,
     operations::undo_ref_updates,

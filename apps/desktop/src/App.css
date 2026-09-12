@@ -256,7 +256,7 @@ body {
 }
 
 .commit-graph-checkout-hint-down {
-  bottom: 8px;
+  bottom: calc(8px + var(--commit-graph-sheet-peek, 0px));
 }
 
 .commit-graph-row {
@@ -389,35 +389,318 @@ body {
     inset 0 0 0 1px color-mix(in srgb, var(--foreground) 32%, transparent);
 }
 
-.commit-graph-selection-bar {
-  align-items: center;
+/* The sheet sits over the graph rather than beside it, so a selection never moves the rows. It spans a
+   narrow panel and docks in the corner of a wide one, and either way only its header shows until it is
+   pulled open. */
+.commit-graph-sheet {
   background: var(--background);
   border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
-  bottom: 16px;
-  color: var(--foreground);
+  border-bottom: 0;
+  border-radius: calc(var(--radius) + 4px) calc(var(--radius) + 4px) 0 0;
+  box-shadow: 0 -8px 24px rgb(0 0 0 / 25%);
   display: flex;
-  font-size: 0.75rem;
-  gap: 8px;
-  max-width: calc(100% - 32px);
-  padding: 6px 8px;
+  flex-direction: column;
+  font-size: 0.8rem;
   position: absolute;
-  right: 16px;
   z-index: 3;
 }
 
-.commit-graph-selection-bar svg {
+.commit-graph-sheet.is-narrow {
+  left: 0;
+  right: 0;
+}
+
+.commit-graph-sheet.is-docked {
+  right: 16px;
+  width: 380px;
+}
+
+.commit-graph-sheet-header {
+  align-items: center;
+  cursor: grab;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 18px 8px 8px 12px;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.commit-graph-sheet.is-dragging .commit-graph-sheet-header {
+  cursor: grabbing;
+}
+
+.commit-graph-sheet-header svg {
   height: 14px;
   width: 14px;
 }
 
-.commit-graph-selection-summary {
-  max-width: 320px;
+.commit-graph-sheet-grip {
+  background: var(--muted-foreground);
+  border-radius: 2px;
+  height: 4px;
+  left: 50%;
+  opacity: 0.5;
+  position: absolute;
+  top: 6px;
+  transform: translateX(-50%);
+  width: 32px;
+}
+
+.commit-graph-sheet-summary {
+  flex: 1;
+  font-size: 0.75rem;
   min-width: 0;
   overflow: hidden;
-  padding-left: 6px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.commit-graph-sheet-body {
+  overflow: hidden;
+  transition: height 200ms ease-out;
+}
+
+.commit-graph-sheet.is-dragging .commit-graph-sheet-body {
+  transition: none;
+}
+
+.commit-graph-sheet.is-range-dragging .commit-graph-sheet-body {
+  transition: none;
+}
+
+.commit-graph-sheet.is-expanded:not(.is-dragging) .commit-graph-sheet-body {
+  overflow-y: auto;
+}
+
+.commit-graph-sheet-content {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+}
+
+.commit-graph-details {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.commit-graph-details-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.commit-graph-details-heading {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: flex;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  justify-content: space-between;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.commit-graph-details-message {
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.commit-graph-details-fields {
+  display: grid;
+  gap: 6px 10px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+}
+
+.commit-graph-details-field {
+  display: contents;
+}
+
+.commit-graph-details-field dt {
+  color: var(--muted-foreground);
+}
+
+.commit-graph-details-field dd {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+}
+
+.commit-graph-details-field code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.commit-graph-details-link {
+  color: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font: inherit;
+  max-width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
+.commit-graph-details-link:hover {
+  text-decoration: underline;
+}
+
+.commit-graph-details-worktree {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.commit-graph-details-worktree svg {
+  color: var(--muted-foreground);
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.commit-graph-details-commits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.commit-graph-details-commits li {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.commit-graph-details-commits code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.commit-graph-details-files {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0 -4px;
+  padding: 0;
+}
+
+.commit-graph-details-files .diff-file {
+  font-size: 0.75rem;
+}
+
+.commit-graph-details-error {
+  color: var(--destructive);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.commit-graph-details-more {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* A path is told apart by its tail, so the start is what gives way. */
+.commit-graph-details-path {
+  direction: rtl;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-graph-details-path::before {
+  content: "\200e";
+}
+
+.commit-graph-details-path::after {
+  content: "\200e";
+}
+
+.commit-graph-details-actions {
+  display: flex;
+  flex-direction: column;
+  margin: 0 -4px;
+}
+
+.commit-graph-details-action {
+  align-items: center;
+  border-radius: 6px;
+  color: inherit;
+  display: flex;
+  font: inherit;
+  gap: 8px;
+  max-width: none;
+  padding: 5px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.commit-graph-details-action:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+.commit-graph-details-action:disabled {
+  color: var(--muted-foreground);
+}
+
+.commit-graph-details-action svg {
+  color: var(--muted-foreground);
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.commit-graph-details-action-label {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: flex;
+  font-size: 0.6875rem;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 2px;
+}
+
+.commit-graph-details-action-label svg {
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.commit-graph-details-action.text-destructive {
+  color: var(--destructive);
+}
+
+.commit-graph-details-sub {
+  display: flex;
+  flex-direction: column;
+  padding-left: 12px;
+}
+
+.commit-graph-details-separator {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 8px;
+}
+
+@media (pointer: coarse) {
+  .commit-graph-details-action,
+  .commit-graph-details-files .diff-file {
+    padding-block: 9px;
+  }
 }
 
 .commit-graph-summary {
@@ -740,7 +1023,7 @@ button.commit-ref-selected:hover {
   background: color-mix(in srgb, var(--background) 94%, transparent);
   border: 1px solid color-mix(in srgb, var(--destructive) 55%, transparent);
   border-radius: 6px;
-  bottom: 12px;
+  bottom: calc(12px + var(--commit-graph-sheet-peek, 0px));
   color: var(--destructive);
   left: 50%;
   margin: 0;
@@ -750,6 +1033,7 @@ button.commit-ref-selected:hover {
   transform: translateX(-50%);
   white-space: pre-line;
   word-break: break-word;
+  z-index: 4;
 }
 
 .diff-panel {

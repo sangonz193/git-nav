@@ -27,6 +27,46 @@ type RangeDrag = { anchorIndex: number; focusIndex: number }
 type SelectedRef = { ref: DisplayRef; sha: string }
 type SelectionRange = { anchorHash: string; focusHash: string }
 
+export function sameRef(left: DisplayRef, right: DisplayRef) {
+  return (
+    left.kind === right.kind &&
+    refName(left) === refName(right) &&
+    (left.kind !== "remote" || left.remote === right.remote)
+  )
+}
+
+export function findSelectedRef(
+  ref: DisplayRef,
+  commits: Commit[],
+  {
+    branchSync,
+    pullRequests,
+    remotes,
+    worktreesByHead,
+  }: {
+    branchSync: Map<string, BranchSync>
+    pullRequests: Map<string, BranchPullRequest>
+    remotes: string[] | undefined
+    worktreesByHead: Map<string, RowWorktree[]>
+  },
+) {
+  for (const commit of commits) {
+    if (commit.refs.length === 0) {
+      continue
+    }
+    const match = displayRefs(commit.refs, {
+      branchSync,
+      pullRequests,
+      remotes,
+      worktrees: worktreesByHead.get(commit.hash),
+    }).find((candidate) => sameRef(candidate, ref))
+    if (match) {
+      return { ref: match, sha: commit.hash }
+    }
+  }
+  return null
+}
+
 export function useGraphSelection({
   branchSync,
   commits,
@@ -49,7 +89,7 @@ export function useGraphSelection({
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(
     null,
   )
-  const [selectedRef, setSelectedRef] = useState<SelectedRef | null>(null)
+  const [selectedRefState, setSelectedRef] = useState<SelectedRef | null>(null)
   const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [selectionRestore] = useState(() =>
     createUserWinningRestore(persistedHashes !== undefined),
@@ -87,33 +127,35 @@ export function useGraphSelection({
         null
       : commitSelection(commits, anchorIndex, focusIndex, remotes)
   }, [commits, rangeDrag, remotes, selectionRange])
-  // A ref selection outlives the graph it was made on, so it is re-read from the commit it sits on after every
+  const resolvedRef = useMemo(
+    () =>
+      selectedRefState ?
+        findSelectedRef(selectedRefState.ref, commits, {
+          branchSync,
+          pullRequests,
+          remotes,
+          worktreesByHead,
+        })
+      : null,
+    [
+      branchSync,
+      commits,
+      pullRequests,
+      remotes,
+      selectedRefState,
+      worktreesByHead,
+    ],
+  )
+  const selectedRef =
+    resolvedRef ?? (isGraphWindowLoading ? selectedRefState : null)
+  // A ref selection outlives the graph it was made on, so it is re-read across the loaded graph after every
   // refresh and falls back to what it was made from while the graph it belongs to is still streaming in.
   const selection = useMemo<Selection | null>(() => {
     if (!selectedRef) {
       return commitsSelection
     }
-    const commit = commits.find(
-      (candidate) => candidate.hash === selectedRef.sha,
-    )
-    const ref =
-      commit &&
-      displayRefs(commit.refs, {
-        branchSync,
-        pullRequests,
-        remotes,
-        worktrees: worktreesByHead.get(selectedRef.sha),
-      }).find((candidate) => refName(candidate) === refName(selectedRef.ref))
-    return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
-  }, [
-    branchSync,
-    commits,
-    commitsSelection,
-    pullRequests,
-    remotes,
-    selectedRef,
-    worktreesByHead,
-  ])
+    return refSelection(selectedRef.ref, selectedRef.sha)
+  }, [commitsSelection, selectedRef])
   const selectedHashes = useMemo(
     () => new Set(commitsSelection?.commits.map((commit) => commit.hash)),
     [commitsSelection],
@@ -154,6 +196,15 @@ export function useGraphSelection({
     }
     persist(selectedCommitHashes)
   }, [persist, selectedCommitHashes, selectionRestored])
+
+  useEffect(() => {
+    if (!selectedRefState || resolvedRef || isGraphWindowLoading) {
+      return
+    }
+    // The ref was removed after its graph stream finished.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedRef(null)
+  }, [isGraphWindowLoading, resolvedRef, selectedRefState])
   const selectionEndpointIndexes = useMemo(
     () =>
       selectionRange ?
@@ -200,15 +251,18 @@ export function useGraphSelection({
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [clearSelection, selection])
 
-  function selectRef(ref: DisplayRef, sha: string) {
-    beginUserSelection()
-    setSelectionRange(null)
-    setSelectedRef((current) =>
-      current && refName(current.ref) === refName(ref) && current.sha === sha ?
-        null
-      : { ref, sha },
-    )
-  }
+  const selectRef = useCallback(
+    (ref: DisplayRef, sha: string) => {
+      beginUserSelection()
+      setSelectionRange(null)
+      setSelectedRef((current) =>
+        current && sameRef(current.ref, ref) && current.sha === sha ?
+          null
+        : { ref, sha },
+      )
+    },
+    [beginUserSelection],
+  )
 
   // Right-clicking inside the selection keeps it whole, and right-clicking outside it acts on the row under the pointer.
   function rowTarget(index: number) {
@@ -225,11 +279,14 @@ export function useGraphSelection({
     )
   }
 
-  function selectCommit(commit: Commit) {
-    beginUserSelection()
-    setSelectedRef(null)
-    setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
-  }
+  const selectCommit = useCallback(
+    (commit: Commit) => {
+      beginUserSelection()
+      setSelectedRef(null)
+      setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
+    },
+    [beginUserSelection],
+  )
 
   function selectRangeTo(commit: Commit) {
     if (!selectionEndpointIndexes) {
