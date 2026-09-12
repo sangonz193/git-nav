@@ -222,13 +222,13 @@ describe("usableRepositoryLayout", () => {
     ).toBeNull()
     expect(
       usableRepositoryLayout(
-        storedLayout({ userPreferences: { detailsOpen: true } }),
+        storedLayout({ userPreferences: { detailsExpanded: true } }),
         path,
       ),
     ).not.toBeNull()
     expect(
       usableRepositoryLayout(
-        storedLayout({ userPreferences: { detailsOpen: "yes" } }),
+        storedLayout({ userPreferences: { detailsExpanded: "yes" } }),
         path,
       ),
     ).toBeNull()

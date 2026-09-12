@@ -1,6 +1,6 @@
 use base64::Engine;
 use serde::Serialize;
-use std::{collections::HashSet, fs, io::Read, path::Path};
+use std::{collections::{HashMap, HashSet}, fs, io::Read, path::Path};
 use crate::git::{WORKTREE_REF, git_output, git_output_allow_empty, git_output_bytes, git_result, worktree_path};
 
 #[derive(Serialize)]
@@ -117,12 +117,15 @@ const RAW_ARGUMENTS: [&str; 7] = ["diff", "--no-ext-diff", "--find-renames", "--
 const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--no-color", "--unified=3"];
 
 const NUMSTAT_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z"];
+const NAME_STATUS_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--name-status", "-z"];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiffStatFile {
     path: String,
     old_path: Option<String>,
+    // The letter git gives the change: A, M, D, R, C or T.
+    status: Option<String>,
     // A binary file has no line counts.
     additions: Option<u32>,
     deletions: Option<u32>,
@@ -147,9 +150,32 @@ fn parse_numstat(output: &[u8]) -> Vec<DiffStatFile> {
                 (Some(old_path), path)
             }
         };
-        files.push(DiffStatFile { path, old_path, additions, deletions });
+        files.push(DiffStatFile { path, old_path, status: None, additions, deletions });
     }
     files
+}
+
+// "M\0path\0" for most changes; a rename or copy carries a score and both paths, "R100\0old\0new\0".
+fn parse_name_status(output: &[u8]) -> HashMap<String, String> {
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| String::from_utf8_lossy(field).into_owned());
+    let mut statuses = HashMap::new();
+    while let Some(status) = fields.next() {
+        let Some(first_path) = fields.next() else {
+            break;
+        };
+        let letter = status.chars().next().unwrap_or_default().to_string();
+        let path = if matches!(letter.as_str(), "R" | "C") {
+            let Some(new_path) = fields.next() else { break };
+            new_path
+        } else {
+            first_path
+        };
+        statuses.insert(path, letter);
+    }
+    statuses
 }
 
 fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
@@ -445,9 +471,16 @@ pub(crate) fn diff_file(
 pub(crate) fn diff_stat(repo_path: String, base: String, head: String) -> Result<Vec<DiffStatFile>, String> {
     let base = crate::git::resolve_commit(&repo_path, &base)?;
     let head = crate::git::resolve_commit(&repo_path, &head)?;
-    let output = git_output_bytes(&repo_path, &[&NUMSTAT_ARGUMENTS[..], &[base.as_str(), head.as_str()]].concat())
+    let revisions = [base.as_str(), head.as_str()];
+    let numstat = git_output_bytes(&repo_path, &[&NUMSTAT_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    Ok(parse_numstat(&output))
+    let name_status = git_output_bytes(&repo_path, &[&NAME_STATUS_ARGUMENTS[..], &revisions].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    let mut statuses = parse_name_status(&name_status);
+    Ok(parse_numstat(&numstat)
+        .into_iter()
+        .map(|file| DiffStatFile { status: statuses.remove(&file.path), ..file })
+        .collect())
 }
 
 #[cfg(test)]
@@ -463,6 +496,17 @@ mod tests {
         assert_eq!((files[1].path.as_str(), files[1].additions, files[1].deletions), ("image.png", None, None));
         assert_eq!(files[2].old_path.as_deref(), Some("old.txt"));
         assert_eq!(files[2].path, "new.txt");
+    }
+
+    #[test]
+    fn reads_the_status_letter_of_each_changed_path() {
+        let statuses = parse_name_status(b"M\0src/a.rs\0A\0image.png\0R100\0old.txt\0new.txt\0D\0gone.txt\0");
+
+        assert_eq!(statuses.get("src/a.rs").map(String::as_str), Some("M"));
+        assert_eq!(statuses.get("image.png").map(String::as_str), Some("A"));
+        assert_eq!(statuses.get("new.txt").map(String::as_str), Some("R"));
+        assert_eq!(statuses.get("gone.txt").map(String::as_str), Some("D"));
+        assert_eq!(statuses.len(), 4);
     }
 
     #[test]

@@ -1,15 +1,14 @@
 import { useQuery } from "@tanstack/react-query"
 import { Hinted } from "@/components/hinted"
-import { FileStat } from "@/features/diff/diff-panel"
+import { FileStat, FileStatusLetter } from "@/features/diff/file-stat"
 import { invoke } from "@/lib/ipc"
 import { Button } from "@workspace/shadcn/components/button"
 import { cn } from "@workspace/shadcn/lib/utils"
-import { AppWindow, Copy, FileDiff, X } from "lucide-react"
+import { AppWindow, Copy } from "lucide-react"
 import { memo, type ReactNode } from "react"
 
 import {
   pullRequestDescription,
-  refName,
   relativeDate,
   syncDescription,
   worktreeDescription,
@@ -18,9 +17,8 @@ import {
   type RefSelection,
   type Selection,
 } from "./commit-graph"
-import { canDiffSelection } from "./selection-diff"
-import { LabelText, OperationMenuItems } from "./commit-operation-menu"
-import { selectionLabel, type RefMenuComponents } from "./commit-operations"
+import { OperationMenuItems } from "./commit-operation-menu"
+import type { RefMenuComponents } from "./commit-operations"
 import {
   DANGER_GROUPS,
   refMenuActions,
@@ -35,12 +33,13 @@ type CommitDetails = {
   committerName: string
   committerEmail: string
   committerDate: string
-  message: string
+  body: string
 }
 
 type DiffStatFile = {
   path: string
   oldPath: string | null
+  status: string | null
   additions: number | null
   deletions: number | null
 }
@@ -57,9 +56,8 @@ const listComponents: RefMenuComponents = {
       {children}
     </button>
   ),
-  Label: ({ children }) => (
-    <div className="commit-graph-details-action-label">{children}</div>
-  ),
+  // The sheet already names the selection in its header.
+  Label: () => null,
   Separator: () => <hr className="commit-graph-details-separator" />,
   Sub: ({ children }) => <div>{children}</div>,
   SubContent: ({ children }) => (
@@ -127,7 +125,7 @@ function FileList({
         <FileStat additions={additions} deletions={deletions} />
       </h3>
       <ul className="commit-graph-details-files">
-        {files.map((file) => (
+        {files.slice(0, 200).map((file) => (
           <li key={file.path}>
             <button
               className="diff-file"
@@ -137,6 +135,7 @@ function FileList({
               }
               type="button"
             >
+              {file.status && <FileStatusLetter letter={file.status} />}
               <span className="commit-graph-details-path">{file.path}</span>
               {file.additions !== null && file.deletions !== null && (
                 <FileStat
@@ -147,19 +146,17 @@ function FileList({
             </button>
           </li>
         ))}
+        {files.length > 200 && (
+          <li className="commit-graph-details-more">{`and ${files.length - 200} more`}</li>
+        )}
       </ul>
     </section>
   )
 }
 
-function useDiffStat(
-  repoPath: string,
-  base: string | null,
-  head: string,
-  enabled = true,
-) {
+function useDiffStat(repoPath: string, base: string | null, head: string) {
   return useQuery({
-    enabled: enabled && base !== null,
+    enabled: base !== null,
     queryFn: () =>
       invoke<DiffStatFile[]>("diff_stat", { repoPath, base, head }),
     queryKey: ["diff-stat", repoPath, base, head],
@@ -171,7 +168,6 @@ function useDiffStat(
 function CommitBody({
   canSelectCommit,
   commit,
-  isRangeDragging,
   menus,
   onOpenFile,
   repoPath,
@@ -179,31 +175,21 @@ function CommitBody({
 }: {
   canSelectCommit: (hash: string) => boolean
   commit: Commit
-  isRangeDragging: boolean
   menus: ChipMenuContext
   onOpenFile: (path: string) => void
   repoPath: string
   selectCommit: (hash: string) => void
 }) {
   const details = useQuery({
-    enabled: !isRangeDragging,
+    enabled: true,
     queryFn: () =>
       invoke<CommitDetails>("commit_details", { repoPath, hash: commit.hash }),
     queryKey: ["commit-details", repoPath, commit.hash],
     retry: false,
     staleTime: Infinity,
   })
-  const files = useDiffStat(
-    repoPath,
-    commit.parents[0] ?? null,
-    commit.hash,
-    !isRangeDragging,
-  )
-  const body = details.data?.message
-    .split(/\r?\n\r?\n/)
-    .slice(1)
-    .join("\n\n")
-    .trim()
+  const files = useDiffStat(repoPath, commit.parents[0] ?? null, commit.hash)
+  const body = details.data?.body.trim()
   const committerDiffers =
     details.data &&
     (details.data.committerName !== details.data.authorName ||
@@ -283,57 +269,55 @@ function CommitBody({
 
 function RangeBody({
   canSelectCommit,
-  isRangeDragging,
   onOpenFile,
   repoPath,
   selectCommit,
   selection,
 }: {
   canSelectCommit: (hash: string) => boolean
-  isRangeDragging: boolean
   onOpenFile: (path: string) => void
   repoPath: string
   selectCommit: (hash: string) => void
   selection: CommitSelection
 }) {
-  const oldest = selection.commits.at(-1)!
   const files = useDiffStat(
     repoPath,
     selection.base?.hash ?? null,
     selection.tip.hash,
-    !isRangeDragging,
   )
   return (
     <>
-      <dl className="commit-graph-details-fields">
-        <Field label="Newest">
-          <CommitLink
-            canSelect={canSelectCommit(selection.tip.hash)}
-            hash={selection.tip.hash}
-            selectCommit={selectCommit}
-          />
-          <span className="truncate text-muted-foreground">
-            {selection.tip.subject}
-          </span>
-        </Field>
-        <Field label="Oldest">
-          <CommitLink
-            canSelect={canSelectCommit(oldest.hash)}
-            hash={oldest.hash}
-            selectCommit={selectCommit}
-          />
-          <span className="truncate text-muted-foreground">
-            {oldest.subject}
-          </span>
-        </Field>
-        {selection.branches.length > 0 && (
+      {selection.branches.length > 0 && (
+        <dl className="commit-graph-details-fields">
           <Field label="On">
             <span className="truncate">
               {selection.branches.map(({ branch }) => branch).join(", ")}
             </span>
           </Field>
-        )}
-      </dl>
+        </dl>
+      )}
+      <section className="commit-graph-details-section">
+        <h3 className="commit-graph-details-heading">
+          {`${selection.commits.length} commits`}
+        </h3>
+        <ul className="commit-graph-details-commits">
+          {selection.commits.slice(0, 100).map((commit) => (
+            <li key={commit.hash}>
+              <CommitLink
+                canSelect={canSelectCommit(commit.hash)}
+                hash={commit.hash}
+                selectCommit={selectCommit}
+              />
+              <span className="truncate" title={commit.subject}>
+                {commit.subject || "(no subject)"}
+              </span>
+            </li>
+          ))}
+          {selection.commits.length > 100 && (
+            <li className="commit-graph-details-more">{`and ${selection.commits.length - 100} more`}</li>
+          )}
+        </ul>
+      </section>
       {files.data && <FileList files={files.data} onOpen={onOpenFile} />}
       {files.error && <QueryError error={files.error} />}
     </>
@@ -423,27 +407,21 @@ function CommitLink({
 function QueryError({ error }: { error: Error }) {
   return (
     <section className="commit-graph-details-section" role="alert">
-      <p className="commit-graph-error">{String(error)}</p>
+      <p className="commit-graph-details-error">{String(error)}</p>
     </section>
   )
 }
 
 export const SelectionDetails = memo(function SelectionDetails({
   canSelectCommit,
-  clearSelection,
-  isRangeDragging,
   menus,
-  onClose,
   openSelectionDiff,
   repoPath,
   selectCommit,
   selection,
 }: {
   canSelectCommit: (hash: string) => boolean
-  clearSelection: () => void
-  isRangeDragging: boolean
   menus: ChipMenuContext
-  onClose: () => void
   openSelectionDiff: (selection: Selection, filePath?: string) => void
   repoPath: string
   selectCommit: (hash: string) => void
@@ -454,128 +432,73 @@ export const SelectionDetails = memo(function SelectionDetails({
       selection.tip
     : null
   const openDiff = (filePath?: string) => openSelectionDiff(selection, filePath)
-  const canDiff = canDiffSelection(selection, menus.repository?.defaultBranch)
   return (
-    <aside aria-label="Selection details" className="commit-graph-details">
-      <header className="commit-graph-details-header">
-        <span className="commit-graph-details-title">
-          <LabelText label={selectionLabel(selection)} />
-        </span>
-        <Hinted hint="Hide details">
-          <Button
-            aria-label="Hide details"
-            onClick={onClose}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          >
-            <X />
-          </Button>
-        </Hinted>
-      </header>
-      <div className="commit-graph-details-body">
-        <div className="commit-graph-details-toolbar">
-          <Hinted
-            hint={
-              selection.kind === "commits" ?
-                "Diff the selected range"
-              : `Diff ${refName(selection.ref)} against the default branch`
-            }
-          >
-            <Button
-              disabled={!canDiff}
-              onClick={() => openDiff()}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <FileDiff />
-              Diff
-            </Button>
-          </Hinted>
-          <Button
-            onClick={clearSelection}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            <X />
-            Clear
-          </Button>
-        </div>
-        {selection.kind !== "commits" ?
-          <RefBody
-            canSelectCommit={canSelectCommit}
-            menus={menus}
-            selectCommit={selectCommit}
-            selection={selection}
-          />
-        : singleCommit ?
-          <CommitBody
-            canSelectCommit={canSelectCommit}
-            commit={singleCommit}
-            isRangeDragging={isRangeDragging}
-            menus={menus}
-            onOpenFile={openDiff}
-            repoPath={repoPath}
-            selectCommit={selectCommit}
-          />
-        : <RangeBody
-            canSelectCommit={canSelectCommit}
-            isRangeDragging={isRangeDragging}
-            onOpenFile={openDiff}
-            repoPath={repoPath}
-            selectCommit={selectCommit}
-            selection={selection}
-          />
-        }
-        <section className="commit-graph-details-section">
-          <h3 className="commit-graph-details-heading">Actions</h3>
-          <div className="commit-graph-details-actions">
-            {selection.kind !== "commits" ?
-              refMenuActions(
-                menus,
-                selection.ref,
-                selection.sha,
-                listComponents,
-              )
-            : <>
-                <OperationMenuItems
-                  components={listComponents}
-                  groups={SAFE_GROUPS}
-                  onSelect={menus.setRequest}
-                  repository={menus.repository}
-                  source={selection}
-                  target={selection}
-                />
+    <div className="commit-graph-details">
+      {selection.kind !== "commits" ?
+        <RefBody
+          canSelectCommit={canSelectCommit}
+          menus={menus}
+          selectCommit={selectCommit}
+          selection={selection}
+        />
+      : singleCommit ?
+        <CommitBody
+          canSelectCommit={canSelectCommit}
+          commit={singleCommit}
+          menus={menus}
+          onOpenFile={openDiff}
+          repoPath={repoPath}
+          selectCommit={selectCommit}
+        />
+      : <RangeBody
+          canSelectCommit={canSelectCommit}
+          onOpenFile={openDiff}
+          repoPath={repoPath}
+          selectCommit={selectCommit}
+          selection={selection}
+        />
+      }
+      <section className="commit-graph-details-section">
+        <h3 className="commit-graph-details-heading">Actions</h3>
+        <div className="commit-graph-details-actions">
+          {selection.kind !== "commits" ?
+            refMenuActions(menus, selection.ref, selection.sha, listComponents)
+          : <>
+              <OperationMenuItems
+                components={listComponents}
+                groups={SAFE_GROUPS}
+                onSelect={menus.setRequest}
+                repository={menus.repository}
+                source={selection}
+                target={selection}
+              />
+              <listComponents.Item
+                onSelect={() => menus.copyText(selection.tip.hash)}
+              >
+                <Copy />
+                Copy SHA
+              </listComponents.Item>
+              {singleCommit && (
                 <listComponents.Item
-                  onSelect={() => menus.copyText(selection.tip.hash)}
+                  onSelect={() => menus.copyText(singleCommit.subject)}
                 >
                   <Copy />
-                  Copy SHA
+                  Copy commit subject
                 </listComponents.Item>
-                {singleCommit && (
-                  <listComponents.Item
-                    onSelect={() => menus.copyText(singleCommit.subject)}
-                  >
-                    <Copy />
-                    Copy commit subject
-                  </listComponents.Item>
-                )}
-                <OperationMenuItems
-                  components={listComponents}
-                  groups={DANGER_GROUPS}
-                  onSelect={menus.setRequest}
-                  repository={menus.repository}
-                  separator="before"
-                  source={selection}
-                  target={selection}
-                />
-              </>
-            }
-          </div>
-        </section>
-      </div>
-    </aside>
+              )}
+              <OperationMenuItems
+                components={listComponents}
+                groups={DANGER_GROUPS}
+                onSelect={menus.setRequest}
+                repository={menus.repository}
+                separator="before"
+                source={selection}
+                target={selection}
+              />
+            </>
+          }
+        </div>
+      </section>
+    </div>
   )
 })

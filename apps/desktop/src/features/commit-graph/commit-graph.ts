@@ -432,11 +432,11 @@ export function persistedGraphPanelParams(
   {
     collapseUnmarked,
     columnWidths,
-    detailsOpen,
+    detailsExpanded,
   }: {
     collapseUnmarked: boolean
     columnWidths: Record<string, number>
-    detailsOpen: boolean
+    detailsExpanded: boolean
   },
 ) {
   return {
@@ -445,7 +445,7 @@ export function persistedGraphPanelParams(
     selectedCommitHashes,
     userPreferences: {
       collapseUnmarked,
-      detailsOpen,
+      detailsExpanded,
       ...(Object.keys(columnWidths).length > 0 ? { columnWidths } : {}),
     },
   }

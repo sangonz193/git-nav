@@ -697,24 +697,24 @@ describe("persistedGraphPanelParams", () => {
       persistedGraphPanelParams("git-nav", "/projects/git-nav", [], {
         collapseUnmarked: true,
         columnWidths: {},
-        detailsOpen: false,
+        detailsExpanded: false,
       }),
     ).toEqual({
       name: "git-nav",
       path: "/projects/git-nav",
       selectedCommitHashes: [],
-      userPreferences: { collapseUnmarked: true, detailsOpen: false },
+      userPreferences: { collapseUnmarked: true, detailsExpanded: false },
     })
     expect(
       persistedGraphPanelParams("git-nav", "/projects/git-nav", ["a"], {
         collapseUnmarked: false,
         columnWidths: { subject: 300 },
-        detailsOpen: true,
+        detailsExpanded: true,
       }).userPreferences,
     ).toEqual({
       collapseUnmarked: false,
       columnWidths: { subject: 300 },
-      detailsOpen: true,
+      detailsExpanded: true,
     })
   })
 })
