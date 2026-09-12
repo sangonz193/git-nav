@@ -1,7 +1,10 @@
 use base64::Engine;
 use serde::Serialize;
 use std::{collections::HashSet, fs, io::Read, path::Path};
-use crate::git::{WORKTREE_REF, git_output, git_output_allow_empty, git_output_bytes, git_result, resolve_diff_base, worktree_path};
+use crate::git::{
+    INDEX_REF, WORKTREE_REF, git_error_message, git_output, git_output_allow_empty, git_output_bytes, git_result,
+    resolve_diff_base, worktree_path,
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,24 +52,31 @@ pub(crate) struct BinaryContent {
     pub(crate) image: Option<String>,
 }
 
+fn finish_patch_block(files: &mut [FileStat], deletions: &mut u32, additions: &mut u32) {
+    if let Some(file) = files.last_mut() {
+        file.split_rows += (*deletions).max(*additions);
+        file.additions += *additions;
+        file.deletions += *deletions;
+        *deletions = 0;
+        *additions = 0;
+    }
+}
+
 /// Counts the rows `@git-diff-view` renders for one file: every patch body line becomes a unified
 /// row, while split mode pairs a run of deletions with the additions that follow it.
 fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
     let mut files: Vec<FileStat> = Vec::new();
     let (mut deletions, mut additions) = (0u32, 0u32);
     for line in patch.lines() {
-        let ends_block = !matches!(line.as_bytes().first(), Some(b'+') | Some(b'\\'))
-            && !(line.starts_with('-') && additions == 0);
-        if let Some(file) = files.last_mut().filter(|_| ends_block) {
-            file.split_rows += deletions.max(additions);
-            file.additions += additions;
-            file.deletions += deletions;
-            deletions = 0;
-            additions = 0;
-        }
         if line.starts_with("diff --git ") {
+            finish_patch_block(&mut files, &mut deletions, &mut additions);
             files.push(FileStat::default());
             continue;
+        }
+        let ends_block = !matches!(line.as_bytes().first(), Some(b'+') | Some(b'\\'))
+            && !(line.starts_with('-') && additions == 0);
+        if ends_block {
+            finish_patch_block(&mut files, &mut deletions, &mut additions);
         }
         let Some(file) = files.last_mut() else {
             continue;
@@ -98,11 +108,7 @@ fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
             }
         }
     }
-    if let Some(file) = files.last_mut() {
-        file.split_rows += deletions.max(additions);
-        file.additions += additions;
-        file.deletions += deletions;
-    }
+    finish_patch_block(&mut files, &mut deletions, &mut additions);
     for file in &mut files {
         // The view closes every file that still hides lines with one more expandable row.
         if file.hunk_rows > 0 {
@@ -197,6 +203,16 @@ fn parse_diff_stat(output: &[u8]) -> Vec<DiffStatFile> {
         .collect()
 }
 
+// A file git takes for text can still hold bytes that are not UTF-8, and one such file is no reason to
+// lose the whole list; the stats read from a patch only need its line structure.
+fn patch_output(path: &str, arguments: &[&str]) -> Result<String, String> {
+    let output = git_result(path, arguments)?;
+    if !output.status.success() {
+        return Err(git_error_message(&output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
     if ignore_whitespace {
         &["--ignore-all-space"]
@@ -223,7 +239,7 @@ fn blob_oid(oid: &str) -> Option<String> {
 }
 
 fn parse_changed_files(raw: &[u8], patch: &str, kept: Option<&HashSet<String>>) -> Result<Vec<ChangedFile>, String> {
-    // The patch lists files in the same order as --raw, so its per-file stats zip by index.
+    // The patch lists files in the same order as --raw after entries without a patch are removed.
     let stats = parse_patch_stats(patch);
     let fields = raw
         .split(|byte| *byte == 0)
@@ -255,6 +271,7 @@ fn parse_changed_files(raw: &[u8], patch: &str, kept: Option<&HashSet<String>>) 
                 index += 1;
                 (Some(first_path), Some(new_path), "copied")
             }
+            'U' => (Some(first_path.clone()), Some(first_path), "unmerged"),
             _ => (Some(first_path.clone()), Some(first_path), "modified"),
         };
         if kept.is_some_and(|kept| !new_path.as_ref().or(old_path.as_ref()).is_some_and(|name| kept.contains(name))) {
@@ -283,28 +300,36 @@ pub(crate) fn changed_files(path: &str, base_sha: &str, head_sha: &str, ignore_w
     let whitespace = whitespace_arguments(ignore_whitespace);
     let raw = git_output_bytes(path, &[&RAW_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], whitespace, &revisions].concat())?;
+    let patch = patch_output(path, &[&PATCH_ARGUMENTS[..], whitespace, &revisions].concat())?;
     let kept = ignore_whitespace.then(|| files_changed_beyond_whitespace(path, &revisions)).transpose()?;
     parse_changed_files(&raw, &patch, kept.as_ref())
 }
 
 // Untracked files are invisible to git diff, so they are listed separately and appended after the
 // tracked changes, where they cannot disturb the index the patch stats are zipped by.
+const UNTRACKED_FILE_READ_LIMIT: u64 = 32 * 1024 * 1024;
+
 pub(crate) fn untracked_files(path: &str) -> Result<Vec<ChangedFile>, String> {
-    let output = git_output_bytes(path, &["ls-files", "--others", "--exclude-standard", "-z"])
+    let output = git_output_bytes(path, &["--no-optional-locks", "ls-files", "--others", "--exclude-standard", "-z"])
         .ok_or_else(|| "git ls-files failed.".to_string())?;
     let root = worktree_path(path)?;
     let mut files = Vec::new();
     for field in output.split(|byte| *byte == 0).filter(|field| !field.is_empty()) {
         let name = String::from_utf8(field.to_vec()).map_err(|error| error.to_string())?;
-        let contents = fs::read(Path::new(&root).join(&name)).unwrap_or_default();
-        let is_binary = contents.contains(&0);
-        let lines = if is_binary || contents.is_empty() {
-            0
-        } else {
-            let newlines = contents.iter().filter(|byte| **byte == b'\n').count() as u32;
-            newlines + u32::from(contents.last() != Some(&b'\n'))
-        };
+        let file = Path::new(&root).join(&name);
+        let contents = fs::symlink_metadata(&file)
+            .ok()
+            .filter(|metadata| metadata.file_type().is_file() && metadata.len() <= UNTRACKED_FILE_READ_LIMIT)
+            .and_then(|_| fs::read(file).ok());
+        let is_binary = contents.as_ref().map_or(true, |contents| contents.contains(&0));
+        let lines = contents.as_ref().map_or(0, |contents| {
+            if is_binary || contents.is_empty() {
+                0
+            } else {
+                let newlines = contents.iter().filter(|byte| **byte == b'\n').count() as u32;
+                newlines + u32::from(contents.last() != Some(&b'\n'))
+            }
+        });
         files.push(ChangedFile {
             status: "added".to_string(),
             old_path: None,
@@ -327,23 +352,103 @@ pub(crate) fn worktree_changed_files(path: &str, base_sha: &str, ignore_whitespa
     let whitespace = whitespace_arguments(ignore_whitespace);
     let raw = git_output_bytes(path, &[&RAW_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    let patch = git_output_allow_empty(path, &[&PATCH_ARGUMENTS[..], whitespace, &revisions].concat())?;
+    let patch = patch_output(path, &[&PATCH_ARGUMENTS[..], whitespace, &revisions].concat())?;
     let kept = ignore_whitespace.then(|| files_changed_beyond_whitespace(path, &revisions)).transpose()?;
     let mut files = parse_changed_files(&raw, &patch, kept.as_ref())?;
     files.extend(untracked_files(path)?);
     Ok(files)
 }
 
+const STAGEABLE_ARGUMENTS: [&str; 1] = ["--diff-filter=u"];
+
+fn excluded_pathspecs(paths: &[String]) -> Vec<String> {
+    std::iter::once("--".to_string())
+        .chain(paths.iter().map(|path| format!(":(exclude,literal){path}")))
+        .collect()
+}
+
+pub(crate) fn conflicted_paths(path: &str) -> Result<Vec<String>, String> {
+    let output = git_output_allow_empty(path, &["--no-optional-locks", "diff", "--name-only", "--diff-filter=U", "-z"])?;
+    Ok(output.split('\0').filter(|path| !path.is_empty()).map(str::to_string).collect())
+}
+
+// What the index holds that HEAD does not. A repository without a commit yet has no HEAD, and git
+// answers that by diffing the index against nothing, which is exactly what is staged.
+pub(crate) fn staged_changed_files(path: &str, conflicted: &[String]) -> Result<Vec<ChangedFile>, String> {
+    let pathspecs = excluded_pathspecs(conflicted);
+    let pathspecs: Vec<_> = pathspecs.iter().map(String::as_str).collect();
+    let raw = git_output_bytes(path, &[&["--no-optional-locks"][..], &RAW_ARGUMENTS[..], &STAGEABLE_ARGUMENTS[..], &["--cached"], &pathspecs].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    let patch = patch_output(path, &[&["--no-optional-locks"][..], &PATCH_ARGUMENTS[..], &STAGEABLE_ARGUMENTS[..], &["--cached"], &pathspecs].concat())?;
+    parse_changed_files(&raw, &patch, None)
+}
+
+// What the working tree holds that the index does not, with the files git has never been told about.
+pub(crate) fn unstaged_changed_files(path: &str, conflicted: &[String]) -> Result<Vec<ChangedFile>, String> {
+    let pathspecs = excluded_pathspecs(conflicted);
+    let pathspecs: Vec<_> = pathspecs.iter().map(String::as_str).collect();
+    let raw = git_output_bytes(path, &[&["--no-optional-locks"][..], &RAW_ARGUMENTS[..], &STAGEABLE_ARGUMENTS[..], &pathspecs].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    let patch = patch_output(path, &[&["--no-optional-locks"][..], &PATCH_ARGUMENTS[..], &STAGEABLE_ARGUMENTS[..], &pathspecs].concat())?;
+    let mut files = parse_changed_files(&raw, &patch, None)?;
+    files.extend(untracked_files(path)?);
+    Ok(files)
+}
+
 // git diff cannot see an untracked file, so an empty patch means falling back to an empty left side.
-fn worktree_patch(repo_path: &str, base_sha: &str, path: &str, ignore_whitespace: bool) -> Result<String, String> {
+fn worktree_patch(repo_path: &str, base_sha: &str, path: &str, paths: &[&str], ignore_whitespace: bool) -> Result<String, String> {
     let whitespace = whitespace_arguments(ignore_whitespace);
-    let patch = git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], whitespace, &[base_sha, "--", path]].concat())?;
+    let base: &[&str] = if base_sha == INDEX_REF { &[] } else { std::slice::from_ref(&base_sha) };
+    let patch = git_output_allow_empty(repo_path, &[&["--no-optional-locks"][..], &PATCH_ARGUMENTS[..], whitespace, base, &["--"], paths].concat())?;
     if !patch.is_empty() {
         return Ok(patch);
     }
     // --no-index reports a difference by exiting non-zero, so its status carries no error to report.
-    let output = git_result(repo_path, &[&PATCH_ARGUMENTS[..], whitespace, &["--no-index", "--", "/dev/null", path]].concat())?;
+    let output = git_result(repo_path, &[&["--no-optional-locks"][..], &PATCH_ARGUMENTS[..], whitespace, &["--no-index", "--", "/dev/null", path]].concat())?;
     String::from_utf8(output.stdout).map_err(|error| error.to_string())
+}
+
+// The index is addressed as `:path` and a commit as `sha:path`; the working tree is read from disk.
+fn object_name(revision: &str, path: &str) -> String {
+    if revision == INDEX_REF { format!(":{path}") } else { format!("{revision}:{path}") }
+}
+
+fn side_content(repo_path: &str, revision: &str, path: &str) -> Result<String, String> {
+    if revision == WORKTREE_REF {
+        let root = worktree_path(repo_path)?;
+        return fs::read_to_string(Path::new(&root).join(path)).map_err(|error| error.to_string());
+    }
+    git_output_allow_empty(repo_path, &["show", &object_name(revision, path)])
+}
+
+fn side_binary_content(repo_path: &str, revision: &str, path: &str) -> Result<BinaryContent, String> {
+    if revision == WORKTREE_REF {
+        let root = worktree_path(repo_path)?;
+        return worktree_binary_content(&root, path);
+    }
+    git_binary_content(repo_path, revision, path)
+}
+
+fn patch_for_path(patch: String, new_path: Option<&str>) -> String {
+    let sections: Vec<_> = patch.split("\ndiff --git ").collect();
+    if sections.len() <= 1 {
+        return patch;
+    }
+    let Some(new_path) = new_path else {
+        return patch;
+    };
+    sections
+        .into_iter()
+        .enumerate()
+        .find(|(_, section)| {
+            section.lines().any(|line| {
+                line.strip_prefix("+++ b/") == Some(new_path)
+                    || line.strip_prefix("rename to ") == Some(new_path)
+                    || line.strip_prefix("copy to ") == Some(new_path)
+            })
+        })
+        .map(|(index, section)| if index == 0 { section.to_string() } else { format!("diff --git {section}") })
+        .unwrap_or(patch)
 }
 
 fn file_diff(
@@ -355,30 +460,43 @@ fn file_diff(
     ignore_whitespace: bool,
 ) -> Result<FileDiff, String> {
     let path = new_path.as_ref().or(old_path.as_ref()).ok_or_else(|| "No file path was provided.".to_string())?;
-    let is_worktree = head_sha == WORKTREE_REF;
-    let patch = if is_worktree {
-        worktree_patch(repo_path, base_sha, path, ignore_whitespace)?
-    } else {
-        git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], whitespace_arguments(ignore_whitespace), &[base_sha, head_sha, "--", path]].concat())?
+    let paths = match (old_path.as_deref(), new_path.as_deref()) {
+        (Some(old_path), Some(new_path)) if old_path != new_path => vec![old_path, new_path],
+        _ => vec![path.as_str()],
     };
+    if head_sha == WORKTREE_REF {
+        if let Some(new_worktree_path) = new_path.as_ref() {
+            let root = worktree_path(repo_path)?;
+            let metadata = fs::symlink_metadata(Path::new(&root).join(new_worktree_path)).map_err(|error| error.to_string())?;
+            if !metadata.file_type().is_file() || metadata.len() > UNTRACKED_FILE_READ_LIMIT {
+                let old_binary = old_path.as_ref().map(|path| side_binary_content(repo_path, base_sha, path)).transpose()?;
+                return Ok(FileDiff {
+                    old_binary,
+                    new_binary: Some(worktree_binary_content(&root, new_worktree_path)?),
+                    old_file_name: old_path,
+                    new_file_name: new_path,
+                    old_content: None,
+                    new_content: None,
+                    hunks: Vec::new(),
+                    is_binary: true,
+                });
+            }
+        }
+    }
+    let whitespace = whitespace_arguments(ignore_whitespace);
+    let patch = if head_sha == WORKTREE_REF {
+        worktree_patch(repo_path, base_sha, path, &paths, ignore_whitespace)?
+    } else if head_sha == INDEX_REF {
+        let base = (base_sha != "HEAD").then_some(base_sha);
+        git_output_allow_empty(repo_path, &[&["--no-optional-locks"][..], &PATCH_ARGUMENTS[..], whitespace, &["--cached"], base.as_slice(), &["--"], &paths].concat())?
+    } else {
+        git_output_allow_empty(repo_path, &[&PATCH_ARGUMENTS[..], whitespace, &[base_sha, head_sha, "--"], &paths].concat())?
+    };
+    let patch = patch_for_path(patch, new_path.as_deref());
     // Content lines in a patch always carry a leading marker, so an unprefixed header is git's own.
     if patch.lines().any(|line| line.starts_with("Binary files ") || line == "GIT binary patch") {
-        let old_binary = old_path
-            .as_ref()
-            .map(|path| git_binary_content(repo_path, base_sha, path))
-            .transpose()?;
-        let new_binary = if is_worktree {
-            let root = worktree_path(repo_path)?;
-            new_path
-                .as_ref()
-                .map(|path| worktree_binary_content(&root, path))
-                .transpose()?
-        } else {
-            new_path
-                .as_ref()
-                .map(|path| git_binary_content(repo_path, head_sha, path))
-                .transpose()?
-        };
+        let old_binary = old_path.as_ref().map(|path| side_binary_content(repo_path, base_sha, path)).transpose()?;
+        let new_binary = new_path.as_ref().map(|path| side_binary_content(repo_path, head_sha, path)).transpose()?;
         return Ok(FileDiff {
             old_binary,
             new_binary,
@@ -391,13 +509,8 @@ fn file_diff(
         });
     }
 
-    let old_content = old_path.as_ref().map(|path| git_output_allow_empty(repo_path, &["show", &format!("{base_sha}:{path}")])).transpose()?;
-    let new_content = if is_worktree {
-        let root = worktree_path(repo_path)?;
-        new_path.as_ref().map(|path| fs::read_to_string(Path::new(&root).join(path)).map_err(|error| error.to_string())).transpose()?
-    } else {
-        new_path.as_ref().map(|path| git_output_allow_empty(repo_path, &["show", &format!("{head_sha}:{path}")])).transpose()?
-    };
+    let old_content = old_path.as_ref().map(|path| side_content(repo_path, base_sha, path)).transpose()?;
+    let new_content = new_path.as_ref().map(|path| side_content(repo_path, head_sha, path)).transpose()?;
 
     Ok(FileDiff {
         old_file_name: old_path,
@@ -436,7 +549,7 @@ fn binary_content(path: &str, size: u64, bytes: Option<Vec<u8>>) -> BinaryConten
 }
 
 fn git_binary_content(repo_path: &str, sha: &str, path: &str) -> Result<BinaryContent, String> {
-    let object = format!("{sha}:{path}");
+    let object = object_name(sha, path);
     let size = git_output(repo_path, &["cat-file", "-s", &object])
         .ok_or_else(|| format!("Could not read {path} at {sha}."))?
         .parse()
@@ -569,6 +682,134 @@ mod tests {
     }
 
     #[test]
+    fn treats_large_untracked_files_as_binary_without_reading_them() {
+        let (path, _run) = scratch_repository("diff-large-untracked");
+        let file = fs::File::create(Path::new(&path).join("large.bin")).unwrap();
+        file.set_len(UNTRACKED_FILE_READ_LIMIT + 1).unwrap();
+
+        let files = untracked_files(&path).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].new_path.as_deref(), Some("large.bin"));
+        assert!(files[0].is_binary);
+        assert_eq!(files[0].additions, 0);
+
+        let diff = file_diff(&path, INDEX_REF, WORKTREE_REF, None, Some("large.bin".to_string()), false).unwrap();
+        assert!(diff.is_binary);
+        assert_eq!(diff.new_binary.map(|content| content.size), Some(UNTRACKED_FILE_READ_LIMIT + 1));
+        assert!(diff.hunks.is_empty());
+        assert!(diff.old_content.is_none());
+        assert!(diff.new_content.is_none());
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
+    fn diffs_each_side_of_a_partially_staged_file_and_an_untracked_one() {
+        let (path, run) = scratch_repository("diff-index-sides");
+        fs::write(Path::new(&path).join("file.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "first"]);
+        fs::write(Path::new(&path).join("file.txt"), "one\ntwo\n").unwrap();
+        run(&["add", "file.txt"]);
+        fs::write(Path::new(&path).join("file.txt"), "one\ntwo\nthree\n").unwrap();
+        fs::write(Path::new(&path).join("new.txt"), "new\n").unwrap();
+        let file = || (Some("file.txt".to_string()), Some("file.txt".to_string()));
+
+        let staged = file_diff(&path, "HEAD", INDEX_REF, file().0, file().1, false).unwrap();
+        assert_eq!(staged.old_content.as_deref(), Some("one\n"));
+        assert_eq!(staged.new_content.as_deref(), Some("one\ntwo\n"));
+        assert!(staged.hunks[0].contains("+two"));
+        assert!(!staged.hunks[0].contains("three"));
+
+        let unstaged = file_diff(&path, INDEX_REF, WORKTREE_REF, file().0, file().1, false).unwrap();
+        assert_eq!(unstaged.old_content.as_deref(), Some("one\ntwo\n"));
+        assert_eq!(unstaged.new_content.as_deref(), Some("one\ntwo\nthree\n"));
+        assert!(unstaged.hunks[0].contains("+three"));
+        assert!(!unstaged.hunks[0].contains("+two"));
+
+        let untracked = file_diff(&path, INDEX_REF, WORKTREE_REF, None, Some("new.txt".to_string()), false).unwrap();
+        assert_eq!(untracked.old_content, None);
+        assert_eq!(untracked.new_content.as_deref(), Some("new\n"));
+        assert!(untracked.hunks[0].contains("+new"));
+
+        fs::write(Path::new(&path).join("blob.bin"), [0u8, 1, 2, 3]).unwrap();
+        run(&["add", "blob.bin"]);
+        let staged_binary = file_diff(&path, "HEAD", INDEX_REF, None, Some("blob.bin".to_string()), false).unwrap();
+        assert!(staged_binary.is_binary);
+        assert_eq!(staged_binary.new_binary.map(|content| content.size), Some(4));
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
+    fn diffs_staged_files_before_the_first_commit() {
+        let (path, run) = scratch_repository("diff-unborn-index");
+        fs::write(Path::new(&path).join("first.txt"), "one\n").unwrap();
+        run(&["add", "first.txt"]);
+
+        let staged = file_diff(&path, "HEAD", INDEX_REF, None, Some("first.txt".to_string()), false).unwrap();
+
+        assert_eq!(staged.old_content, None);
+        assert_eq!(staged.new_content.as_deref(), Some("one\n"));
+        assert!(staged.hunks[0].contains("+one"));
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
+    fn diffs_both_sides_of_a_staged_rename() {
+        let (path, run) = scratch_repository("diff-staged-rename");
+        fs::write(Path::new(&path).join("a.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        run(&["add", "a.txt"]);
+        run(&["commit", "--quiet", "--message", "first"]);
+        run(&["mv", "a.txt", "b.txt"]);
+        fs::write(Path::new(&path).join("b.txt"), "one\ntwo\nchanged\nfour\nfive\n").unwrap();
+        run(&["add", "b.txt"]);
+
+        let diff = file_diff(
+            &path,
+            "HEAD",
+            INDEX_REF,
+            Some("a.txt".to_string()),
+            Some("b.txt".to_string()),
+            false,
+        )
+        .unwrap();
+        let patch = &diff.hunks[0];
+        let additions = patch.lines().filter(|line| line.starts_with('+') && !line.starts_with("+++")).count();
+        let deletions = patch.lines().filter(|line| line.starts_with('-') && !line.starts_with("---")).count();
+
+        assert!(patch.contains("+changed"));
+        assert_eq!(additions, 1);
+        assert_eq!(deletions, 1);
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
+    fn keeps_only_the_copy_destination_patch() {
+        let (path, run) = scratch_repository("diff-staged-copy");
+        fs::write(Path::new(&path).join("a.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        run(&["add", "a.txt"]);
+        run(&["commit", "--quiet", "--message", "first"]);
+        fs::copy(Path::new(&path).join("a.txt"), Path::new(&path).join("b.txt")).unwrap();
+        fs::write(Path::new(&path).join("a.txt"), "one\ntwo\nchanged\nfour\nfive\n").unwrap();
+        run(&["add", "-A"]);
+
+        let diff = file_diff(
+            &path,
+            "HEAD",
+            INDEX_REF,
+            Some("a.txt".to_string()),
+            Some("b.txt".to_string()),
+            false,
+        )
+        .unwrap();
+        let patch = &diff.hunks[0];
+
+        let headers: Vec<_> = patch.lines().filter(|line| line.starts_with("diff --git ")).collect();
+        assert_eq!(headers, ["diff --git a/a.txt b/b.txt"]);
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
     fn reads_counts_renames_and_binaries_from_numstat() {
         let files = parse_numstat(b"3\t1\tsrc/a.rs\0-\t-\timage.png\00\t0\t\0old.txt\0new.txt\0");
 
@@ -646,5 +887,36 @@ mod tests {
         assert_eq!(files[2].old_path.as_deref(), Some("src/old.rs"));
         assert_eq!(files[2].new_path.as_deref(), Some("src/renamed.rs"));
         assert_eq!(files[2].new_oid.as_deref(), Some("5".repeat(40).as_str()));
+    }
+
+    #[test]
+    fn keeps_worktree_stats_aligned_across_a_conflicted_file() {
+        let (path, run) = scratch_repository("worktree-conflict-stats");
+        fs::write(Path::new(&path).join("a.txt"), "a base\n").unwrap();
+        fs::write(Path::new(&path).join("file.txt"), "base\n").unwrap();
+        fs::write(Path::new(&path).join("z.txt"), "z old\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["switch", "--quiet", "--create", "side"]);
+        fs::write(Path::new(&path).join("file.txt"), "side\none\ntwo\nthree\n").unwrap();
+        run(&["commit", "--quiet", "--all", "--message", "side"]);
+        run(&["switch", "--quiet", "main"]);
+        fs::write(Path::new(&path).join("file.txt"), "main\n").unwrap();
+        run(&["commit", "--quiet", "--all", "--message", "main"]);
+        let base = git_output(&path, &["rev-parse", "HEAD"]).unwrap();
+        assert!(!git_result(&path, &["merge", "--no-commit", "side"]).unwrap().status.success());
+        fs::write(Path::new(&path).join("a.txt"), "a base\na extra\n").unwrap();
+        fs::write(Path::new(&path).join("z.txt"), "z new\n").unwrap();
+
+        let files = worktree_changed_files(&path, &base, false).unwrap();
+
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].new_path.as_deref(), Some("a.txt"));
+        assert_eq!((files[0].additions, files[0].deletions), (1, 0));
+        assert_eq!(files[1].new_path.as_deref(), Some("file.txt"));
+        assert_eq!((files[1].additions, files[1].deletions), (7, 0));
+        assert_eq!(files[2].new_path.as_deref(), Some("z.txt"));
+        assert_eq!((files[2].additions, files[2].deletions), (1, 1));
+        remove_scratch_repository(&path);
     }
 }

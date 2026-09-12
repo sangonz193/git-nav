@@ -5,6 +5,7 @@ const STATUS_COLORS: Record<string, string> = {
   M: "text-blue-400",
   R: "text-violet-400",
   T: "text-amber-400",
+  U: "text-rose-400",
 }
 
 export function FileStatusLetter({ letter }: { letter: string }) {

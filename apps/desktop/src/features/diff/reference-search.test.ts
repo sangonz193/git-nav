@@ -61,11 +61,9 @@ describe("isRevisionExpression", () => {
   })
 
   test("rejects a half-typed name", () => {
-    expect(["mai", "feature/log", ""].map(isRevisionExpression)).toEqual([
-      false,
-      false,
-      false,
-    ])
+    expect(
+      ["mai", "feature/log", ":worktree", ""].map(isRevisionExpression),
+    ).toEqual([false, false, false, false])
   })
 })
 

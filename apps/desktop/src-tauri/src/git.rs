@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap, collections::HashSet, fs, path::Path, path::PathBuf, process::Child,
-    process::Output, process::Stdio,
+    collections::HashMap, collections::HashSet, fs, io::Write, path::Path, path::PathBuf,
+    process::Child, process::Output, process::Stdio,
 };
 use crate::process::external_command;
 
-// Not a legal ref name, so it cannot collide with anything the user could name a branch or tag.
+// Not legal ref names, so they cannot collide with anything the user could name a branch or tag.
 pub(crate) const WORKTREE_REF: &str = ":worktree";
 pub(crate) const EMPTY_TREE_REF: &str = ":empty-tree";
+pub(crate) const INDEX_REF: &str = ":index";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -205,6 +206,30 @@ pub(crate) fn git_result(path: &str, arguments: &[&str]) -> Result<Output, Strin
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .map_err(|error| error.to_string())
+}
+
+pub(crate) fn git_result_with_stdin(path: &str, arguments: &[&str], stdin: &[u8]) -> Result<Output, String> {
+    let mut child = external_command("git")
+        .arg("-C")
+        .arg(path)
+        .args(arguments)
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let write_error = child.stdin.take().and_then(|mut pipe| pipe.write_all(stdin).err());
+    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    if let Some(error) = write_error {
+        if !output.status.success() {
+            return Err(git_error_message(&output));
+        }
+        return Err(error.to_string());
+    }
+    Ok(output)
 }
 
 fn parse_git_version(output: &str) -> Option<(u32, u32)> {

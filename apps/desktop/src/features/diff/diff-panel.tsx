@@ -1,21 +1,15 @@
-import { highlighter } from "@git-diff-view/lowlight"
-import { DiffModeEnum, DiffView } from "@git-diff-view/react"
+import { DiffModeEnum } from "@git-diff-view/react"
 import { invoke } from "@/lib/ipc"
 import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
-import { useVirtualizer } from "@tanstack/react-virtual"
 import type { IDockviewPanelProps } from "dockview-react"
 import {
   Archive,
   ChevronDown,
-  ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   Cloud,
   Columns2,
   FilePen,
-  Folder,
-  FolderOpen,
-  FoldVertical,
   GitBranch,
   GitCompareArrows,
   Hash,
@@ -24,10 +18,8 @@ import {
   Rows3,
   SlidersHorizontal,
   Tag,
-  UnfoldVertical,
 } from "lucide-react"
 import {
-  type ComponentRef,
   type ComponentType,
   useCallback,
   useEffect,
@@ -38,7 +30,6 @@ import {
 } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
-import { cn } from "@workspace/shadcn/lib/utils"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { Checkbox } from "@workspace/shadcn/components/checkbox"
 import {
@@ -97,43 +88,32 @@ import {
   changedFilesLabel,
   fileIdentity,
   fileName,
-  formatBytes,
-  IMAGE_PREVIEW_LIMIT,
   initialDiffLayout,
   isFoldedFile,
-  isImagePath,
-  isSvgPath,
   isViewedFile,
   NARROW_DIFF_PANEL_WIDTH,
   persistedDiffPanelParams,
-  svgContent,
   toggledDiffFileTree,
   WIDE_DIFF_PANEL_WIDTH,
   type ChangedFile,
 } from "./diff-panel-state"
-import { FileStat, FileStatusLetter } from "./file-stat"
+import { FileDiffCard, FileTree } from "./diff-cards"
+import {
+  changedLines,
+  fileTree,
+  flattenTree,
+  useDiffCards,
+  useDiffLoader,
+  type FileDiff,
+} from "./diff-files"
+import { FileStat } from "./file-stat"
 import type {
   DiffPanelParams,
   DiffPanelUserPreferences,
 } from "@/lib/panel-params"
 
-const MAX_CONCURRENT_DIFF_LOADS = 4
-const LARGE_DIFF_LINES = 1200
-// The library skips highlighting above 2000 lines, which hand-written sources routinely exceed.
-const MAX_HIGHLIGHT_LINES = 10_000
-// Monospace runs wider than the interface face, so it is set a step below the interface size to read as the
-// same size beside it.
-const DIFF_FONT_SIZE = 12
-const DIFF_ROW_HEIGHT = DIFF_FONT_SIZE * 1.6
-const HUNK_ROW_HEIGHT = 30
-const FILE_HEADER_HEIGHT = 34
-const FILE_ROW_GAP = 12
-const COLLAPSED_BODY_HEIGHT = 40
-const IMAGE_BODY_HEIGHT = 280
 const SEARCH_DEBOUNCE = 120
 const PICKER_MENU_WIDTH = 320
-
-highlighter.setMaxLineToIgnoreSyntax(MAX_HIGHLIGHT_LINES)
 
 const HIT_ICONS: Record<HitKind, ComponentType<{ className?: string }>> = {
   branch: GitBranch,
@@ -156,47 +136,14 @@ type Comparison = {
   files: ChangedFile[]
 }
 
+type LoadedComparison = {
+  comparison: Comparison
+  ignoreWhitespace: boolean
+}
+
 type BranchSelection = {
   baseRef: string
   headRef: string
-}
-
-type BinaryContent = {
-  size: number
-  image: string | null
-}
-
-type FileDiff = {
-  oldFileName: string | null
-  newFileName: string | null
-  oldContent: string | null
-  newContent: string | null
-  hunks: string[]
-  isBinary: boolean
-  oldBinary: BinaryContent | null
-  newBinary: BinaryContent | null
-}
-
-type DiffData = {
-  oldFile: { fileName: string | null; content: string | null }
-  newFile: { fileName: string | null; content: string | null }
-  hunks: string[]
-}
-
-type DiffEntry =
-  | { state: "loaded"; data: DiffData }
-  | {
-      state: "binary"
-      oldBinary: BinaryContent | null
-      newBinary: BinaryContent | null
-    }
-  | { state: "error"; message: string }
-
-type FileTreeNode = {
-  name: string
-  path: string
-  file: ChangedFile | null
-  children: FileTreeNode[]
 }
 
 type PickerSide = "base" | "head"
@@ -223,197 +170,6 @@ function HeadPickerLabel({
 
 function fileKey(file: ChangedFile) {
   return `${file.status}:${file.oldPath}:${file.newPath}`
-}
-
-function statusLetter(file: ChangedFile) {
-  return file.status.slice(0, 1).toUpperCase()
-}
-
-function isLargeDiff(file: ChangedFile) {
-  return file.additions + file.deletions > LARGE_DIFF_LINES
-}
-
-function isSvgFile(file: ChangedFile) {
-  return isSvgPath(fileName(file))
-}
-
-function estimatedBodyHeight(
-  file: ChangedFile,
-  mode: DiffModeEnum,
-  collapsed = false,
-) {
-  if (collapsed) {
-    return 0
-  }
-  if (file.isBinary) {
-    return isImagePath(fileName(file)) ? IMAGE_BODY_HEIGHT : (
-        COLLAPSED_BODY_HEIGHT
-      )
-  }
-  if (isLargeDiff(file)) {
-    return COLLAPSED_BODY_HEIGHT
-  }
-  const rows = mode & DiffModeEnum.Split ? file.splitRows : file.unifiedRows
-  return (
-    Math.round(rows * DIFF_ROW_HEIGHT + file.hunkRows * HUNK_ROW_HEIGHT) +
-    (isSvgFile(file) ? IMAGE_BODY_HEIGHT : 0)
-  )
-}
-
-function fileTree(files: ChangedFile[]) {
-  const root: FileTreeNode = { name: "", path: "", file: null, children: [] }
-  for (const file of files) {
-    const parts = fileName(file).split("/")
-    let node = root
-    for (const [index, name] of parts.entries()) {
-      const path = node.path ? `${node.path}/${name}` : name
-      let child = node.children.find((candidate) => candidate.name === name)
-      if (!child) {
-        child = { name, path, file: null, children: [] }
-        node.children.push(child)
-      }
-      if (index === parts.length - 1) {
-        child.file = file
-      }
-      node = child
-    }
-  }
-  const sort = (nodes: FileTreeNode[]) => {
-    nodes.sort(
-      (left, right) =>
-        Number(left.file !== null) - Number(right.file !== null) ||
-        left.name.localeCompare(right.name),
-    )
-    nodes.forEach((node) => sort(node.children))
-  }
-  sort(root.children)
-  return root.children
-}
-
-function changedLines(files: ChangedFile[]) {
-  return files.reduce(
-    (total, file) => ({
-      additions: total.additions + file.additions,
-      deletions: total.deletions + file.deletions,
-    }),
-    { additions: 0, deletions: 0 },
-  )
-}
-
-function flattenTree(nodes: FileTreeNode[], files: ChangedFile[] = []) {
-  for (const node of nodes) {
-    if (node.file) {
-      files.push(node.file)
-    }
-    flattenTree(node.children, files)
-  }
-  return files
-}
-
-function FileTree({
-  files,
-  onSelect,
-  activeKey,
-  headRef,
-  viewed,
-}: {
-  files: FileTreeNode[]
-  onSelect: (file: ChangedFile) => void
-  activeKey: string | null
-  headRef: string
-  viewed: ReadonlyMap<string, string>
-}) {
-  return files.map((node) => (
-    <FileTreeNode
-      activeKey={activeKey}
-      headRef={headRef}
-      key={node.path}
-      level={0}
-      node={node}
-      onSelect={onSelect}
-      viewed={viewed}
-    />
-  ))
-}
-
-function FileTreeNode({
-  level,
-  node,
-  onSelect,
-  activeKey,
-  headRef,
-  viewed,
-}: {
-  level: number
-  node: FileTreeNode
-  onSelect: (file: ChangedFile) => void
-  activeKey: string | null
-  headRef: string
-  viewed: ReadonlyMap<string, string>
-}) {
-  const [open, setOpen] = useState(true)
-  const paddingLeft = 6 + level * 14
-
-  if (node.file) {
-    const key = fileKey(node.file)
-    return (
-      <button
-        className={cn(
-          "diff-file",
-          key === activeKey && "is-selected",
-          isViewedFile(node.file, headRef, viewed) && "is-viewed",
-        )}
-        key={key}
-        onClick={() => onSelect(node.file!)}
-        style={{ paddingLeft }}
-        type="button"
-      >
-        <FileStatusLetter letter={statusLetter(node.file)} />
-        <span className="truncate">{node.name}</span>
-        {!node.file.isBinary && (
-          <FileStat
-            additions={node.file.additions}
-            deletions={node.file.deletions}
-          />
-        )}
-      </button>
-    )
-  }
-
-  return (
-    <div className="diff-folder">
-      <button
-        aria-expanded={open}
-        className="diff-folder-button"
-        onClick={() => setOpen((current) => !current)}
-        style={{ paddingLeft }}
-        type="button"
-      >
-        {open ?
-          <ChevronDown className="size-3" />
-        : <ChevronRight className="size-3" />}
-        {open ?
-          <FolderOpen className="size-3.5" />
-        : <Folder className="size-3.5" />}
-        <span className="truncate">{node.name}</span>
-      </button>
-      {open && (
-        <div className="diff-folder-children">
-          {node.children.map((child) => (
-            <FileTreeNode
-              activeKey={activeKey}
-              headRef={headRef}
-              key={child.path}
-              level={level + 1}
-              node={child}
-              onSelect={onSelect}
-              viewed={viewed}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
 }
 
 /**
@@ -487,389 +243,6 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
   )
 }
 
-function useDiffLoader(
-  repoPath: string,
-  comparison: Comparison | null,
-  ignoreWhitespace: boolean,
-) {
-  const [entries, setEntries] = useState<Record<string, DiffEntry>>({})
-  const loader = useRef({
-    queued: [] as ChangedFile[],
-    started: new Set<string>(),
-    requested: new Set<string>(),
-    binary: new Set<string>(),
-    inFlight: 0,
-  })
-
-  const reset = useCallback(() => {
-    loader.current = {
-      queued: [],
-      started: new Set(),
-      requested: new Set(),
-      binary: new Set(),
-      inFlight: 0,
-    }
-    setEntries({})
-  }, [])
-
-  // A request replaces the queue, so files scrolled past before a worker picked them up free their slot.
-  const request = useCallback(
-    (files: ChangedFile[]) => {
-      if (!comparison) {
-        return
-      }
-      const state = loader.current
-      const requested = new Set(files.map(fileKey))
-      state.requested = requested
-      let evicted = false
-      for (const key of state.binary) {
-        if (!requested.has(key)) {
-          state.binary.delete(key)
-          state.started.delete(key)
-          evicted = true
-        }
-      }
-      if (evicted) {
-        setEntries((current) =>
-          Object.fromEntries(
-            Object.entries(current).filter(
-              ([key, entry]) => entry.state !== "binary" || requested.has(key),
-            ),
-          ),
-        )
-      }
-      state.queued = files.filter((file) => !state.started.has(fileKey(file)))
-      const drain = async () => {
-        for (
-          let file = state.queued.shift();
-          file;
-          file = state.queued.shift()
-        ) {
-          const key = fileKey(file)
-          state.started.add(key)
-          const entry = await invoke<FileDiff>("diff_file", {
-            repoPath,
-            baseSha: comparison.baseSha,
-            headSha: comparison.headSha,
-            oldPath: file.oldPath,
-            newPath: file.newPath,
-            ignoreWhitespace,
-          })
-            .then((diff): DiffEntry =>
-              diff.isBinary ?
-                {
-                  state: "binary",
-                  oldBinary: diff.oldBinary,
-                  newBinary: diff.newBinary,
-                }
-              : {
-                  state: "loaded",
-                  data: {
-                    oldFile: {
-                      fileName: diff.oldFileName,
-                      content: diff.oldContent,
-                    },
-                    newFile: {
-                      fileName: diff.newFileName,
-                      content: diff.newContent,
-                    },
-                    hunks: diff.hunks,
-                  },
-                },
-            )
-            .catch((message: unknown): DiffEntry => ({
-              state: "error",
-              message: String(message),
-            }))
-          if (loader.current !== state) {
-            return
-          }
-          if (entry.state === "binary") {
-            state.binary.add(key)
-            if (!state.requested.has(key)) {
-              state.binary.delete(key)
-              state.started.delete(key)
-              continue
-            }
-          }
-          setEntries((current) => ({ ...current, [key]: entry }))
-        }
-      }
-      while (
-        state.inFlight < MAX_CONCURRENT_DIFF_LOADS &&
-        state.queued.length > 0
-      ) {
-        state.inFlight += 1
-        void drain().finally(() => {
-          state.inFlight -= 1
-        })
-      }
-    },
-    [comparison, ignoreWhitespace, repoPath],
-  )
-
-  return { entries, request, reset }
-}
-
-function BinaryDiff({
-  newImage,
-  newBinary,
-  newPath,
-  oldImage,
-  oldBinary,
-  oldPath,
-}: {
-  newImage: boolean
-  newBinary: BinaryContent | null
-  newPath: string | null
-  oldImage: boolean
-  oldBinary: BinaryContent | null
-  oldPath: string | null
-}) {
-  if (!oldBinary?.image && !newBinary?.image) {
-    const sizes = [oldBinary, newBinary]
-      .filter((content) => content !== null)
-      .map((content) => formatBytes(content.size))
-    const tooLargeToPreview = [
-      { content: oldBinary, path: oldPath },
-      { content: newBinary, path: newPath },
-    ].some(
-      ({ content, path }) =>
-        content !== null &&
-        isImagePath(path) &&
-        content.size > IMAGE_PREVIEW_LIMIT,
-    )
-    return (
-      <p className="diff-file-card-notice">
-        {tooLargeToPreview ? "Too large to preview" : "Binary file changed"}
-        <span className="text-xs">{sizes.join(" → ")}</span>
-      </p>
-    )
-  }
-  return (
-    <div className="diff-binary-preview">
-      {oldBinary && (
-        <ImageSide content={oldBinary} imageType={oldImage} side="old" />
-      )}
-      {newBinary && (
-        <ImageSide content={newBinary} imageType={newImage} side="new" />
-      )}
-    </div>
-  )
-}
-
-function ImageSide({
-  content,
-  imageType,
-  side,
-}: {
-  content: BinaryContent
-  imageType: boolean
-  side: "old" | "new"
-}) {
-  const [dimensions, setDimensions] = useState<string | null>(null)
-  const [previewFailed, setPreviewFailed] = useState(false)
-  return (
-    <figure className={`diff-binary-side is-${side}`}>
-      {content.image && !previewFailed ?
-        <img
-          alt={side === "old" ? "Before" : "After"}
-          onError={() => setPreviewFailed(true)}
-          onLoad={(event) =>
-            setDimensions(
-              `${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`,
-            )
-          }
-          src={content.image}
-        />
-      : <p className="diff-file-card-notice">
-          {!previewFailed && imageType && content.size > IMAGE_PREVIEW_LIMIT ?
-            "Too large to preview"
-          : "No preview"}
-        </p>
-      }
-      <figcaption>
-        {formatBytes(content.size)}
-        {dimensions && ` · ${dimensions}`}
-      </figcaption>
-    </figure>
-  )
-}
-
-function FileDiffCard({
-  allExpanded,
-  collapsed,
-  entry,
-  expanded,
-  file,
-  mode,
-  onExpand,
-  onToggleAllExpanded,
-  onToggleCollapsed,
-  onToggleViewed,
-  theme,
-  viewed,
-  wrap,
-}: {
-  allExpanded: boolean
-  collapsed: boolean
-  entry: DiffEntry | undefined
-  expanded: boolean
-  file: ChangedFile
-  mode: DiffModeEnum
-  onExpand: () => void
-  onToggleAllExpanded: () => void
-  onToggleCollapsed: () => void
-  onToggleViewed: () => void
-  theme: "light" | "dark"
-  viewed: boolean
-  wrap: boolean
-}) {
-  const diffView = useRef<ComponentRef<typeof DiffView>>(null)
-  const loaded = entry?.state === "loaded"
-  const svg = useMemo(
-    () =>
-      entry?.state === "loaded" ?
-        {
-          newBinary:
-            isSvgPath(file.newPath) ?
-              svgContent(entry.data.newFile.content)
-            : null,
-          oldBinary:
-            isSvgPath(file.oldPath) ?
-              svgContent(entry.data.oldFile.content)
-            : null,
-        }
-      : { newBinary: null, oldBinary: null },
-    [entry, file],
-  )
-
-  // The diff view holds its unfolded context, and a card scrolled out of the virtual window loses that view,
-  // so the choice is kept up here and replayed onto whichever view is mounted.
-  useEffect(() => {
-    const instance = diffView.current?.getDiffFileInstance()
-    if (!instance) {
-      return
-    }
-    const modeName = mode & DiffModeEnum.Split ? "split" : "unified"
-    const isExpanded =
-      modeName === "split" ?
-        instance.hasExpandSplitAll
-      : instance.hasExpandUnifiedAll
-    if (allExpanded && !isExpanded) {
-      instance.onAllExpand(modeName)
-    } else if (!allExpanded && isExpanded) {
-      instance.onAllCollapse(modeName)
-    }
-  }, [allExpanded, collapsed, loaded, mode])
-
-  const body = () => {
-    if (entry?.state === "binary") {
-      return (
-        <BinaryDiff
-          newBinary={entry.newBinary}
-          newImage={isImagePath(file.newPath)}
-          newPath={file.newPath}
-          oldBinary={entry.oldBinary}
-          oldImage={isImagePath(file.oldPath)}
-          oldPath={file.oldPath}
-        />
-      )
-    }
-    if (entry?.state === "error") {
-      return (
-        <p className="diff-file-card-notice text-destructive">
-          {entry.message}
-        </p>
-      )
-    }
-    if (entry?.state === "loaded") {
-      return (
-        <>
-          {(svg.oldBinary || svg.newBinary) && (
-            <BinaryDiff
-              newBinary={svg.newBinary}
-              newImage
-              newPath={file.newPath}
-              oldBinary={svg.oldBinary}
-              oldImage
-              oldPath={file.oldPath}
-            />
-          )}
-          <DiffView
-            data={entry.data}
-            diffViewFontSize={DIFF_FONT_SIZE}
-            diffViewHighlight
-            diffViewMode={mode}
-            diffViewTheme={theme}
-            diffViewWrap={wrap}
-            ref={diffView}
-          />
-        </>
-      )
-    }
-    if (isLargeDiff(file) && !expanded) {
-      return (
-        <p className="diff-file-card-notice">
-          Large diff with {(file.additions + file.deletions).toLocaleString()}{" "}
-          changed lines
-          <Button onClick={onExpand} size="xs" type="button" variant="outline">
-            Show diff
-          </Button>
-        </p>
-      )
-    }
-    return <div style={{ height: estimatedBodyHeight(file, mode) }} />
-  }
-
-  return (
-    <article className={cn("diff-file-card", viewed && "is-viewed")}>
-      <header className="diff-file-card-header">
-        <button
-          aria-expanded={!collapsed}
-          className="diff-file-card-toggle"
-          onClick={onToggleCollapsed}
-          type="button"
-        >
-          {collapsed ?
-            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-          : <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />}
-          <FileStatusLetter letter={statusLetter(file)} />
-          <span className="diff-file-card-path truncate">{fileName(file)}</span>
-        </button>
-        {loaded && !collapsed && (
-          <Hinted
-            hint={allExpanded ? "Collapse unchanged lines" : "Expand all lines"}
-          >
-            <Button
-              aria-label={
-                allExpanded ? "Collapse unchanged lines" : "Expand all lines"
-              }
-              aria-pressed={allExpanded}
-              onClick={onToggleAllExpanded}
-              size="icon-xs"
-              type="button"
-              variant="ghost"
-            >
-              {allExpanded ?
-                <FoldVertical className="text-muted-foreground" />
-              : <UnfoldVertical className="text-muted-foreground" />}
-            </Button>
-          </Hinted>
-        )}
-        {!file.isBinary && (
-          <FileStat additions={file.additions} deletions={file.deletions} />
-        )}
-        <label className="diff-file-card-viewed">
-          Viewed
-          <Checkbox checked={viewed} onCheckedChange={onToggleViewed} />
-        </label>
-      </header>
-      {!collapsed && body()}
-    </article>
-  )
-}
-
 export function DiffPanel({
   api,
   params,
@@ -884,7 +257,9 @@ export function DiffPanel({
       params.headLabel,
     ),
   )
-  const [comparison, setComparison] = useState<Comparison | null>(null)
+  const [loadedComparison, setLoadedComparison] =
+    useState<LoadedComparison | null>(null)
+  const comparison = loadedComparison?.comparison ?? null
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState(
     params.userPreferences?.mode === "unified" ?
@@ -909,7 +284,10 @@ export function DiffPanel({
   const [searchInput, setSearchInput] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [hitIndex, setHitIndex] = useState(0)
-  const [revision, setRevision] = useState<ResolvedRevision | null>(null)
+  const [resolvedRevision, setResolvedRevision] = useState<{
+    query: string
+    revision: ResolvedRevision
+  } | null>(null)
   const [isSidebarOpen, setIsSidebarOpen] = useState(
     params.userPreferences?.fileTreeOpen ?? true,
   )
@@ -920,18 +298,26 @@ export function DiffPanel({
   )
   const [isNarrow, setIsNarrow] = useState(false)
   const [panelWidth, setPanelWidth] = useState(0)
-  const panel = useRef<HTMLElement>(null)
+  const [panel, setPanel] = useState<HTMLElement | null>(null)
   const scrollElement = useRef<HTMLDivElement>(null)
-  const pendingScroll = useRef<string | null>(null)
-  const pendingAnchor = useRef<string | null>(null)
   const marksDuringLoad = useRef<Map<string, string | null> | null>(null)
   const userPreferencesRef = useRef(userPreferences)
   const pendingRestoredFilePath = useRef(params.selectedFilePath ?? null)
-  const { entries, request, reset } = useDiffLoader(
-    params.path,
-    comparison,
-    ignoreWhitespace,
+  const loadDiff = useMemo(
+    () =>
+      loadedComparison &&
+      ((file: ChangedFile) =>
+        invoke<FileDiff>("diff_file", {
+          repoPath: params.path,
+          baseSha: loadedComparison.comparison.baseSha,
+          headSha: loadedComparison.comparison.headSha,
+          oldPath: file.oldPath,
+          newPath: file.newPath,
+          ignoreWhitespace: loadedComparison.ignoreWhitespace,
+        })),
+    [loadedComparison, params.path],
   )
+  const { entries, request } = useDiffLoader(fileKey, loadDiff)
   const metadata = useRepositoryMetadata(params.path, version)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const shownFiles = useMemo(
@@ -1016,22 +402,27 @@ export function DiffPanel({
     )
   }, [api, params.name, params.path, refs, selectedFilePath, userPreferences])
 
-  const rowVirtualizer = useVirtualizer({
-    count: files.length,
-    getScrollElement: () => scrollElement.current,
-    estimateSize: (index) =>
-      FILE_ROW_GAP +
-      FILE_HEADER_HEIGHT +
-      estimatedBodyHeight(files[index], mode, isFolded(files[index])),
-    getItemKey: (index) => fileKey(files[index]),
-    overscan: 2,
+  const {
+    activeKey,
+    anchorAt,
+    anchorFold,
+    clearPendingScroll,
+    rowVirtualizer,
+    scrollToFile,
+    virtualRows,
+  } = useDiffCards({
+    allExpanded,
+    entries,
+    expanded,
+    files,
+    isFolded,
+    keyOf: fileKey,
+    mode,
+    request,
+    resetKey: comparison,
+    scrollElement,
+    wrap,
   })
-  const virtualRows = rowVirtualizer.getVirtualItems()
-
-  // Moving either end of the comparison leaves behind marks that were made against a different one.
-  useEffect(() => {
-    setViewed(new Map())
-  }, [params.path, refs.base, refs.head, refs.mergeBase])
 
   // The working tree's marks are only ever held here, so a reload has nothing to read them back from.
   useEffect(() => {
@@ -1084,11 +475,13 @@ export function DiffPanel({
     })
       .then((nextComparison) => {
         if (!cancelled) {
-          reset()
           setExpanded(new Set())
           setAllExpanded(new Set())
           setHandFolds(new Map())
-          setComparison(nextComparison)
+          setLoadedComparison({
+            comparison: nextComparison,
+            ignoreWhitespace,
+          })
           setError(null)
         }
       })
@@ -1100,11 +493,11 @@ export function DiffPanel({
     return () => {
       cancelled = true
     }
-  }, [ignoreWhitespace, params.path, refs, reset, version])
+  }, [ignoreWhitespace, params.path, refs, version])
 
   // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {
-    const element = panel.current
+    const element = panel
     if (!element) {
       return
     }
@@ -1141,77 +534,20 @@ export function DiffPanel({
     )
     observer.observe(element)
     return () => observer.disconnect()
-  }, [])
-
-  // Measured heights belong to the previous comparison or layout, so drop them and start over.
-  useEffect(() => {
-    rowVirtualizer.measure()
-    rowVirtualizer.scrollToOffset(0)
-  }, [comparison, rowVirtualizer])
-
-  // A fold or changed expanded context changes the heights the scroller was measured at, so they are
-  // dropped and taken again. Dropping them leaves the cards still on screen at their estimates, which only
-  // a resize would correct, so they are measured back right away, once the estimates have replaced the
-  // sizes a measurement is compared against. Cards above the scroller stay at their estimates until they
-  // come back, which would move everything below them by the difference, so the card at the top of the
-  // scroller is put back where it was. A fold that moved what sits above the scroller asks for its own card
-  // instead, and marking a file viewed while viewed files are hidden takes that card out of the list before
-  // it can be aimed at.
-  useEffect(() => {
-    const scrollTop = scrollElement.current?.scrollTop ?? 0
-    const top = rowVirtualizer
-      .getVirtualItems()
-      .find((row) => row.end > scrollTop)
-    const anchor =
-      pendingAnchor.current !== null ? { key: pendingAnchor.current, offset: 0 }
-      : top && files[top.index] ?
-        { key: fileKey(files[top.index]), offset: top.start - scrollTop }
-      : null
-    pendingAnchor.current = null
-    rowVirtualizer.measure()
-    rowVirtualizer.getTotalSize()
-    scrollElement.current
-      ?.querySelectorAll<HTMLElement>(".diff-file-row")
-      .forEach((row) => rowVirtualizer.measureElement(row))
-    rowVirtualizer.getTotalSize()
-    const index =
-      anchor === null ? -1 : (
-        files.findIndex((file) => fileKey(file) === anchor.key)
-      )
-    const start = rowVirtualizer.measurementsCache[index]?.start
-    if (anchor !== null && start !== undefined) {
-      rowVirtualizer.scrollToOffset(start - anchor.offset)
-    }
-  }, [allExpanded, files, isFolded, mode, rowVirtualizer, wrap])
+  }, [panel])
 
   useEffect(() => {
-    request(
-      virtualRows
-        .map((row) => files[row.index])
-        .filter(
-          (file) =>
-            !isFolded(file) &&
-            (!isLargeDiff(file) || expanded.has(fileKey(file))),
-        ),
-    )
-  }, [expanded, files, isFolded, request, virtualRows])
-
-  useEffect(() => {
-    const timeout = window.setTimeout(
-      () => setSearchQuery(searchInput),
-      SEARCH_DEBOUNCE,
-    )
+    const timeout = window.setTimeout(() => {
+      setSearchQuery(searchInput)
+      setHitIndex(0)
+    }, SEARCH_DEBOUNCE)
     return () => window.clearTimeout(timeout)
   }, [searchInput])
 
-  useEffect(() => {
-    setHitIndex(0)
-  }, [searchQuery])
-
-  // Only an expression git could resolve is worth asking about, so half-typed names never reach it.
+  // Only an expression git could resolve is worth asking about, so half-typed names never reach it. An
+  // answer names the query it was for, so the one for a query that has moved on is not shown against it.
   useEffect(() => {
     if (!isRevisionExpression(searchQuery)) {
-      setRevision(null)
       return
     }
     let cancelled = false
@@ -1219,12 +555,17 @@ export function DiffPanel({
       repoPath: params.path,
       revision: searchQuery.trim(),
     })
-      .then((resolved) => !cancelled && setRevision(resolved))
-      .catch(() => !cancelled && setRevision(null))
+      .then(
+        (revision) =>
+          !cancelled && setResolvedRevision({ query: searchQuery, revision }),
+      )
+      .catch(() => !cancelled && setResolvedRevision(null))
     return () => {
       cancelled = true
     }
   }, [params.path, searchQuery])
+  const revision =
+    resolvedRevision?.query === searchQuery ? resolvedRevision.revision : null
 
   const hits = useMemo(
     () =>
@@ -1240,9 +581,9 @@ export function DiffPanel({
   )
   const clearFileSelection = useCallback(() => {
     pendingRestoredFilePath.current = null
-    pendingScroll.current = null
+    clearPendingScroll()
     setSelectedFilePath(null)
-  }, [])
+  }, [clearPendingScroll])
   const selectAheadRange = useCallback(
     (reference: string) => {
       invoke<BranchSelection>("select_branch_range", {
@@ -1252,6 +593,7 @@ export function DiffPanel({
         .then((selection) => {
           const range = selectedRefs(selection.baseRef, selection.headRef, true)
           clearFileSelection()
+          setViewed(new Map())
           setRefs(range)
           api.setTitle(branchRangeTitle(range))
         })
@@ -1300,43 +642,6 @@ export function DiffPanel({
       selectAheadRange,
     ],
   )
-
-  const scrollOffset = rowVirtualizer.scrollOffset ?? 0
-  // Past the last card only the tail is left to scroll, and that still belongs to the last file.
-  const activeIndex =
-    virtualRows.find((row) => row.end > scrollOffset + 1)?.index ??
-    (files.length > 0 ? files.length - 1 : undefined)
-  const activeKey =
-    activeIndex === undefined ? null : fileKey(files[activeIndex])
-  const scrollToFile = useCallback(
-    (file: ChangedFile) => {
-      pendingScroll.current = fileKey(file)
-      rowVirtualizer.scrollToIndex(files.indexOf(file), { align: "start" })
-    },
-    [files, rowVirtualizer],
-  )
-
-  // The first scroll aims at estimated heights, so aim again once the target has rendered its real diff.
-  useEffect(() => {
-    const key = pendingScroll.current
-    if (key && entries[key]) {
-      pendingScroll.current = null
-      rowVirtualizer.scrollToIndex(
-        files.findIndex((file) => fileKey(file) === key),
-        { align: "start" },
-      )
-    }
-  }, [entries, files, rowVirtualizer])
-
-  // Folding only moves what sits under the card, so the scroller is left alone. The exception is a card
-  // the scroller is already inside, where the sticky header stands in for a top that is far above.
-  function anchorFold(file: ChangedFile) {
-    const key = fileKey(file)
-    const row = virtualRows.find(
-      (candidate) => fileKey(files[candidate.index]) === key,
-    )
-    pendingAnchor.current = row && row.start < scrollOffset ? key : null
-  }
 
   function toggleAllExpanded(file: ChangedFile) {
     const key = fileKey(file)
@@ -1394,7 +699,7 @@ export function DiffPanel({
   }
 
   function collapseAll(collapse: boolean) {
-    pendingAnchor.current = activeKey
+    anchorAt(activeKey)
     setHandFolds(new Map(files.map((file) => [fileKey(file), collapse])))
   }
 
@@ -1426,9 +731,9 @@ export function DiffPanel({
       <FileTree
         activeKey={activeKey}
         files={tree}
-        headRef={refs.head}
+        isDimmed={(file) => isViewedFile(file, refs.head, viewed)}
+        keyOf={fileKey}
         onSelect={selectFile}
-        viewed={viewed}
       />
     ),
     [activeKey, refs.head, selectFile, tree, viewed],
@@ -1443,8 +748,10 @@ export function DiffPanel({
 
   // Where the ends sit cannot say whether a tab still carries the name it opened with, since a
   // comparison can be pointed back at the ends it opened from. Moving an end is what retitles the tab.
+  // Moving either end of the comparison leaves behind marks that were made against a different one.
   function moveRefs(next: SelectedRefs) {
     clearFileSelection()
+    setViewed(new Map())
     setRefs(next)
     api.setTitle(
       diffTitle(next, metadata.defaultBranch, metadata.remotes ?? []),
@@ -1517,8 +824,18 @@ export function DiffPanel({
               style={{ top: row.start }}
             >
               <FileDiffCard
+                action={
+                  <label className="diff-file-card-viewed">
+                    Viewed
+                    <Checkbox
+                      checked={isViewedFile(file, refs.head, viewed)}
+                      onCheckedChange={() => toggleViewed(file)}
+                    />
+                  </label>
+                }
                 allExpanded={allExpanded.has(fileKey(file))}
                 collapsed={isFolded(file)}
+                dimmed={isViewedFile(file, refs.head, viewed)}
                 entry={entries[fileKey(file)]}
                 expanded={expanded.has(fileKey(file))}
                 file={file}
@@ -1528,9 +845,7 @@ export function DiffPanel({
                 }
                 onToggleAllExpanded={() => toggleAllExpanded(file)}
                 onToggleCollapsed={() => toggleCollapsed(file)}
-                onToggleViewed={() => toggleViewed(file)}
                 theme={theme}
-                viewed={isViewedFile(file, refs.head, viewed)}
                 wrap={wrap}
               />
             </div>
@@ -1545,7 +860,7 @@ export function DiffPanel({
     <PopoverContent
       align="start"
       className="w-auto"
-      collisionBoundary={panel.current}
+      collisionBoundary={panel}
       collisionPadding={8}
       onOpenAutoFocus={(event) => event.preventDefault()}
       style={{ width: isNarrow ? panelWidth - 16 : PICKER_MENU_WIDTH }}
@@ -1573,7 +888,7 @@ export function DiffPanel({
   )
 
   return (
-    <section className="diff-panel" ref={panel}>
+    <section className="diff-panel" ref={setPanel}>
       <div className="diff-toolbar">
         <Hinted
           hint={isSidebarOpen ? "Hide changed files" : "Show changed files"}

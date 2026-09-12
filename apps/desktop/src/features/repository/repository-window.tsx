@@ -7,7 +7,7 @@ import {
   type IWatermarkPanelProps,
 } from "dockview-react"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { FileDiff, GitGraph, Plus, X } from "lucide-react"
+import { FileDiff, FilePen, GitGraph, Plus, X } from "lucide-react"
 import {
   createContext,
   useCallback,
@@ -38,6 +38,7 @@ import { SharingIndicator } from "../sharing/sharing-controls"
 import { repositoryHeaderControls } from "./header-controls"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
+import { WorkingTreePanel } from "../working-tree/working-tree-panel"
 import { closedTabHistory, reopenedPanel } from "../../lib/closed-tabs"
 import { panelId } from "../../lib/panel-id"
 import { tabsToClose, type TabCloseScope } from "../../lib/tab-closing"
@@ -121,6 +122,7 @@ function TabMenuItems({ api }: { api: IDockviewPanelHeaderProps["api"] }) {
 const repositoryTabs = {
   diff: panelTab(FileDiff),
   graph: panelTab(GitGraph),
+  "working-tree": panelTab(FilePen),
 }
 
 const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
@@ -162,6 +164,21 @@ function addDiffPanel(
   })
 }
 
+function addWorkingTreePanel(
+  containerApi: IDockviewHeaderActionsProps["containerApi"],
+  params: RepositoryPanelParams,
+  referencePanel: IDockviewHeaderActionsProps["activePanel"],
+) {
+  containerApi.addPanel({
+    component: "working-tree",
+    id: panelId("working-tree"),
+    params,
+    position: { direction: "within", referencePanel },
+    tabComponent: "working-tree",
+    title: params.name,
+  })
+}
+
 function NewTabAction({
   activePanel,
   containerApi,
@@ -191,6 +208,14 @@ function NewTabAction({
         >
           <FileDiff />
           Diff
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() =>
+            addWorkingTreePanel(containerApi, params, activePanel)
+          }
+        >
+          <FilePen />
+          Working tree
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -242,6 +267,7 @@ function EmptyRepository({ containerApi }: IWatermarkPanelProps) {
 const repositoryPanels = {
   diff: DiffPanel,
   graph: CommitGraphPanel,
+  "working-tree": WorkingTreePanel,
 }
 
 const repositoryDockviewTheme = {

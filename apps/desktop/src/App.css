@@ -1115,6 +1115,23 @@ button.commit-ref-selected:hover {
   width: 100%;
 }
 
+/* A row that carries a checkbox cannot be a button itself, so the name and stat become one beside it. */
+.diff-file:has(> .diff-file-button) {
+  padding-block: 0;
+}
+
+.diff-file-button {
+  align-items: center;
+  color: inherit;
+  display: flex;
+  flex: 1;
+  font: inherit;
+  gap: 6px;
+  min-width: 0;
+  padding-block: 5px;
+  text-align: left;
+}
+
 .diff-file.is-viewed {
   opacity: 0.55;
 }
@@ -1153,8 +1170,13 @@ button.commit-ref-selected:hover {
 /* A finger needs more than a pointer does, and the tree is the panel's only list to hit. */
 @media (pointer: coarse) {
   .diff-file,
+  .diff-file-button,
   .diff-folder-button {
     padding-block: 8px;
+  }
+
+  .diff-file:has(> .diff-file-button) {
+    padding-block: 0;
   }
 }
 
@@ -1321,4 +1343,80 @@ button.commit-ref-selected:hover {
 .diff-empty {
   color: var(--muted-foreground);
   padding: 16px;
+}
+
+/* The header of an area is a row like the files under it, so its checkbox lines up with theirs. */
+.working-tree-area {
+  align-items: center;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.75rem;
+  font-weight: 600;
+  gap: 6px;
+  padding: 8px 8px 4px;
+  user-select: none;
+}
+
+.working-tree-conflict {
+  color: var(--destructive);
+  font-size: 0.8125rem;
+  overflow: hidden;
+  padding: 2px 8px 2px 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working-tree-hint {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  padding: 4px 8px 4px 28px;
+}
+
+.working-tree-commit {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.working-tree-message {
+  background: transparent;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  min-height: 64px;
+  outline: none;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+.working-tree-message:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+
+.working-tree-message:disabled {
+  opacity: 0.5;
+}
+
+.working-tree-commit-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.working-tree-amend {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.75rem;
+  gap: 6px;
+  user-select: none;
 }
