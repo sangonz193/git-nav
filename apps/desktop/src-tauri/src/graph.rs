@@ -368,9 +368,13 @@ fn parse_tag_details(output: &str) -> Option<TagDetails> {
     if fields.next()? != "tag" {
         return None;
     }
+    let tagger = fields.next()?.to_string();
+    let tagger_email = fields.next()?.to_string();
+    // Plain taggeremail is used for the Git 2.24 version floor and includes angle brackets.
+    let tagger_email = tagger_email.strip_prefix('<').and_then(|email| email.strip_suffix('>')).unwrap_or(&tagger_email).to_string();
     Some(TagDetails {
-        tagger: fields.next()?.to_string(),
-        tagger_email: fields.next()?.to_string(),
+        tagger,
+        tagger_email,
         date: fields.next()?.to_string(),
         subject: fields.next()?.to_string(),
         body: fields.next()?.to_string(),
@@ -385,7 +389,7 @@ pub(crate) fn tag_details(repo_path: String, tag: String) -> Result<Option<TagDe
         &repo_path,
         &[
             "for-each-ref",
-            "--format=%(objecttype)%00%(taggername)%00%(taggeremail:trim)%00%(taggerdate:iso-strict)%00%(contents:subject)%00%(contents:body)",
+            "--format=%(objecttype)%00%(taggername)%00%(taggeremail)%00%(taggerdate:iso-strict)%00%(contents:subject)%00%(contents:body)",
             &reference,
         ],
     )?;
@@ -456,6 +460,16 @@ mod tests {
         assert_eq!(commits[0].author, "Ada");
         assert_eq!(commits[0].date, "2026-01-01T00:00:00+00:00");
         assert_eq!(counts, Some((3, 2)));
+    }
+
+    #[test]
+    fn reads_bracketed_tagger_email() {
+        let details = parse_tag_details(
+            "tag\0Ada\0<ada@example.com>\02026-01-01T00:00:00+00:00\0subject\0body",
+        )
+        .unwrap();
+
+        assert_eq!(details.tagger_email, "ada@example.com");
     }
 
     #[test]
