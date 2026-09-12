@@ -58,6 +58,7 @@ import {
   type StashEntry,
 } from "./commit-graph"
 import { LabelText, OperationMenuItems } from "./commit-operation-menu"
+import { sameRef } from "./use-graph-selection"
 import {
   CHIP_ICONS,
   OPERATION_GROUPS,
@@ -531,7 +532,7 @@ export function rowChip(
   const selected =
     ref !== null &&
     menus.selectedRef !== null &&
-    refName(menus.selectedRef.ref) === refName(ref) &&
+    sameRef(menus.selectedRef.ref, ref) &&
     menus.selectedRef.sha === sha
   // Neither a stash nor a worktree has a place in a selection, so their chips go straight to their changes.
   const activate = () => {

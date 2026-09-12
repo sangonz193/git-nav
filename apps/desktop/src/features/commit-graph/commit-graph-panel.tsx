@@ -750,7 +750,10 @@ function CommitGraphPanelContent({
         pullRequests,
         remotes,
         worktrees: worktreesByHead.get(commit.hash),
-      }).find((candidate) => refName(candidate) === hit.label)
+      }).find(
+        (candidate) =>
+          candidate.kind === hit.kind && refName(candidate) === hit.label,
+      )
       if (ref) {
         setSelectionRange(null)
         setSelectedRef({ ref, sha: commit.hash })
