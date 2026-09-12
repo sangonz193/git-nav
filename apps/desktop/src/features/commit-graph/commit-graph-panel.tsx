@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
-import { invoke, isDesktop } from "@/lib/ipc"
+import { invoke } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
 import { createUserWinningRestore } from "@/lib/pending-restore"
 import { WORKTREE_REF } from "@/lib/repository-constants"
@@ -18,7 +18,6 @@ import {
 } from "@/lib/navigation"
 import { Button } from "@workspace/shadcn/components/button"
 import { cn } from "@workspace/shadcn/lib/utils"
-import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -26,17 +25,9 @@ import {
 } from "@workspace/shadcn/components/context-menu"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/shadcn/components/popover"
 import { toast } from "@workspace/shadcn/components/sonner"
 import {
   Tooltip,
@@ -44,22 +35,7 @@ import {
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import {
-  Archive,
-  ArrowDown,
-  ArrowUp,
-  Broom,
-  ChevronDown,
-  ChevronsDownUp,
-  FileDiff,
-  FoldVertical,
-  LoaderCircle,
-  RefreshCw,
-  Search,
-  SlidersHorizontal,
-  UnfoldVertical,
-  X,
-} from "lucide-react"
+import { ArrowDown, ArrowUp, ChevronsDownUp, FileDiff, X } from "lucide-react"
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -109,13 +85,12 @@ import {
 } from "./commit-graph"
 import {
   appendGraphRows,
-  CHIP_KIND_LABELS,
+  CHIP_KINDS,
   commitChips,
   isMarkedCommit,
   rowIndexOfCommit,
   useViewConfig,
   type ChipContext,
-  type ChipKind,
   type GraphRow,
   type GraphRows,
   type SearchHit,
@@ -123,8 +98,7 @@ import {
   type ViewConfigChange,
 } from "./commit-graph-view"
 import { Hinted } from "@/components/hinted"
-import { SearchMenu } from "@/components/search-menu"
-import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
+import { OperationDialog } from "./commit-operation-menu"
 import {
   clearConflictPredictions,
   type CompletedOperation,
@@ -132,17 +106,17 @@ import {
   type RefUpdate,
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
+import { GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
 import {
   chipMenuEntry,
   dropdownMenuComponents,
   rowChip,
   SELECTION_LABELS,
-  stashMenuEntry,
   type ChipMenuContext,
 } from "./row-chips"
 import { useBranchCleanup } from "./use-branch-cleanup"
-import { BROWSER_GRAPH_WINDOW_SIZE, useGraphData } from "./use-graph-data"
+import { useGraphData } from "./use-graph-data"
 import { useGraphSearch } from "./use-graph-search"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 
@@ -156,7 +130,6 @@ type BranchSelection = { baseRef: string; headRef: string }
 type RangeDrag = { anchorIndex: number; focusIndex: number }
 type SelectedRef = { ref: DisplayRef; sha: string }
 type SelectionRange = { anchorHash: string; focusHash: string }
-const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
 const commitTableFeatures = tableFeatures({
   columnSizingFeature,
   columnResizingFeature,
@@ -1278,239 +1251,24 @@ function CommitGraphPanelContent({
       className="relative flex h-full flex-col overflow-hidden bg-background"
       onKeyDown={onPanelKeyDown}
     >
-      <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
-        <div className="flex items-center gap-1">
-          <Popover
-            onOpenChange={(open) =>
-              open ? search.open() : search.setIsOpen(false)
-            }
-            open={search.isOpen}
-          >
-            <Tooltip>
-              <PopoverTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label="Search the graph"
-                    size="icon-sm"
-                    type="button"
-                    variant="outline"
-                  >
-                    <Search />
-                  </Button>
-                </TooltipTrigger>
-              </PopoverTrigger>
-              <TooltipContent>Find a branch, tag or commit</TooltipContent>
-            </Tooltip>
-            <PopoverContent
-              align="start"
-              className="w-80"
-              onOpenAutoFocus={(event) => event.preventDefault()}
-            >
-              <SearchMenu
-                activeIndex={search.hitIndex}
-                inputLabel="Search refs and commits"
-                inputRef={search.field}
-                items={search.menuItems}
-                onClose={() => search.setIsOpen(false)}
-                onHighlight={(index) => {
-                  search.setHitIndex(index)
-                  activateSearchHit(search.hits[index])
-                }}
-                onQueryChange={search.setInput}
-                onSelect={(index, source) => {
-                  search.setHitIndex(index)
-                  activateSearchHit(search.hits[index])
-                  if (source === "enter") {
-                    search.setIsOpen(false)
-                  }
-                }}
-                placeholder="Branch, tag or commit"
-                query={search.input}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-        <div className="flex items-center gap-1">
-          <Hinted
-            hint={
-              collapseUnmarked ? "Show every commit" : (
-                "Collapse commits nothing points at"
-              )
-            }
-          >
-            <Button
-              aria-label="Collapse commits nothing points at"
-              aria-pressed={collapseUnmarked}
-              className={collapseUnmarked ? "bg-muted" : undefined}
-              onClick={() => collapseUnmarkedCommits(!collapseUnmarked)}
-              size="icon-sm"
-              type="button"
-              variant="outline"
-            >
-              {collapseUnmarked ?
-                <UnfoldVertical />
-              : <FoldVertical />}
-            </Button>
-          </Hinted>
-          <DropdownMenu>
-            <Tooltip>
-              <DropdownMenuTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button size="sm" type="button" variant="outline">
-                    <SlidersHorizontal />
-                    View
-                  </Button>
-                </TooltipTrigger>
-              </DropdownMenuTrigger>
-              <TooltipContent>Choose what the graph shows</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Show</DropdownMenuLabel>
-              {CHIP_KINDS.map((kind) => (
-                <DropdownMenuCheckboxItem
-                  checked={config.chipKinds[kind]}
-                  key={kind}
-                  onCheckedChange={(checked) =>
-                    updateConfig({ chipKinds: { [kind]: checked === true } })
-                  }
-                  onSelect={(event) => event.preventDefault()}
-                >
-                  {CHIP_KIND_LABELS[kind]}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {!isDesktop && graphOffset > 0 && (
-            <Hinted hint="Show newer commits">
-              <Button
-                disabled={isGraphWindowLoading}
-                onClick={() =>
-                  showGraphWindow(
-                    Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE),
-                  )
-                }
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                Newer
-              </Button>
-            </Hinted>
-          )}
-          {!isDesktop && hasOlderCommits && (
-            <Hinted hint="Show older commits">
-              <Button
-                disabled={isGraphWindowLoading}
-                onClick={() =>
-                  showGraphWindow(graphOffset + BROWSER_GRAPH_WINDOW_SIZE)
-                }
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                Older
-              </Button>
-            </Hinted>
-          )}
-          <DropdownMenu>
-            <Tooltip>
-              <DropdownMenuTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button size="sm" type="button" variant="outline">
-                    <Archive />
-                    <span className="tabular-nums">
-                      {stashes.length > 0 ? stashes.length : "Stash"}
-                    </span>
-                  </Button>
-                </TooltipTrigger>
-              </DropdownMenuTrigger>
-              <TooltipContent>Stashed changes</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent>
-              <OperationMenuItems
-                components={dropdownMenuComponents}
-                onSelect={setRequest}
-                repository={repository}
-                source={null}
-                target={{ kind: "worktree" }}
-              />
-              {stashes.map((entry) =>
-                stashMenuEntry(menus, entry, dropdownMenuComponents),
-              )}
-              {stashes.length === 0 && !repository?.isDirty && (
-                <DropdownMenuItem disabled>Nothing is stashed</DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Hinted
-            hint={
-              cleanup.candidateCount > 0 ?
-                `${cleanup.candidateCount} branch${cleanup.candidateCount === 1 ? "" : "es"} can be cleaned`
-              : "Clean merged branches"
-            }
-          >
-            <Button
-              aria-label="Clean merged branches"
-              disabled={fetchMutation.isPending || cleanup.isPending}
-              onClick={() => cleanup.setIsConfirmationOpen(true)}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              {cleanup.isPending ?
-                <LoaderCircle className="animate-spin" />
-              : <Broom />}
-              {cleanup.candidateCount > 0 && (
-                <span className="tabular-nums">{cleanup.candidateCount}</span>
-              )}
-            </Button>
-          </Hinted>
-          <ButtonGroup>
-            <Hinted hint="Refresh graph">
-              <Button
-                aria-label="Refresh graph"
-                disabled={fetchMutation.isPending || cleanup.isPending}
-                onClick={() => refreshGraph()}
-                size="icon-sm"
-                type="button"
-                variant="outline"
-              >
-                {fetchMutation.isPending ?
-                  <LoaderCircle className="animate-spin" />
-                : <RefreshCw />}
-              </Button>
-            </Hinted>
-            <DropdownMenu>
-              <Tooltip>
-                <DropdownMenuTrigger asChild>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label="Fetch options"
-                      className="w-6"
-                      disabled={fetchMutation.isPending || cleanup.isPending}
-                      size="icon-sm"
-                      type="button"
-                      variant="outline"
-                    >
-                      <ChevronDown />
-                    </Button>
-                  </TooltipTrigger>
-                </DropdownMenuTrigger>
-                <TooltipContent>Fetch options</TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent>
-                <DropdownMenuItem
-                  disabled={fetchMutation.isPending}
-                  onSelect={() => fetchMutation.mutate()}
-                >
-                  <RefreshCw />
-                  Fetch from origin
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </ButtonGroup>
-        </div>
-      </div>
+      <GraphToolbar
+        cleanup={cleanup}
+        collapseUnmarked={collapseUnmarked}
+        config={config}
+        fetch={() => fetchMutation.mutate()}
+        graphOffset={graphOffset}
+        hasOlderCommits={hasOlderCommits}
+        isFetching={fetchMutation.isPending}
+        isGraphWindowLoading={isGraphWindowLoading}
+        menus={menus}
+        onActivateSearchHit={activateSearchHit}
+        onCollapseUnmarked={collapseUnmarkedCommits}
+        refreshGraph={refreshGraph}
+        search={search}
+        showGraphWindow={showGraphWindow}
+        stashes={stashes}
+        updateConfig={updateConfig}
+      />
       <div
         aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."
         aria-multiselectable

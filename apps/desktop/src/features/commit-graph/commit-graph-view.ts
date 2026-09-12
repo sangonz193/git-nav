@@ -28,6 +28,7 @@ export type ViewConfigChange = {
   cleanOptions?: Partial<CleanOptions>
 }
 
+export const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
 export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
   branch: "Local branches",
   remote: "Remote branches",
