@@ -27,13 +27,9 @@ use tower_http::compression::{
 
 use crate::{
     IpcCommand,
-    OpenWorktrees,
-    directory_listing,
-    launch_worktree,
-    project_at,
-    recent_project_list,
-    remember_repository,
-    walk_commit_graph_page,
+    projects::{OpenWorktrees, directory_listing, project_at, recent_project_list, remember_repository},
+    graph::walk_commit_graph_page,
+    desktop::launch_worktree,
 };
 
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
@@ -131,46 +127,46 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::open_url => Exposure::DesktopOnly,
         IpcCommand::project_snapshot => Exposure::Api(post(project_snapshot)),
         IpcCommand::stream_commit_graph => Exposure::Api(get(stream_commit_graph)),
-        IpcCommand::repository_fingerprint => Exposure::Api(post(crate::__http_repository_fingerprint)),
-        IpcCommand::branch_sync => Exposure::Api(post(crate::__http_branch_sync)),
-        IpcCommand::worktree_status => Exposure::Api(post(crate::__http_worktree_status)),
-        IpcCommand::inferred_squash_merge_edges => Exposure::Api(post(crate::__http_inferred_squash_merge_edges)),
-        IpcCommand::fetch_and_sync_pull_requests => Exposure::Api(post(crate::__http_fetch_and_sync_pull_requests)),
-        IpcCommand::branch_pull_requests => Exposure::Api(post(crate::__http_branch_pull_requests)),
-        IpcCommand::squashed_branch_candidates => Exposure::Api(post(crate::__http_squashed_branch_candidates)),
-        IpcCommand::preview_cleanup_candidates => Exposure::Api(post(crate::__http_preview_cleanup_candidates)),
-        IpcCommand::delete_squashed_branches => Exposure::Api(post(crate::__http_delete_squashed_branches)),
-        IpcCommand::delete_branch => Exposure::Api(post(crate::__http_delete_branch)),
-        IpcCommand::compare_refs => Exposure::Api(post(crate::__http_compare_refs)),
-        IpcCommand::viewed_files => Exposure::Api(post(crate::__http_viewed_files)),
-        IpcCommand::set_file_viewed => Exposure::Api(post(crate::__http_set_file_viewed)),
-        IpcCommand::reference_picker_commits => Exposure::Api(post(crate::__http_reference_picker_commits)),
-        IpcCommand::repository_references => Exposure::Api(post(crate::__http_repository_references)),
-        IpcCommand::resolve_revision => Exposure::Api(post(crate::__http_resolve_revision)),
-        IpcCommand::select_branch_range => Exposure::Api(post(crate::__http_select_branch_range)),
-        IpcCommand::diff_file => Exposure::Api(post(crate::__http_diff_file)),
-        IpcCommand::predict_rebase_conflicts => Exposure::Api(post(crate::__http_predict_rebase_conflicts)),
-        IpcCommand::branch_operation_state => Exposure::Api(post(crate::__http_branch_operation_state)),
-        IpcCommand::repository_state => Exposure::Api(post(crate::__http_repository_state)),
-        IpcCommand::merge_base => Exposure::Api(post(crate::__http_merge_base)),
-        IpcCommand::rebase_onto => Exposure::Api(post(crate::__http_rebase_onto)),
-        IpcCommand::checkout_ref => Exposure::Api(post(crate::__http_checkout_ref)),
-        IpcCommand::push_ref => Exposure::Api(post(crate::__http_push_ref)),
-        IpcCommand::pull_branch => Exposure::Api(post(crate::__http_pull_branch)),
-        IpcCommand::merge_ref => Exposure::Api(post(crate::__http_merge_ref)),
-        IpcCommand::predict_merge_conflicts => Exposure::Api(post(crate::__http_predict_merge_conflicts)),
-        IpcCommand::predict_revert_conflicts => Exposure::Api(post(crate::__http_predict_revert_conflicts)),
-        IpcCommand::create_branch => Exposure::Api(post(crate::__http_create_branch)),
-        IpcCommand::rename_branch => Exposure::Api(post(crate::__http_rename_branch)),
-        IpcCommand::create_tag => Exposure::Api(post(crate::__http_create_tag)),
-        IpcCommand::delete_tag => Exposure::Api(post(crate::__http_delete_tag)),
-        IpcCommand::cherry_pick_range => Exposure::Api(post(crate::__http_cherry_pick_range)),
-        IpcCommand::revert_range => Exposure::Api(post(crate::__http_revert_range)),
-        IpcCommand::reset_current => Exposure::Api(post(crate::__http_reset_current)),
-        IpcCommand::stash_list => Exposure::Api(post(crate::__http_stash_list)),
-        IpcCommand::stash_changes => Exposure::Api(post(crate::__http_stash_changes)),
-        IpcCommand::stash_action => Exposure::Api(post(crate::__http_stash_action)),
-        IpcCommand::undo_ref_updates => Exposure::Api(post(crate::__http_undo_ref_updates)),
+        IpcCommand::repository_fingerprint => Exposure::Api(post(crate::graph::__http_repository_fingerprint)),
+        IpcCommand::branch_sync => Exposure::Api(post(crate::worktrees::__http_branch_sync)),
+        IpcCommand::worktree_status => Exposure::Api(post(crate::worktrees::__http_worktree_status)),
+        IpcCommand::inferred_squash_merge_edges => Exposure::Api(post(crate::cleanup::__http_inferred_squash_merge_edges)),
+        IpcCommand::fetch_and_sync_pull_requests => Exposure::Api(post(crate::pull_requests::__http_fetch_and_sync_pull_requests)),
+        IpcCommand::branch_pull_requests => Exposure::Api(post(crate::pull_requests::__http_branch_pull_requests)),
+        IpcCommand::squashed_branch_candidates => Exposure::Api(post(crate::cleanup::__http_squashed_branch_candidates)),
+        IpcCommand::preview_cleanup_candidates => Exposure::Api(post(crate::cleanup::__http_preview_cleanup_candidates)),
+        IpcCommand::delete_squashed_branches => Exposure::Api(post(crate::cleanup::__http_delete_squashed_branches)),
+        IpcCommand::delete_branch => Exposure::Api(post(crate::operations::__http_delete_branch)),
+        IpcCommand::compare_refs => Exposure::Api(post(crate::compare::__http_compare_refs)),
+        IpcCommand::viewed_files => Exposure::Api(post(crate::compare::__http_viewed_files)),
+        IpcCommand::set_file_viewed => Exposure::Api(post(crate::compare::__http_set_file_viewed)),
+        IpcCommand::reference_picker_commits => Exposure::Api(post(crate::references::__http_reference_picker_commits)),
+        IpcCommand::repository_references => Exposure::Api(post(crate::references::__http_repository_references)),
+        IpcCommand::resolve_revision => Exposure::Api(post(crate::references::__http_resolve_revision)),
+        IpcCommand::select_branch_range => Exposure::Api(post(crate::compare::__http_select_branch_range)),
+        IpcCommand::diff_file => Exposure::Api(post(crate::diff::__http_diff_file)),
+        IpcCommand::predict_rebase_conflicts => Exposure::Api(post(crate::conflicts::__http_predict_rebase_conflicts)),
+        IpcCommand::branch_operation_state => Exposure::Api(post(crate::worktrees::__http_branch_operation_state)),
+        IpcCommand::repository_state => Exposure::Api(post(crate::worktrees::__http_repository_state)),
+        IpcCommand::merge_base => Exposure::Api(post(crate::compare::__http_merge_base)),
+        IpcCommand::rebase_onto => Exposure::Api(post(crate::operations::__http_rebase_onto)),
+        IpcCommand::checkout_ref => Exposure::Api(post(crate::operations::__http_checkout_ref)),
+        IpcCommand::push_ref => Exposure::Api(post(crate::operations::__http_push_ref)),
+        IpcCommand::pull_branch => Exposure::Api(post(crate::operations::__http_pull_branch)),
+        IpcCommand::merge_ref => Exposure::Api(post(crate::operations::__http_merge_ref)),
+        IpcCommand::predict_merge_conflicts => Exposure::Api(post(crate::conflicts::__http_predict_merge_conflicts)),
+        IpcCommand::predict_revert_conflicts => Exposure::Api(post(crate::conflicts::__http_predict_revert_conflicts)),
+        IpcCommand::create_branch => Exposure::Api(post(crate::operations::__http_create_branch)),
+        IpcCommand::rename_branch => Exposure::Api(post(crate::operations::__http_rename_branch)),
+        IpcCommand::create_tag => Exposure::Api(post(crate::operations::__http_create_tag)),
+        IpcCommand::delete_tag => Exposure::Api(post(crate::operations::__http_delete_tag)),
+        IpcCommand::cherry_pick_range => Exposure::Api(post(crate::operations::__http_cherry_pick_range)),
+        IpcCommand::revert_range => Exposure::Api(post(crate::operations::__http_revert_range)),
+        IpcCommand::reset_current => Exposure::Api(post(crate::operations::__http_reset_current)),
+        IpcCommand::stash_list => Exposure::Api(post(crate::stash::__http_stash_list)),
+        IpcCommand::stash_changes => Exposure::Api(post(crate::stash::__http_stash_changes)),
+        IpcCommand::stash_action => Exposure::Api(post(crate::stash::__http_stash_action)),
+        IpcCommand::undo_ref_updates => Exposure::Api(post(crate::operations::__http_undo_ref_updates)),
         IpcCommand::settings => Exposure::Api(post(settings)),
         IpcCommand::set_setting => Exposure::Api(post(set_setting)),
         IpcCommand::repository_layout => Exposure::Api(post(repository_layout)),
@@ -575,11 +571,11 @@ async fn recent_projects(State(state): State<Arc<ServerState>>) -> CommandResult
 }
 
 async fn clear_recent_projects() -> CommandResult {
-    ok(blocking(|| crate::clear_recent_paths(None)).await?)
+    ok(blocking(|| crate::projects::clear_recent_paths(None)).await?)
 }
 
 async fn settings() -> CommandResult {
-    let mut settings = crate::load_settings()?;
+    let mut settings = crate::storage::load_settings()?;
     redact_network_sharing_settings(&mut settings);
     ok(settings)
 }
@@ -603,7 +599,7 @@ async fn set_setting(Json(args): Json<SettingArgs>) -> Response {
         )
             .into_response();
     }
-    match blocking(move || crate::save_setting(args.key, args.value)).await {
+    match blocking(move || crate::storage::save_setting(args.key, args.value)).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => error.into_response(),
     }
@@ -617,7 +613,7 @@ struct RepositoryLayoutArgs {
 }
 
 async fn repository_layout(Json(args): Json<RepositoryLayoutArgs>) -> CommandResult {
-    ok(blocking(move || crate::load_repository_layout(args.path, args.client_id)).await?)
+    ok(blocking(move || crate::storage::load_repository_layout(args.path, args.client_id)).await?)
 }
 
 #[derive(Deserialize)]
@@ -631,7 +627,7 @@ struct SaveRepositoryLayoutArgs {
 async fn save_repository_layout(Json(args): Json<SaveRepositoryLayoutArgs>) -> CommandResult {
     ok(
         blocking(move || {
-            crate::save_repository_layout(args.path, args.client_id, args.layout)
+            crate::storage::save_repository_layout(args.path, args.client_id, args.layout)
         })
         .await?,
     )
