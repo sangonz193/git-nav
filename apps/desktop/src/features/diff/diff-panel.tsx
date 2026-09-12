@@ -1654,7 +1654,6 @@ export function DiffPanel({
           <Button
             aria-label="Compare since the two sides forked"
             aria-pressed={refs.mergeBase}
-            className={refs.mergeBase ? "bg-muted" : undefined}
             onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })}
             size="sm"
             type="button"
@@ -1693,7 +1692,6 @@ export function DiffPanel({
                 <Button
                   aria-label="Split layout"
                   aria-pressed={isSplit}
-                  className={isSplit ? "bg-muted" : undefined}
                   onClick={() => setPreferredMode("split")}
                   size="icon-sm"
                   type="button"
@@ -1706,7 +1704,6 @@ export function DiffPanel({
                 <Button
                   aria-label="Unified layout"
                   aria-pressed={!isSplit}
-                  className={isSplit ? undefined : "bg-muted"}
                   onClick={() => setPreferredMode("unified")}
                   size="icon-sm"
                   type="button"
