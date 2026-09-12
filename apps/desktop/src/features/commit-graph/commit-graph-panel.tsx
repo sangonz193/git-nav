@@ -22,12 +22,6 @@ import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@workspace/shadcn/components/context-menu"
 import {
@@ -36,10 +30,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
 import {
@@ -55,37 +45,24 @@ import {
 } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
 import {
-  AppWindow,
   Archive,
   ArrowDown,
   ArrowUp,
   Broom,
   ChevronDown,
   ChevronsDownUp,
-  CodeXml,
-  Copy,
-  ExternalLink,
   FileDiff,
-  FilePen,
-  FolderOpen,
   FoldVertical,
-  GitBranch,
   GitCompareArrows,
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
   LoaderCircle,
   RefreshCw,
   Search,
   SlidersHorizontal,
-  Terminal,
   UnfoldVertical,
   X,
 } from "lucide-react"
 import {
   type CSSProperties,
-  type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -117,29 +94,21 @@ import {
   persistedGraphPanelParams,
   persistedSelectionHashes,
   persistedSelectionRestore,
-  pullRequestDescription,
   REF_BUDGET_SHARE,
   refName,
   refSelection,
-  refSyncLabel,
   relativeDate,
   ROW_HEIGHT,
-  splitRefLabel,
-  syncDescription,
-  worktreeChanges,
-  worktreeDescription,
   unpushedHashes,
   unpushedLanes,
   visibleChipCount,
   type BranchPullRequest,
   type BranchSync,
-  type PullRequestState,
   type RowWorktree,
   type Commit,
   type CommitBatch,
   type CommitSelection,
   type DisplayRef,
-  type RowChip,
   type PendingOperation,
   type Selection,
   type SquashMergeInference,
@@ -163,24 +132,25 @@ import {
 } from "./commit-graph-view"
 import { Hinted } from "@/components/hinted"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
-import {
-  LabelText,
-  OperationDialog,
-  OperationMenuItems,
-} from "./commit-operation-menu"
+import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import {
   CHIP_ICONS,
   clearConflictPredictions,
-  OPERATION_GROUPS,
   type CompletedOperation,
-  type Label,
-  type OperationGroup,
   type OperationRequest,
-  type RefMenuComponents,
   type RefUpdate,
   type RepositoryState,
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
+import { RowContextMenuBody } from "./row-context-menu"
+import {
+  chipMenuEntry,
+  dropdownMenuComponents,
+  rowChip,
+  SELECTION_LABELS,
+  stashMenuEntry,
+  type ChipMenuContext,
+} from "./row-chips"
 import { useBranchCleanup } from "./use-branch-cleanup"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type {
@@ -214,45 +184,7 @@ type WorktreeStatus = {
 }
 type WorktreeStatusScope = "all" | "current"
 type GraphWindowComplete = { hasMore: boolean }
-const contextMenuComponents: RefMenuComponents = {
-  Item: ContextMenuItem,
-  Label: ContextMenuLabel,
-  Separator: ContextMenuSeparator,
-  Sub: ContextMenuSub,
-  SubContent: ContextMenuSubContent,
-  SubTrigger: ContextMenuSubTrigger,
-}
-const dropdownMenuComponents: RefMenuComponents = {
-  Item: DropdownMenuItem,
-  Label: DropdownMenuLabel,
-  Separator: DropdownMenuSeparator,
-  Sub: DropdownMenuSub,
-  SubContent: DropdownMenuSubContent,
-  SubTrigger: DropdownMenuSubTrigger,
-}
-const SELECTION_LABELS = {
-  branch: "Branch",
-  remote: "Remote branch",
-  tag: "Tag",
-}
-// Destructive operations sit at the bottom of a menu, after anything that only reads the repository.
-const DANGER_GROUPS: OperationGroup[] = ["danger"]
-const SAFE_GROUPS = OPERATION_GROUPS.filter(
-  (group) => !DANGER_GROUPS.includes(group),
-)
 const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
-const PULL_REQUEST_ICONS = {
-  open: GitPullRequest,
-  draft: GitPullRequestDraft,
-  merged: GitMerge,
-  closed: GitPullRequestClosed,
-}
-
-function PullRequestIcon({ state }: { state: PullRequestState }) {
-  const Icon = PULL_REQUEST_ICONS[state]
-  return <Icon />
-}
-
 const commitTableFeatures = tableFeatures({
   columnSizingFeature,
   columnResizingFeature,
@@ -287,146 +219,6 @@ const commitColumns = commitColumnHelper.columns([
     size: 96,
   }),
 ])
-
-// Context menu content stays behind this boundary so its render cost does not grow with history depth.
-function RowContextMenuBody({
-  canSelectRange,
-  chipMenuEntry,
-  chips,
-  commit,
-  copyText,
-  diffSelectedRange,
-  index,
-  menuHeader,
-  onRequest,
-  openCommitDiff,
-  openRangeDiff,
-  repository,
-  selectCommit,
-  selectRangeTo,
-  selected,
-  source,
-  targetForRow,
-}: {
-  canSelectRange: (index: number) => boolean
-  chipMenuEntry: (
-    chip: RowChip,
-    sha: string,
-    key: string,
-    components: RefMenuComponents,
-  ) => ReactNode
-  chips: RowChip[]
-  commit: Commit
-  copyText: (value: string) => void
-  diffSelectedRange: CommitSelection | null
-  index: number
-  menuHeader: (
-    components: RefMenuComponents,
-    name: Label,
-    detail?: string | null,
-  ) => ReactNode
-  onRequest: (request: OperationRequest) => void
-  openCommitDiff: (commit: Commit) => void
-  openRangeDiff: (selection: CommitSelection) => void
-  repository: RepositoryState | null
-  selectCommit: (commit: Commit) => void
-  selectRangeTo: (commit: Commit) => void
-  selected: boolean
-  source: Selection | null
-  targetForRow: (index: number) => CommitSelection
-}) {
-  const target = targetForRow(index)
-  return (
-    <>
-      {menuHeader(
-        contextMenuComponents,
-        target.commits.length === 1 ?
-          target.tip.hash.slice(0, 8)
-        : `${target.commits.length} commits`,
-        commit.subject || "(no subject)",
-      )}
-      <ContextMenuItem onSelect={() => selectCommit(commit)}>
-        <GitCompareArrows />
-        Select commit
-      </ContextMenuItem>
-      {canSelectRange(index) && (
-        <ContextMenuItem onSelect={() => selectRangeTo(commit)}>
-          <GitCompareArrows />
-          Select range to here
-        </ContextMenuItem>
-      )}
-      <OperationMenuItems
-        components={contextMenuComponents}
-        groups={SAFE_GROUPS}
-        onSelect={onRequest}
-        repository={repository}
-        source={source}
-        target={target}
-      />
-      <ContextMenuItem
-        disabled={commit.parents.length === 0}
-        onSelect={() => openCommitDiff(commit)}
-      >
-        <FileDiff />
-        Show commit diff
-      </ContextMenuItem>
-      {selected &&
-        diffSelectedRange &&
-        diffSelectedRange.commits.length > 1 && (
-          <ContextMenuItem
-            disabled={!diffSelectedRange.base}
-            onSelect={() => openRangeDiff(diffSelectedRange)}
-          >
-            <FileDiff />
-            Diff selected range
-          </ContextMenuItem>
-        )}
-      {chips.length === 1 &&
-        chipMenuEntry(
-          chips[0],
-          commit.hash,
-          chipName(chips[0]),
-          contextMenuComponents,
-        )}
-      {chips.length > 1 && (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>
-            <GitBranch />
-            Refs
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {chips.map((chip, index) =>
-              chipMenuEntry(
-                chip,
-                commit.hash,
-                `${chipName(chip)}-${index}`,
-                contextMenuComponents,
-              ),
-            )}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-      )}
-      <ContextMenuSeparator />
-      <ContextMenuItem onSelect={() => copyText(commit.hash)}>
-        <Copy />
-        Copy SHA
-      </ContextMenuItem>
-      <ContextMenuItem onSelect={() => copyText(commit.subject)}>
-        <Copy />
-        Copy commit subject
-      </ContextMenuItem>
-      <OperationMenuItems
-        components={contextMenuComponents}
-        groups={DANGER_GROUPS}
-        onSelect={onRequest}
-        repository={repository}
-        separator="before"
-        source={source}
-        target={target}
-      />
-    </>
-  )
-}
 
 export function CommitGraphPanel(props: IDockviewPanelProps<GraphPanelParams>) {
   const [config, updateConfig] = useViewConfig()
@@ -1863,519 +1655,19 @@ function CommitGraphPanelContent({
     }
   }
 
-  function menuHeader(
-    { Label, Separator }: RefMenuComponents,
-    name: Label,
-    detail?: string | null,
-  ) {
-    return (
-      <>
-        <Label>
-          <span className="block max-w-80 text-foreground">
-            <LabelText label={name} />
-          </span>
-          {detail && (
-            <span className="block max-w-80 truncate font-normal">
-              {detail}
-            </span>
-          )}
-        </Label>
-        <Separator />
-      </>
-    )
-  }
-
-  function refMenuItems(
-    ref: DisplayRef,
-    sha: string,
-    components: RefMenuComponents,
-  ) {
-    const { Item, Sub, SubContent, SubTrigger } = components
-    const reference = refName(ref)
-    const pullRequest = ref.pullRequest
-    return (
-      <>
-        {menuHeader(
-          components,
-          { kind: ref.kind, name: reference },
-          syncDescription(ref) ?? SELECTION_LABELS[ref.kind],
-        )}
-        <OperationMenuItems
-          components={components}
-          groups={SAFE_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          source={selection}
-          target={refSelection(ref, sha)}
-        />
-        {reference !== repository?.defaultBranch && (
-          <Item onSelect={() => openRefDiff(reference)}>
-            <FileDiff />
-            {`Compare with ${repository?.defaultBranch ?? "the default branch"}`}
-          </Item>
-        )}
-        <Item onSelect={() => copyText(reference)}>
-          <Copy />
-          {`Copy ${SELECTION_LABELS[ref.kind].toLowerCase()} name`}
-        </Item>
-        {pullRequest && (
-          <Item
-            onSelect={() => openPullRequestMutation.mutate(pullRequest.url)}
-          >
-            <PullRequestIcon state={pullRequest.state} />
-            {`Open pull request #${pullRequest.number}`}
-          </Item>
-        )}
-        {ref.worktrees.length > 0 && (
-          <Sub>
-            <SubTrigger>
-              <ExternalLink />
-              {ref.worktrees.length === 1 && !ref.worktrees[0].isCurrent ?
-                <LabelText
-                  label={{
-                    before: "Open ",
-                    kind: "worktree",
-                    name: ref.worktrees[0].name,
-                    after: " in",
-                  }}
-                />
-              : "Open in"}
-            </SubTrigger>
-            <SubContent>
-              {ref.worktrees.flatMap((worktree) => {
-                const suffix =
-                  ref.worktrees.length > 1 ? ` (${worktree.name})` : ""
-                return [
-                  <Item
-                    key={`${worktree.path}-git-nav`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "git-nav",
-                      })
-                    }
-                  >
-                    <AppWindow />
-                    {`Git Nav${suffix}`}
-                  </Item>,
-                  <Item
-                    key={`${worktree.path}-vscode`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "vscode",
-                      })
-                    }
-                  >
-                    <CodeXml />
-                    {`VS Code${suffix}`}
-                  </Item>,
-                  <Item
-                    key={`${worktree.path}-terminal`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "terminal",
-                      })
-                    }
-                  >
-                    <Terminal />
-                    {`Terminal${suffix}`}
-                  </Item>,
-                  <Item
-                    key={`${worktree.path}-finder`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "finder",
-                      })
-                    }
-                  >
-                    <FolderOpen />
-                    {`File manager${suffix}`}
-                  </Item>,
-                ]
-              })}
-            </SubContent>
-          </Sub>
-        )}
-        <OperationMenuItems
-          components={components}
-          groups={DANGER_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          separator="before"
-          source={selection}
-          target={refSelection(ref, sha)}
-        />
-      </>
-    )
-  }
-
-  function refMenuEntry(
-    ref: DisplayRef,
-    sha: string,
-    key: string,
-    components: RefMenuComponents,
-  ) {
-    const { Item, Sub, SubContent, SubTrigger } = components
-    return (
-      <Sub key={key}>
-        <SubTrigger>
-          <LabelText label={{ kind: ref.kind, name: ref.label }} />
-        </SubTrigger>
-        <SubContent>
-          <Item onSelect={() => selectRef(ref, sha)}>
-            <GitBranch />
-            {`Select ${refName(ref)}`}
-          </Item>
-          {refMenuItems(ref, sha, components)}
-        </SubContent>
-      </Sub>
-    )
-  }
-
-  function stashMenuItems(entry: StashEntry, components: RefMenuComponents) {
-    const { Item } = components
-    return (
-      <>
-        {menuHeader(
-          components,
-          { kind: "stash", name: entry.name },
-          entry.message,
-        )}
-        <OperationMenuItems
-          components={components}
-          groups={SAFE_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          source={null}
-          target={{ kind: "stash", entry }}
-        />
-        <Item onSelect={() => openStashDiff(entry)}>
-          <FileDiff />
-          Show stashed changes
-        </Item>
-        <OperationMenuItems
-          components={components}
-          groups={DANGER_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          separator="before"
-          source={null}
-          target={{ kind: "stash", entry }}
-        />
-      </>
-    )
-  }
-
-  function stashMenuEntry(entry: StashEntry, components: RefMenuComponents) {
-    const { Sub, SubContent, SubTrigger } = components
-    return (
-      <Sub key={entry.sha}>
-        <SubTrigger>
-          <LabelText
-            label={{
-              kind: "stash",
-              name: `${entry.name}${entry.branch ? ` · ${entry.branch}` : ""}`,
-            }}
-          />
-        </SubTrigger>
-        <SubContent>{stashMenuItems(entry, components)}</SubContent>
-      </Sub>
-    )
-  }
-
-  function chipMenuItems(
-    chip: RowChip,
-    sha: string,
-    components: RefMenuComponents,
-  ) {
-    if (chip.kind === "stash") {
-      return stashMenuItems(chip.entry, components)
-    }
-    return chip.kind === "worktree" ?
-        worktreeMenuItems(chip.worktree, components)
-      : refMenuItems(chip.ref, sha, components)
-  }
-
-  function chipMenuEntry(
-    chip: RowChip,
-    sha: string,
-    key: string,
-    components: RefMenuComponents,
-  ) {
-    if (chip.kind === "stash") {
-      return stashMenuEntry(chip.entry, components)
-    }
-    return chip.kind === "worktree" ?
-        worktreeMenuEntry(chip.worktree, components)
-      : refMenuEntry(chip.ref, sha, key, components)
-  }
-
-  function worktreeMarker(worktree: RowWorktree) {
-    const changes = worktreeChanges(worktree)
-    const classes = [
-      "commit-ref-worktree",
-      worktree.isOpen && "commit-ref-worktree-open",
-      worktree.pendingOperation && "commit-ref-worktree-pending",
-    ]
-      .filter(Boolean)
-      .join(" ")
-    return (
-      <span className={classes} key={worktree.path}>
-        <span className="commit-ref-worktree-icon">
-          <AppWindow />
-        </span>
-        {changes > 0 && (
-          <span className="commit-ref-worktree-changes">
-            <FilePen />
-            <span className="commit-ref-worktree-count">{changes}</span>
-          </span>
-        )}
-      </span>
-    )
-  }
-
-  function worktreeOpenItems(
-    worktree: RowWorktree,
-    { Item, Sub, SubContent, SubTrigger }: RefMenuComponents,
-  ) {
-    return (
-      <Sub>
-        <SubTrigger>
-          <ExternalLink />
-          Open in
-        </SubTrigger>
-        <SubContent>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "git-nav",
-              })
-            }
-          >
-            <AppWindow />
-            Git Nav
-          </Item>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "vscode",
-              })
-            }
-          >
-            <CodeXml />
-            VS Code
-          </Item>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "terminal",
-              })
-            }
-          >
-            <Terminal />
-            Terminal
-          </Item>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "finder",
-              })
-            }
-          >
-            <FolderOpen />
-            File manager
-          </Item>
-        </SubContent>
-      </Sub>
-    )
-  }
-
-  function worktreeMenuItems(
-    worktree: RowWorktree,
-    components: RefMenuComponents,
-  ) {
-    const { Item } = components
-    const changes = worktreeChanges(worktree)
-    return (
-      <>
-        {menuHeader(
-          components,
-          { kind: "worktree", name: worktree.name },
-          worktreeDescription(worktree),
-        )}
-        {changes > 0 && (
-          <Item onSelect={() => openWorktreeDiff(worktree)}>
-            <FileDiff />
-            {`Show ${changes} uncommitted change${changes === 1 ? "" : "s"}`}
-          </Item>
-        )}
-        {worktreeOpenItems(worktree, components)}
-      </>
-    )
-  }
-
-  function worktreeMenuEntry(
-    worktree: RowWorktree,
-    components: RefMenuComponents,
-  ) {
-    const { Sub, SubContent, SubTrigger } = components
-    return (
-      <Sub key={worktree.path}>
-        <SubTrigger>
-          <LabelText label={{ kind: "worktree", name: worktree.name }} />
-        </SubTrigger>
-        <SubContent>{worktreeMenuItems(worktree, components)}</SubContent>
-      </Sub>
-    )
-  }
-
-  function chipAriaLabel(chip: RowChip) {
-    if (chip.kind === "stash") {
-      return `Show the changes in ${chip.entry.name}`
-    }
-    if (chip.kind === "worktree") {
-      const changes = worktreeChanges(chip.worktree)
-      return changes > 0 ?
-          `Show ${changes} uncommitted change${changes === 1 ? "" : "s"} in ${chip.worktree.name}`
-        : `The ${chip.worktree.name} worktree`
-    }
-    return (
-      chip.ref.checkedOut ? "Currently checked out"
-      : chip.ref.worktrees.length > 0 ?
-        `Checked out in the ${chip.ref.worktrees[0].name} worktree`
-      : undefined
-    )
-  }
-
-  function chipTitle(chip: RowChip) {
-    if (chip.kind === "stash") {
-      return [
-        chip.entry.name,
-        chip.entry.message,
-        chip.entry.branch && `On ${chip.entry.branch}`,
-      ]
-        .filter(Boolean)
-        .join("\n")
-    }
-    if (chip.kind === "worktree") {
-      return worktreeDescription(chip.worktree)
-    }
-    return [
-      chip.ref.label,
-      pullRequestDescription(chip.ref),
-      syncDescription(chip.ref),
-      ...chip.ref.worktrees.map(worktreeDescription),
-    ]
-      .filter(Boolean)
-      .join("\n")
-  }
-
-  function rowChip(chip: RowChip, sha: string, key?: string) {
-    const Icon = CHIP_ICONS[chip.kind]
-    const ref =
-      chip.kind === "stash" || chip.kind === "worktree" ? null : chip.ref
-    // A ref name is distinguished by its tail, so the middle of it goes first. A stash message and a worktree
-    // name read the other way round and keep their opening characters instead.
-    const { start, end } =
-      ref ? splitRefLabel(ref.label) : { start: chipLabel(chip), end: "" }
-    const sync = ref && refSyncLabel(ref)
-    const pullRequest = ref?.pullRequest ?? null
-    // A worktree holding no branch is a chip of its own; one holding a branch is a marker inside that chip.
-    const chipWorktrees =
-      chip.kind === "worktree" ? [chip.worktree] : (ref?.worktrees ?? [])
-    const selected =
-      ref !== null &&
-      selectedRef !== null &&
-      refName(selectedRef.ref) === refName(ref) &&
-      selectedRef.sha === sha
-    // Neither a stash nor a worktree has a place in a selection, so their chips go straight to their changes.
-    const activate = () => {
-      if (chip.kind === "stash") {
-        return openStashDiff(chip.entry)
-      }
-      if (chip.kind === "worktree") {
-        return worktreeChanges(chip.worktree) > 0 ?
-            openWorktreeDiff(chip.worktree)
-          : undefined
-      }
-      return selectRef(chip.ref, sha)
-    }
-    return (
-      <ContextMenu key={key}>
-        <Tooltip>
-          {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
-          <ContextMenuTrigger
-            asChild
-            onContextMenu={(event) => event.stopPropagation()}
-          >
-            <TooltipTrigger asChild>
-              <button
-                aria-label={chipAriaLabel(chip)}
-                aria-pressed={ref === null ? undefined : selected}
-                className={cn(
-                  "commit-ref",
-                  `commit-ref-${chip.kind}`,
-                  ref?.checkedOut && "commit-ref-current",
-                  chip.kind === "worktree" &&
-                    !chip.worktree.branch &&
-                    "commit-ref-detached",
-                  selected && "commit-ref-selected",
-                )}
-                // Keyboard activation arrives as a click with no pointer behind it.
-                onClick={(event) => event.detail === 0 && activate()}
-                onPointerDown={(event) => {
-                  event.stopPropagation()
-                  // Acting on click would also answer the stray click a context menu leaves behind when it closes over this chip.
-                  if (event.button === 0) {
-                    activate()
-                  }
-                }}
-                type="button"
-              >
-                {ref?.checkedOut && (
-                  <span className="commit-ref-head">HEAD</span>
-                )}
-                {chipWorktrees.map(worktreeMarker)}
-                <Icon />
-                <span className="commit-ref-label">
-                  <span className="commit-ref-label-start">{start}</span>
-                  {end && <span className="commit-ref-label-end">{end}</span>}
-                </span>
-                {pullRequest && (
-                  <span
-                    className={`commit-ref-pull-request commit-ref-pull-request-${pullRequest.state}`}
-                  >
-                    <PullRequestIcon state={pullRequest.state} />
-                    {`#${pullRequest.number}`}
-                  </span>
-                )}
-                {sync && (
-                  <span
-                    className={cn(
-                      "commit-ref-sync",
-                      ref?.sync?.isGone && "commit-ref-sync-gone",
-                    )}
-                  >
-                    {sync}
-                  </span>
-                )}
-              </button>
-            </TooltipTrigger>
-          </ContextMenuTrigger>
-          <TooltipContent>{chipTitle(chip)}</TooltipContent>
-        </Tooltip>
-        <ContextMenuContent>
-          {chipMenuItems(chip, sha, contextMenuComponents)}
-        </ContextMenuContent>
-      </ContextMenu>
-    )
+  const menus: ChipMenuContext = {
+    copyText,
+    openPullRequest: (url) => openPullRequestMutation.mutate(url),
+    openRefDiff,
+    openStashDiff,
+    openWorktree: (path, target) =>
+      openWorktreeMutation.mutate({ path, target }),
+    openWorktreeDiff,
+    repository,
+    selectRef,
+    selectedRef,
+    selection,
+    setRequest,
   }
 
   return (
@@ -2540,7 +1832,7 @@ function CommitGraphPanelContent({
                 target={{ kind: "worktree" }}
               />
               {stashes.map((entry) =>
-                stashMenuEntry(entry, dropdownMenuComponents),
+                stashMenuEntry(menus, entry, dropdownMenuComponents),
               )}
               {stashes.length === 0 && !repository?.isDirty && (
                 <DropdownMenuItem disabled>Nothing is stashed</DropdownMenuItem>
@@ -2807,6 +2099,7 @@ function CommitGraphPanelContent({
                           .slice(0, shown)
                           .map((chip, index) =>
                             rowChip(
+                              menus,
                               chip,
                               commit.hash,
                               `${chipName(chip)}-${index}`,
@@ -2836,6 +2129,7 @@ function CommitGraphPanelContent({
                             <DropdownMenuContent>
                               {overflowChips.map((chip, index) =>
                                 chipMenuEntry(
+                                  menus,
                                   chip,
                                   commit.hash,
                                   `${chipName(chip)}-${index}`,
@@ -2870,21 +2164,16 @@ function CommitGraphPanelContent({
                 <ContextMenuContent>
                   <RowContextMenuBody
                     canSelectRange={canSelectRange}
-                    chipMenuEntry={chipMenuEntry}
                     chips={chips}
                     commit={commit}
-                    copyText={copyText}
                     diffSelectedRange={selected ? commitsSelection : null}
                     index={index}
-                    menuHeader={menuHeader}
-                    onRequest={setRequest}
+                    menus={menus}
                     openCommitDiff={openCommitDiff}
                     openRangeDiff={openRangeDiff}
-                    repository={repository}
                     selectCommit={selectCommit}
                     selectRangeTo={selectRangeTo}
                     selected={selected}
-                    source={selection}
                     targetForRow={rowTarget}
                   />
                 </ContextMenuContent>
