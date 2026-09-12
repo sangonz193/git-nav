@@ -17,6 +17,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    outputs:
+      tauri: ${{ steps.filter.outputs.tauri }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: filter
+        run: |
+          git fetch --quiet --depth=1 origin "${{ github.base_ref }}"
+          if git diff --quiet "origin/${{ github.base_ref }}" HEAD -- apps/desktop/src-tauri; then
+            echo "tauri=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tauri=true" >> "$GITHUB_OUTPUT"
+          fi
+
   checks:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -43,7 +61,8 @@ jobs:
       - run: bun run test
 
   macos-check:
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.tauri == 'true') }}
     runs-on: macos-15
 
     steps:
@@ -51,17 +70,26 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
       - run: cargo test
         working-directory: apps/desktop/src-tauri
 
   linux-check:
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.tauri == 'true') }}
     runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
 
       - run: |
           sudo apt-get update
@@ -80,13 +108,18 @@ jobs:
         working-directory: apps/desktop/src-tauri
 
   windows-check:
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.tauri == 'true') }}
     runs-on: windows-2025
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
 
       - run: cargo test --target x86_64-pc-windows-msvc
         working-directory: apps/desktop/src-tauri
