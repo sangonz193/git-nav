@@ -38,6 +38,7 @@ import {
 } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
+import { cn } from "@workspace/shadcn/lib/utils"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { Checkbox } from "@workspace/shadcn/components/checkbox"
 import {
@@ -354,7 +355,11 @@ function FileTreeNode({
     const key = fileKey(node.file)
     return (
       <button
-        className={`diff-file${key === activeKey ? "is-selected" : ""}${isViewedFile(node.file, headRef, viewed) ? "is-viewed" : ""}`}
+        className={cn(
+          "diff-file",
+          key === activeKey && "is-selected",
+          isViewedFile(node.file, headRef, viewed) && "is-viewed",
+        )}
         key={key}
         onClick={() => onSelect(node.file!)}
         style={{ paddingLeft }}
@@ -654,7 +659,7 @@ function FileDiffCard({
   }
 
   return (
-    <article className={`diff-file-card${viewed ? "is-viewed" : ""}`}>
+    <article className={cn("diff-file-card", viewed && "is-viewed")}>
       <header className="diff-file-card-header">
         <button
           aria-expanded={!collapsed}
