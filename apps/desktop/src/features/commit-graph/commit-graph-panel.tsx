@@ -32,7 +32,14 @@ import {
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { ArrowDown, ArrowUp, ChevronsDownUp, FileDiff, X } from "lucide-react"
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronsDownUp,
+  FileDiff,
+  PanelRight,
+  X,
+} from "lucide-react"
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -98,6 +105,7 @@ import type { GraphPanelParams } from "@/lib/panel-params"
 import { diffTabs } from "./diff-tabs"
 import { GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
+import { SelectionDetails } from "./selection-details"
 import {
   chipMenuEntry,
   dropdownMenuComponents,
@@ -191,6 +199,9 @@ function CommitGraphPanelContent({
   const [collapseUnmarked, setCollapseUnmarked] = useState(
     params.userPreferences?.collapseUnmarked ?? true,
   )
+  const [detailsOpen, setDetailsOpen] = useState(
+    params.userPreferences?.detailsOpen ?? false,
+  )
   // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
   const scrollElement = useRef<HTMLDivElement>(null)
@@ -243,11 +254,21 @@ function CommitGraphPanelContent({
           params.name,
           params.path,
           selectedCommitHashes,
-          columnSizing,
-          collapseUnmarked,
+          {
+            collapseUnmarked,
+            columnWidths: columnSizing,
+            detailsOpen,
+          },
         ),
       ),
-    [api, collapseUnmarked, columnSizing, params.name, params.path],
+    [
+      api,
+      collapseUnmarked,
+      columnSizing,
+      detailsOpen,
+      params.name,
+      params.path,
+    ],
   )
   const {
     beginUserSelection,
@@ -721,6 +742,16 @@ function CommitGraphPanelContent({
     rowVirtualizer.scrollToIndex(0)
   }
 
+  // A commit named from the details is selected where it sits, which may be inside a collapsed run.
+  function selectCommitByHash(hash: string) {
+    const index = commits.findIndex((commit) => commit.hash === hash)
+    if (index === -1) {
+      return
+    }
+    selectCommit(commits[index])
+    scrollToCommit(index)
+  }
+
   function scrollToCurrentCheckout() {
     if (currentCheckoutIndex === -1) {
       return
@@ -941,279 +972,293 @@ function CommitGraphPanelContent({
         stashes={stashes}
         updateConfig={updateConfig}
       />
-      <div
-        aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."
-        aria-multiselectable
-        className={cn(
-          "commit-graph-scroll",
-          rangeDrag && "is-selecting",
-          rangeDrag && !selection && "is-unrelated",
-        )}
-        onScroll={onScroll}
-        ref={scrollElement}
-        role="grid"
-        style={
-          {
-            "--commit-row-height": `${rowHeight}px`,
-            "--graph-width": `${graphWidth}px`,
-          } as CSSProperties
-        }
-      >
-        <div className="commit-graph-header">
-          <div
-            className="commit-graph-header-content"
-            role="row"
-            style={{ minWidth: tableWidth }}
-          >
-            <div
-              aria-label="Graph"
-              className="commit-graph-header-spacer"
-              role="columnheader"
-            >
-              <div
-                aria-label="Resize Graph column"
-                className={cn(
-                  "commit-graph-resize-handle",
-                  isResizingGraph && "is-resizing",
-                )}
-                onDoubleClick={() => setGraphWidth(fitGraphWidth(commits))}
-                onMouseDown={(event) => {
-                  event.preventDefault()
-                  startGraphResize(event)
-                }}
-                onTouchStart={(event) => {
-                  event.preventDefault()
-                  startGraphResize(event)
-                }}
-                role="separator"
-              />
-            </div>
-            <div
-              className="commit-graph-header-columns"
-              style={{ gridTemplateColumns: columnTemplate }}
-            >
-              {table.getFlatHeaders().map((header) => (
-                <div
-                  className="commit-graph-header-cell"
-                  key={header.id}
-                  role="columnheader"
-                >
-                  <table.FlexRender header={header} />
-                  {header.column.getCanResize() && (
-                    <div
-                      aria-label={`Resize ${String(header.column.columnDef.header)} column`}
-                      className={cn(
-                        "commit-graph-resize-handle",
-                        header.column.getIsResizing() && "is-resizing",
-                      )}
-                      onDoubleClick={() => header.column.resetSize()}
-                      onMouseDown={(event) => {
-                        event.preventDefault()
-                        header.getResizeHandler()(event)
-                      }}
-                      onTouchStart={(event) => {
-                        event.preventDefault()
-                        header.getResizeHandler()(event)
-                      }}
-                      role="separator"
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+      <div className="commit-graph-body">
         <div
-          className="commit-graph-space"
+          aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."
+          aria-multiselectable
+          className={cn(
+            "commit-graph-scroll",
+            rangeDrag && "is-selecting",
+            rangeDrag && !selection && "is-unrelated",
+          )}
+          onScroll={onScroll}
+          ref={scrollElement}
+          role="grid"
           style={
             {
-              "--commit-ref-budget": `${refBudget}px`,
-              height: rowVirtualizer.getTotalSize(),
-              minWidth: tableWidth,
+              "--commit-row-height": `${rowHeight}px`,
+              "--graph-width": `${graphWidth}px`,
             } as CSSProperties
           }
         >
-          <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
-          {virtualRows.map((row) => {
-            const graphRow = rows?.[row.index]
-            const index = graphRow ? graphRow.index : row.index
-            const commit = commits[index]
-            if (!commit) {
-              return null
-            }
-            if (graphRow && graphRow.hidden > 0) {
-              return (
+          <div className="commit-graph-header">
+            <div
+              className="commit-graph-header-content"
+              role="row"
+              style={{ minWidth: tableWidth }}
+            >
+              <div
+                aria-label="Graph"
+                className="commit-graph-header-spacer"
+                role="columnheader"
+              >
                 <div
-                  aria-rowindex={row.index + 2}
-                  className="commit-graph-row commit-graph-row-collapsed"
-                  key={commit.hash}
-                  role="row"
-                  style={{
-                    gridTemplateColumns: `${graphWidth}px ${columnTemplate}`,
-                    transform: `translateY(${row.start - GRAPH_HEADER_HEIGHT}px)`,
+                  aria-label="Resize Graph column"
+                  className={cn(
+                    "commit-graph-resize-handle",
+                    isResizingGraph && "is-resizing",
+                  )}
+                  onDoubleClick={() => setGraphWidth(fitGraphWidth(commits))}
+                  onMouseDown={(event) => {
+                    event.preventDefault()
+                    startGraphResize(event)
                   }}
-                >
-                  <div className="commit-graph-graph-cell" />
-                  <div role="gridcell">
-                    <button
-                      className="commit-graph-collapsed-label"
-                      onClick={() => revealRun(commit.hash)}
-                      type="button"
-                    >
-                      <ChevronsDownUp />
-                      {`${graphRow.hidden} commit${graphRow.hidden === 1 ? "" : "s"}`}
-                    </button>
-                  </div>
-                </div>
-              )
-            }
-            const refColor = laneColor(commit.lane)
-            const currentCheckout = isCurrentCheckout(commit.refs)
-            const selected = selectedHashes.has(commit.hash)
-            const edges = selectionRowEdges
-            const chips = commitChips(commit, chipContext)
-            const shown = visibleChipCount(chips, refBudget)
-            const overflowChips = chips.slice(shown)
-            return (
-              <ContextMenu key={commit.hash}>
-                <ContextMenuTrigger asChild>
-                  <article
-                    aria-keyshortcuts="Enter Space Shift+Enter Shift+Space"
-                    aria-rowindex={row.index + 2}
-                    aria-selected={selected}
-                    className={cn(
-                      "commit-graph-row",
-                      currentCheckout && "commit-graph-row-current",
-                      selected && "commit-graph-row-selected",
-                    )}
-                    onKeyDown={(event) =>
-                      selectCommitFromKeyboard(event, index)
-                    }
-                    onPointerDown={(event) => startRangeDrag(event, index)}
-                    role="row"
-                    style={
-                      {
-                        "--commit-ref-color": refColor,
-                        gridTemplateColumns: `${graphWidth}px ${columnTemplate}`,
-                        transform: `translateY(${row.start - GRAPH_HEADER_HEIGHT}px)`,
-                      } as CSSProperties
-                    }
-                    tabIndex={0}
+                  onTouchStart={(event) => {
+                    event.preventDefault()
+                    startGraphResize(event)
+                  }}
+                  role="separator"
+                />
+              </div>
+              <div
+                className="commit-graph-header-columns"
+                style={{ gridTemplateColumns: columnTemplate }}
+              >
+                {table.getFlatHeaders().map((header) => (
+                  <div
+                    className="commit-graph-header-cell"
+                    key={header.id}
+                    role="columnheader"
                   >
-                    <div className="commit-graph-graph-cell">
-                      {edges?.top === row.index && (
-                        <button
-                          aria-label="Adjust the newer end of the selected range"
-                          className="commit-graph-selection-handle commit-graph-selection-handle-start"
-                          onPointerDown={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            startRangeDrag(event, index, edges.bottomCommit)
-                          }}
-                          type="button"
-                        />
-                      )}
-                      {edges?.bottom === row.index && (
-                        <button
-                          aria-label="Adjust the older end of the selected range"
-                          className="commit-graph-selection-handle commit-graph-selection-handle-end"
-                          onPointerDown={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            startRangeDrag(event, index, edges.topCommit)
-                          }}
-                          type="button"
-                        />
-                      )}
+                    <table.FlexRender header={header} />
+                    {header.column.getCanResize() && (
+                      <div
+                        aria-label={`Resize ${String(header.column.columnDef.header)} column`}
+                        className={cn(
+                          "commit-graph-resize-handle",
+                          header.column.getIsResizing() && "is-resizing",
+                        )}
+                        onDoubleClick={() => header.column.resetSize()}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          header.getResizeHandler()(event)
+                        }}
+                        onTouchStart={(event) => {
+                          event.preventDefault()
+                          header.getResizeHandler()(event)
+                        }}
+                        role="separator"
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div
+            className="commit-graph-space"
+            style={
+              {
+                "--commit-ref-budget": `${refBudget}px`,
+                height: rowVirtualizer.getTotalSize(),
+                minWidth: tableWidth,
+              } as CSSProperties
+            }
+          >
+            <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
+            {virtualRows.map((row) => {
+              const graphRow = rows?.[row.index]
+              const index = graphRow ? graphRow.index : row.index
+              const commit = commits[index]
+              if (!commit) {
+                return null
+              }
+              if (graphRow && graphRow.hidden > 0) {
+                return (
+                  <div
+                    aria-rowindex={row.index + 2}
+                    className="commit-graph-row commit-graph-row-collapsed"
+                    key={commit.hash}
+                    role="row"
+                    style={{
+                      gridTemplateColumns: `${graphWidth}px ${columnTemplate}`,
+                      transform: `translateY(${row.start - GRAPH_HEADER_HEIGHT}px)`,
+                    }}
+                  >
+                    <div className="commit-graph-graph-cell" />
+                    <div role="gridcell">
+                      <button
+                        className="commit-graph-collapsed-label"
+                        onClick={() => revealRun(commit.hash)}
+                        type="button"
+                      >
+                        <ChevronsDownUp />
+                        {`${graphRow.hidden} commit${graphRow.hidden === 1 ? "" : "s"}`}
+                      </button>
                     </div>
-                    <div className="commit-graph-summary" role="gridcell">
-                      <div className="commit-graph-refs">
-                        {chips
-                          .slice(0, shown)
-                          .map((chip, index) =>
-                            rowChip(
-                              menus,
-                              chip,
-                              commit.hash,
-                              `${chipName(chip)}-${index}`,
-                            ),
-                          )}
-                        {overflowChips.length > 0 && (
-                          <DropdownMenu>
-                            <Tooltip>
-                              <DropdownMenuTrigger asChild>
-                                <TooltipTrigger asChild>
-                                  <button
-                                    aria-label={`Show ${overflowChips.length} more ref${overflowChips.length === 1 ? "" : "s"}`}
-                                    className="commit-ref commit-ref-more"
-                                    onPointerDown={(event) =>
-                                      event.stopPropagation()
-                                    }
-                                    type="button"
-                                  >
-                                    {`+${overflowChips.length}`}
-                                  </button>
-                                </TooltipTrigger>
-                              </DropdownMenuTrigger>
-                              <TooltipContent>
-                                {overflowChips.map(chipLabel).join("\n")}
-                              </TooltipContent>
-                            </Tooltip>
-                            <DropdownMenuContent>
-                              {overflowChips.map((chip, index) =>
-                                chipMenuEntry(
-                                  menus,
-                                  chip,
-                                  commit.hash,
-                                  `${chipName(chip)}-${index}`,
-                                  dropdownMenuComponents,
-                                ),
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                  </div>
+                )
+              }
+              const refColor = laneColor(commit.lane)
+              const currentCheckout = isCurrentCheckout(commit.refs)
+              const selected = selectedHashes.has(commit.hash)
+              const edges = selectionRowEdges
+              const chips = commitChips(commit, chipContext)
+              const shown = visibleChipCount(chips, refBudget)
+              const overflowChips = chips.slice(shown)
+              return (
+                <ContextMenu key={commit.hash}>
+                  <ContextMenuTrigger asChild>
+                    <article
+                      aria-keyshortcuts="Enter Space Shift+Enter Shift+Space"
+                      aria-rowindex={row.index + 2}
+                      aria-selected={selected}
+                      className={cn(
+                        "commit-graph-row",
+                        currentCheckout && "commit-graph-row-current",
+                        selected && "commit-graph-row-selected",
+                      )}
+                      onKeyDown={(event) =>
+                        selectCommitFromKeyboard(event, index)
+                      }
+                      onPointerDown={(event) => startRangeDrag(event, index)}
+                      role="row"
+                      style={
+                        {
+                          "--commit-ref-color": refColor,
+                          gridTemplateColumns: `${graphWidth}px ${columnTemplate}`,
+                          transform: `translateY(${row.start - GRAPH_HEADER_HEIGHT}px)`,
+                        } as CSSProperties
+                      }
+                      tabIndex={0}
+                    >
+                      <div className="commit-graph-graph-cell">
+                        {edges?.top === row.index && (
+                          <button
+                            aria-label="Adjust the newer end of the selected range"
+                            className="commit-graph-selection-handle commit-graph-selection-handle-start"
+                            onPointerDown={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              startRangeDrag(event, index, edges.bottomCommit)
+                            }}
+                            type="button"
+                          />
+                        )}
+                        {edges?.bottom === row.index && (
+                          <button
+                            aria-label="Adjust the older end of the selected range"
+                            className="commit-graph-selection-handle commit-graph-selection-handle-end"
+                            onPointerDown={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              startRangeDrag(event, index, edges.topCommit)
+                            }}
+                            type="button"
+                          />
                         )}
                       </div>
-                      <span
-                        className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}
-                      >
-                        {commit.subject || "(no subject)"}
+                      <div className="commit-graph-summary" role="gridcell">
+                        <div className="commit-graph-refs">
+                          {chips
+                            .slice(0, shown)
+                            .map((chip, index) =>
+                              rowChip(
+                                menus,
+                                chip,
+                                commit.hash,
+                                `${chipName(chip)}-${index}`,
+                              ),
+                            )}
+                          {overflowChips.length > 0 && (
+                            <DropdownMenu>
+                              <Tooltip>
+                                <DropdownMenuTrigger asChild>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      aria-label={`Show ${overflowChips.length} more ref${overflowChips.length === 1 ? "" : "s"}`}
+                                      className="commit-ref commit-ref-more"
+                                      onPointerDown={(event) =>
+                                        event.stopPropagation()
+                                      }
+                                      type="button"
+                                    >
+                                      {`+${overflowChips.length}`}
+                                    </button>
+                                  </TooltipTrigger>
+                                </DropdownMenuTrigger>
+                                <TooltipContent>
+                                  {overflowChips.map(chipLabel).join("\n")}
+                                </TooltipContent>
+                              </Tooltip>
+                              <DropdownMenuContent>
+                                {overflowChips.map((chip, index) =>
+                                  chipMenuEntry(
+                                    menus,
+                                    chip,
+                                    commit.hash,
+                                    `${chipName(chip)}-${index}`,
+                                    dropdownMenuComponents,
+                                  ),
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          )}
+                        </div>
+                        <span
+                          className={`min-w-0 flex-1 truncate ${currentCheckout ? "font-bold" : "font-normal"}`}
+                        >
+                          {commit.subject || "(no subject)"}
+                        </span>
+                      </div>
+                      <span className="text-muted-foreground" role="gridcell">
+                        {commit.author}
                       </span>
-                    </div>
-                    <span className="text-muted-foreground" role="gridcell">
-                      {commit.author}
-                    </span>
-                    <time
-                      className="text-muted-foreground"
-                      dateTime={commit.date}
-                      role="gridcell"
-                    >
-                      {relativeDate(commit.date)}
-                    </time>
-                    <code className="text-muted-foreground" role="gridcell">
-                      {commit.hash.slice(0, 8)}
-                    </code>
-                  </article>
-                </ContextMenuTrigger>
-                <ContextMenuContent>
-                  <RowContextMenuBody
-                    canSelectRange={canSelectRange}
-                    chips={chips}
-                    commit={commit}
-                    diffSelectedRange={selected ? commitsSelection : null}
-                    index={index}
-                    menus={menus}
-                    openCommitDiff={openCommitDiff}
-                    openRangeDiff={openRangeDiff}
-                    selectCommit={selectCommit}
-                    selectRangeTo={selectRangeTo}
-                    selected={selected}
-                    targetForRow={rowTarget}
-                  />
-                </ContextMenuContent>
-              </ContextMenu>
-            )
-          })}
+                      <time
+                        className="text-muted-foreground"
+                        dateTime={commit.date}
+                        role="gridcell"
+                      >
+                        {relativeDate(commit.date)}
+                      </time>
+                      <code className="text-muted-foreground" role="gridcell">
+                        {commit.hash.slice(0, 8)}
+                      </code>
+                    </article>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <RowContextMenuBody
+                      canSelectRange={canSelectRange}
+                      chips={chips}
+                      commit={commit}
+                      diffSelectedRange={selected ? commitsSelection : null}
+                      index={index}
+                      menus={menus}
+                      openCommitDiff={openCommitDiff}
+                      openRangeDiff={openRangeDiff}
+                      selectCommit={selectCommit}
+                      selectRangeTo={selectRangeTo}
+                      selected={selected}
+                      targetForRow={rowTarget}
+                    />
+                  </ContextMenuContent>
+                </ContextMenu>
+              )
+            })}
+          </div>
         </div>
+        {detailsOpen && selection && (
+          <SelectionDetails
+            clearSelection={clearSelection}
+            menus={menus}
+            onClose={() => setDetailsOpen(false)}
+            openCommitDiff={openCommitDiff}
+            openRangeDiff={openRangeDiff}
+            repoPath={params.path}
+            selectCommit={selectCommitByHash}
+            selection={selection}
+          />
+        )}
       </div>
       {checkoutScrollDirection && (
         <Hinted hint={`Scroll ${checkoutScrollDirection} to current checkout`}>
@@ -1231,7 +1276,7 @@ function CommitGraphPanelContent({
           </Button>
         </Hinted>
       )}
-      {selection && (
+      {selection && !detailsOpen && (
         <div className="commit-graph-selection-bar">
           <span className="commit-graph-selection-summary">
             {selectionSummary(selection)}
@@ -1263,6 +1308,17 @@ function CommitGraphPanelContent({
               </Button>
             </Hinted>
           }
+          <Hinted hint="Show details and actions for the selection">
+            <Button
+              onClick={() => setDetailsOpen(true)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <PanelRight />
+              Details
+            </Button>
+          </Hinted>
           <Hinted hint="Clear the selection">
             <Button
               onClick={clearSelection}

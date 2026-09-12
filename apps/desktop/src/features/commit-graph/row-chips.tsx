@@ -146,16 +146,29 @@ function refMenuItems(
   sha: string,
   components: RefMenuComponents,
 ) {
+  return (
+    <>
+      {menuHeader(
+        components,
+        { kind: ref.kind, name: refName(ref) },
+        syncDescription(ref) ?? SELECTION_LABELS[ref.kind],
+      )}
+      {refMenuActions(menus, ref, sha, components)}
+    </>
+  )
+}
+
+export function refMenuActions(
+  menus: ChipMenuContext,
+  ref: DisplayRef,
+  sha: string,
+  components: RefMenuComponents,
+) {
   const { Item, Sub, SubContent, SubTrigger } = components
   const reference = refName(ref)
   const pullRequest = ref.pullRequest
   return (
     <>
-      {menuHeader(
-        components,
-        { kind: ref.kind, name: reference },
-        syncDescription(ref) ?? SELECTION_LABELS[ref.kind],
-      )}
       <OperationMenuItems
         components={components}
         groups={SAFE_GROUPS}

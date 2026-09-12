@@ -58,7 +58,7 @@ export function diffTabs({
     }
   }
 
-  function openCommitDiff(commit: Commit) {
+  function openCommitDiff(commit: Commit, selectedFilePath?: string) {
     const baseRef = commit.parents[0]
     const referencePanel = containerApi.getPanel(panel)
     if (!baseRef || !referencePanel) {
@@ -73,6 +73,7 @@ export function diffTabs({
         baseRef,
         headRef: commit.hash,
         headLabel: commit.subject || "(no subject)",
+        selectedFilePath,
       },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
@@ -124,7 +125,10 @@ export function diffTabs({
     })
   }
 
-  function openRangeDiff({ base, tip }: CommitSelection) {
+  function openRangeDiff(
+    { base, tip }: CommitSelection,
+    selectedFilePath?: string,
+  ) {
     const referencePanel = containerApi.getPanel(panel)
     if (!base || !referencePanel) {
       onError("Could not open a range diff.")
@@ -137,6 +141,7 @@ export function diffTabs({
         ...repositoryPanelParams,
         baseRef: base.hash,
         headRef: tip.hash,
+        selectedFilePath,
       },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
