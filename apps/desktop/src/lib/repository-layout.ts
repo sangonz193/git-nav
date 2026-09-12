@@ -8,7 +8,7 @@ import type {
 } from "./panel-params"
 
 import { createUserWinningRestore } from "./pending-restore"
-import { WORKTREE_REF } from "./repository-constants"
+import { EMPTY_TREE_REF, WORKTREE_REF } from "./repository-constants"
 
 export const REPOSITORY_LAYOUT_VERSION = 1
 
@@ -346,7 +346,10 @@ function panelRevisions(panel: SerializedPanel) {
   return {
     path: params.path,
     revisions: [params.baseRef, params.headRef].filter(
-      (ref): ref is string => typeof ref === "string" && ref !== WORKTREE_REF,
+      (ref): ref is string =>
+        typeof ref === "string" &&
+        ref !== WORKTREE_REF &&
+        ref !== EMPTY_TREE_REF,
     ),
   }
 }

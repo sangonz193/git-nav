@@ -3,7 +3,8 @@ use serde::Serialize;
 use std::{path::PathBuf, time::SystemTime, time::UNIX_EPOCH};
 use crate::storage::data_dir;
 use crate::git::{
-    WORKTREE_REF, git_output, git_result, primary_reference, project_id, resolve_commit,
+    EMPTY_TREE_REF, WORKTREE_REF, git_output, git_result, primary_reference, project_id, resolve_commit,
+    resolve_diff_base,
 };
 use crate::diff::{ChangedFile, changed_files, worktree_changed_files};
 
@@ -26,11 +27,13 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool,
     let is_worktree = head_ref == WORKTREE_REF;
     // The working tree has no commit of its own, so the checkout it sits on stands in for it as the
     // side the fork point is measured from.
-    let resolved_base_sha = resolve_commit(repo_path, base_ref)?;
     if is_worktree {
-        let base_sha = if merge_base {
-            let head_commit_sha = resolve_commit(repo_path, "HEAD")?;
-            merge_base_for_commits(repo_path, &resolved_base_sha, &head_commit_sha, base_ref, "HEAD")?
+        let head_commit_sha = (merge_base || base_ref == EMPTY_TREE_REF)
+            .then(|| resolve_commit(repo_path, "HEAD"))
+            .transpose()?;
+        let resolved_base_sha = resolve_diff_base(repo_path, base_ref, head_commit_sha.as_deref().unwrap_or_default())?;
+        let base_sha = if merge_base && base_ref != EMPTY_TREE_REF {
+            merge_base_for_commits(repo_path, &resolved_base_sha, head_commit_sha.as_deref().unwrap(), base_ref, "HEAD")?
         } else {
             resolved_base_sha
         };
@@ -41,7 +44,8 @@ fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool,
         });
     }
     let head_commit_sha = resolve_commit(repo_path, head_ref)?;
-    let base_sha = if merge_base {
+    let resolved_base_sha = resolve_diff_base(repo_path, base_ref, &head_commit_sha)?;
+    let base_sha = if merge_base && base_ref != EMPTY_TREE_REF {
         merge_base_for_commits(repo_path, &resolved_base_sha, &head_commit_sha, base_ref, head_ref)?
     } else {
         resolved_base_sha
@@ -435,6 +439,34 @@ mod tests {
         // Without the fork point the primary branch's own commit reads as a deletion on the branch.
         assert_eq!(names(&direct), ["feature.txt", "primary.txt"]);
         assert_eq!(names(&after_commit), ["feature.txt", "second.txt"]);
+    }
+
+    #[test]
+    fn compares_a_root_commit_against_the_empty_tree() {
+        let (path, run) = scratch_repository("root-comparison");
+        fs::write(Path::new(&path).join("root.txt"), "contents\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "root"]);
+
+        let comparison = comparison(&path, EMPTY_TREE_REF, "HEAD", true, false).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(comparison.files.len(), 1);
+        assert_eq!(comparison.files[0].new_path.as_deref(), Some("root.txt"));
+    }
+
+    #[test]
+    fn directly_compares_an_unborn_worktree_against_a_commit() {
+        let (path, run) = scratch_repository("unborn-worktree-comparison");
+        fs::write(Path::new(&path).join("main.txt"), "main\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "main"]);
+        run(&["checkout", "--quiet", "--orphan", "unborn"]);
+
+        let comparison = comparison(&path, "main", WORKTREE_REF, false, false).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(comparison.head_sha, WORKTREE_REF);
     }
 
     #[test]

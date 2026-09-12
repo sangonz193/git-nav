@@ -1,4 +1,4 @@
-import { WORKTREE_REF } from "@/lib/repository-constants"
+import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
 
 export type SelectedRefs = {
   base: string
@@ -79,9 +79,11 @@ export function selectedRefs(
 }
 
 export function refLabel(reference: string) {
-  return reference === WORKTREE_REF ? "Working tree" : (
-      reference.replace(/^[0-9a-f]{40}(?:[0-9a-f]{24})?\b/i, (sha) =>
+  return (
+    reference === EMPTY_TREE_REF ? "empty"
+    : reference === WORKTREE_REF ? "Working tree"
+    : reference.replace(/^[0-9a-f]{40}(?:[0-9a-f]{24})?\b/i, (sha) =>
         sha.slice(0, 8),
       )
-    )
+  )
 }

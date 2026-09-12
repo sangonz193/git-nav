@@ -7,6 +7,7 @@ use crate::process::external_command;
 
 // Not a legal ref name, so it cannot collide with anything the user could name a branch or tag.
 pub(crate) const WORKTREE_REF: &str = ":worktree";
+pub(crate) const EMPTY_TREE_REF: &str = ":empty-tree";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +84,30 @@ pub(crate) fn resolve_commit(path: &str, reference: &str) -> Result<String, Stri
     git_output_allow_empty(path, &["rev-parse", "--verify", "--end-of-options", &revision])
         .map(|value| value.trim().to_string())
         .and_then(|value| (!value.is_empty()).then_some(value).ok_or_else(|| format!("Could not resolve {reference}.")))
+}
+
+pub(crate) fn resolve_diff_base(path: &str, reference: &str, head_sha: &str) -> Result<String, String> {
+    if reference == EMPTY_TREE_REF {
+        if git_output_allow_empty(path, &["rev-parse", "--is-shallow-repository"])?.trim() == "true" {
+            let shallow_path = git_output_allow_empty(path, &["rev-parse", "--git-path", "shallow"])?;
+            let shallow_path = PathBuf::from(shallow_path.trim());
+            let shallow_path = if shallow_path.is_absolute() { shallow_path } else { Path::new(path).join(shallow_path) };
+            let shallow_boundaries = fs::read_to_string(shallow_path).map_err(|error| error.to_string())?;
+            let shallow_boundaries: HashSet<_> = shallow_boundaries.lines().collect();
+            let roots = git_output_allow_empty(path, &["rev-list", "--max-parents=0", head_sha])?;
+            for root in roots.lines().filter(|root| shallow_boundaries.contains(root)) {
+                let commit = git_output_allow_empty(path, &["cat-file", "commit", root])?;
+                if commit.lines().take_while(|line| !line.is_empty()).any(|line| line.starts_with("parent ")) {
+                    let short_sha = git_output_allow_empty(path, &["rev-parse", "--short", root])?.trim().to_string();
+                    return Err(format!("{short_sha} is the edge of a shallow clone; its parent has not been fetched."));
+                }
+            }
+        }
+        return git_output_allow_empty(path, &["hash-object", "-t", "tree", "--stdin"])
+            .map(|value| value.trim().to_string())
+            .and_then(|value| (!value.is_empty()).then_some(value).ok_or_else(|| "Could not resolve the empty tree.".to_string()));
+    }
+    resolve_commit(path, reference)
 }
 
 pub(crate) fn primary_reference(path: &str) -> Result<String, String> {

@@ -14,7 +14,6 @@ import {
   type RowChip,
 } from "./commit-graph"
 import { OperationMenuItems } from "./commit-operation-menu"
-import { rangeBaseHash } from "./selection-diff"
 import {
   chipMenuEntry,
   contextMenuComponents,
@@ -80,20 +79,14 @@ export function RowContextMenuBody({
         source={menus.selection}
         target={target}
       />
-      <ContextMenuItem
-        disabled={commit.parents.length === 0}
-        onSelect={() => openCommitDiff(commit)}
-      >
+      <ContextMenuItem onSelect={() => openCommitDiff(commit)}>
         <FileDiff />
         Show commit diff
       </ContextMenuItem>
       {selected &&
         diffSelectedRange &&
         diffSelectedRange.commits.length > 1 && (
-          <ContextMenuItem
-            disabled={rangeBaseHash(diffSelectedRange) === null}
-            onSelect={() => openRangeDiff(diffSelectedRange)}
-          >
+          <ContextMenuItem onSelect={() => openRangeDiff(diffSelectedRange)}>
             <FileDiff />
             Diff selected range
           </ContextMenuItem>

@@ -1,7 +1,7 @@
 import { highlighter } from "@git-diff-view/lowlight"
 import { DiffModeEnum, DiffView } from "@git-diff-view/react"
 import { invoke } from "@/lib/ipc"
-import { WORKTREE_REF } from "@/lib/repository-constants"
+import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { IDockviewPanelProps } from "dockview-react"
 import {
@@ -1614,23 +1614,28 @@ export function DiffPanel({
         </Popover>
         <Hinted
           hint={
-            refs.mergeBase ?
+            refs.base === EMPTY_TREE_REF ?
+              "There is no fork point for an empty base."
+            : refs.mergeBase ?
               `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}`
             : `Changes between ${refs.baseLabel} and ${refs.headLabel}`
           }
         >
-          <Button
-            aria-label="Compare since the two sides forked"
-            aria-pressed={refs.mergeBase}
-            onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            <span className="text-muted-foreground">{rangeMarker(refs)}</span>
-            {panelWidth >= WIDE_DIFF_PANEL_WIDTH &&
-              (refs.mergeBase ? "Since fork" : "Direct")}
-          </Button>
+          <span className="inline-flex">
+            <Button
+              aria-label="Compare since the two sides forked"
+              aria-pressed={refs.mergeBase}
+              disabled={refs.base === EMPTY_TREE_REF}
+              onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <span className="text-muted-foreground">{rangeMarker(refs)}</span>
+              {panelWidth >= WIDE_DIFF_PANEL_WIDTH &&
+                (refs.mergeBase ? "Since fork" : "Direct")}
+            </Button>
+          </span>
         </Hinted>
         <Popover
           onOpenChange={(open) => (open ? openPicker("head") : setPicker(null))}
