@@ -1345,6 +1345,7 @@ function CommitGraphPanelContent({
           onPeekHeightChange={setSheetPeekHeight}
           openSelectionDiff={openSelectionDiff}
           repoPath={params.path}
+          refreshKey={graphVersion}
           selectCommit={selectCommitByHash}
           selection={selection}
           tipCommit={

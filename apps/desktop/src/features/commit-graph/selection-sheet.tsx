@@ -46,6 +46,7 @@ export const SelectionSheet = memo(function SelectionSheet({
   onPeekHeightChange,
   openSelectionDiff,
   repoPath,
+  refreshKey,
   selectCommit,
   selection,
   tipCommit,
@@ -62,6 +63,7 @@ export const SelectionSheet = memo(function SelectionSheet({
   onPeekHeightChange: (height: number) => void
   openSelectionDiff: (selection: Selection, filePath?: string) => void
   repoPath: string
+  refreshKey: number
   selectCommit: (hash: string) => void
   selection: Selection
   tipCommit: Commit | null
@@ -261,6 +263,7 @@ export const SelectionSheet = memo(function SelectionSheet({
               menus={menus}
               openSelectionDiff={openSelectionDiff}
               repoPath={repoPath}
+              refreshKey={refreshKey}
               selectCommit={selectCommit}
               selection={selection}
               tipCommit={tipCommit}

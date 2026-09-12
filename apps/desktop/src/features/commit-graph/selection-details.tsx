@@ -10,6 +10,7 @@ import { memo, type ReactNode } from "react"
 
 import {
   pullRequestDescription,
+  refName,
   relativeDate,
   syncDescription,
   worktreeDescription,
@@ -19,7 +20,7 @@ import {
   type Selection,
 } from "./commit-graph"
 import { OperationMenuItems } from "./commit-operation-menu"
-import { rangeBaseHash } from "./selection-diff"
+import { divergenceTarget, rangeBaseHash } from "./selection-diff"
 import type { RefMenuComponents } from "./commit-operations"
 import {
   DANGER_GROUPS,
@@ -44,6 +45,20 @@ type DiffStatFile = {
   status: string
   additions: number | null
   deletions: number | null
+}
+
+type CommitSummary = {
+  hash: string
+  subject: string
+  author: string
+  date: string
+}
+
+type RefDivergence = {
+  ahead: CommitSummary[]
+  behind: CommitSummary[]
+  aheadTotal: number
+  behindTotal: number
 }
 
 const listComponents: RefMenuComponents = {
@@ -330,81 +345,175 @@ function RangeBody({
   )
 }
 
+function DivergenceList({
+  canSelectCommit,
+  commits,
+  direction,
+  against,
+  selectCommit,
+  total,
+}: {
+  canSelectCommit: (hash: string) => boolean
+  commits: CommitSummary[]
+  direction: "ahead" | "behind"
+  against: string
+  selectCommit: (hash: string) => void
+  total: number
+}) {
+  if (total === 0) {
+    return null
+  }
+  return (
+    <section className="commit-graph-details-section">
+      <h3 className="commit-graph-details-heading">
+        {`${total} ${direction}${direction === "ahead" ? " of" : ""} ${against}`}
+      </h3>
+      <ul className="commit-graph-details-commits">
+        {commits.map((commit) => (
+          <li key={commit.hash}>
+            <CommitLink
+              canSelect={canSelectCommit(commit.hash)}
+              hash={commit.hash}
+              selectCommit={selectCommit}
+            />
+            <span className="truncate" title={commit.subject}>
+              {commit.subject || "(no subject)"}
+            </span>
+          </li>
+        ))}
+        {total > commits.length && (
+          <li className="commit-graph-details-more">{`and ${total - commits.length} more`}</li>
+        )}
+      </ul>
+    </section>
+  )
+}
+
 function RefBody({
   canSelectCommit,
   menus,
+  repoPath,
+  refreshKey,
   selectCommit,
   selection,
   tipCommit,
 }: {
   canSelectCommit: (hash: string) => boolean
   menus: ChipMenuContext
+  repoPath: string
+  refreshKey: number
   selectCommit: (hash: string) => void
   selection: RefSelection
   tipCommit: Commit | null
 }) {
   const { ref } = selection
   const pullRequest = ref.pullRequest
+  const reference = refName(ref)
+  const against = divergenceTarget(
+    ref,
+    menus.repository?.defaultBranch,
+  )
+  const divergence = useQuery({
+    enabled: against !== null,
+    queryFn: () =>
+      invoke<RefDivergence>("ref_divergence", {
+        repoPath,
+        reference: selection.sha,
+        against: against?.reference,
+      }),
+    queryKey: [
+      "ref-divergence",
+      repoPath,
+      reference,
+      against?.reference,
+      selection.sha,
+      refreshKey,
+    ],
+    retry: false,
+  })
   return (
-    <dl className="commit-graph-details-fields">
-      <Field label="Commit">
-        <CommitLink
-          canSelect={canSelectCommit(selection.sha)}
-          hash={selection.sha}
-          selectCommit={selectCommit}
-        />
-      </Field>
-      {tipCommit && (
-        <Field label="Tip">
-          <span className="min-w-0 truncate" title={tipCommit.subject}>
-            {tipCommit.subject || "(no subject)"}
-          </span>
-          <span className="shrink-0 truncate text-muted-foreground">
-            {tipCommit.author}
-          </span>
-          <time
-            className="shrink-0 text-muted-foreground"
-            dateTime={tipCommit.date}
-            title={absoluteDate(tipCommit.date)}
-          >
-            {relativeDate(tipCommit.date)}
-          </time>
+    <>
+      <dl className="commit-graph-details-fields">
+        <Field label="Commit">
+          <CommitLink
+            canSelect={canSelectCommit(selection.sha)}
+            hash={selection.sha}
+            selectCommit={selectCommit}
+          />
         </Field>
-      )}
-      {ref.sync && (
-        <Field label="Upstream">
-          <span className="truncate">{syncDescription(ref)}</span>
-        </Field>
-      )}
-      {pullRequest && (
-        <Field label="Pull request">
-          <button
-            className="commit-graph-details-link truncate"
-            onClick={() => menus.openPullRequest(pullRequest.url)}
-            title={pullRequestDescription(ref) ?? undefined}
-            type="button"
-          >
-            {`#${pullRequest.number} ${pullRequest.title}`}
-          </button>
-        </Field>
-      )}
-      {ref.worktrees.map((worktree) => (
-        <Field key={worktree.path} label="Worktree">
-          <span className="commit-graph-details-worktree">
-            <AppWindow />
-            <span className="truncate" title={worktree.path}>
-              {worktree.name}
+        {tipCommit && (
+          <Field label="Tip">
+            <span className="min-w-0 truncate" title={tipCommit.subject}>
+              {tipCommit.subject || "(no subject)"}
             </span>
-          </span>
-          <span
-            className="truncate text-muted-foreground"
-            title={worktreeDescription(worktree)}
-          >
-            {worktreeDescription(worktree).split("\n").slice(1).join(" · ")}
-          </span>
-        </Field>
-      ))}
-    </dl>
+            <span className="shrink-0 truncate text-muted-foreground">
+              {tipCommit.author}
+            </span>
+            <time
+              className="shrink-0 text-muted-foreground"
+              dateTime={tipCommit.date}
+              title={absoluteDate(tipCommit.date)}
+            >
+              {relativeDate(tipCommit.date)}
+            </time>
+          </Field>
+        )}
+        {ref.sync && (
+          <Field label="Upstream">
+            <span className="truncate">{syncDescription(ref)}</span>
+          </Field>
+        )}
+        {pullRequest && (
+          <Field label="Pull request">
+            <button
+              className="commit-graph-details-link truncate"
+              onClick={() => menus.openPullRequest(pullRequest.url)}
+              title={pullRequestDescription(ref) ?? undefined}
+              type="button"
+            >
+              {`#${pullRequest.number} ${pullRequest.title}`}
+            </button>
+          </Field>
+        )}
+        {ref.worktrees.map((worktree) => (
+          <Field key={worktree.path} label="Worktree">
+            <span className="commit-graph-details-worktree">
+              <AppWindow />
+              <span className="truncate" title={worktree.path}>
+                {worktree.name}
+              </span>
+            </span>
+            <span
+              className="truncate text-muted-foreground"
+              title={worktreeDescription(worktree)}
+            >
+              {worktreeDescription(worktree).split("\n").slice(1).join(" · ")}
+            </span>
+          </Field>
+        ))}
+      </dl>
+      {divergence.data && against && (
+        <>
+          <DivergenceList
+            against={against.label}
+            canSelectCommit={canSelectCommit}
+            commits={divergence.data.ahead}
+            direction="ahead"
+            selectCommit={selectCommit}
+            total={divergence.data.aheadTotal}
+          />
+          <DivergenceList
+            against={against.label}
+            canSelectCommit={canSelectCommit}
+            commits={divergence.data.behind}
+            direction="behind"
+            selectCommit={selectCommit}
+            total={divergence.data.behindTotal}
+          />
+        </>
+      )}
+      {divergence.error && <QueryError error={divergence.error} />}
+    </>
   )
 }
 
@@ -442,6 +551,7 @@ export const SelectionDetails = memo(function SelectionDetails({
   menus,
   openSelectionDiff,
   repoPath,
+  refreshKey,
   selectCommit,
   selection,
   tipCommit,
@@ -450,6 +560,7 @@ export const SelectionDetails = memo(function SelectionDetails({
   menus: ChipMenuContext
   openSelectionDiff: (selection: Selection, filePath?: string) => void
   repoPath: string
+  refreshKey: number
   selectCommit: (hash: string) => void
   selection: Selection
   tipCommit: Commit | null
@@ -465,6 +576,8 @@ export const SelectionDetails = memo(function SelectionDetails({
         <RefBody
           canSelectCommit={canSelectCommit}
           menus={menus}
+          repoPath={repoPath}
+          refreshKey={refreshKey}
           selectCommit={selectCommit}
           selection={selection}
           tipCommit={tipCommit}
