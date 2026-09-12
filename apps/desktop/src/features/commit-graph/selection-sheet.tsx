@@ -12,7 +12,7 @@ import {
   type TransitionEvent,
 } from "react"
 
-import { refName, type Selection } from "./commit-graph"
+import { refName, type Commit, type Selection } from "./commit-graph"
 import { SELECTION_LABELS, type ChipMenuContext } from "./row-chips"
 import { SelectionDetails } from "./selection-details"
 import { canDiffSelection } from "./selection-diff"
@@ -48,6 +48,7 @@ export const SelectionSheet = memo(function SelectionSheet({
   repoPath,
   selectCommit,
   selection,
+  tipCommit,
 }: {
   canSelectCommit: (hash: string) => boolean
   bottomOffset: number
@@ -63,6 +64,7 @@ export const SelectionSheet = memo(function SelectionSheet({
   repoPath: string
   selectCommit: (hash: string) => void
   selection: Selection
+  tipCommit: Commit | null
 }) {
   const [drag, setDrag] = useState<Drag | null>(null)
   const [closing, setClosing] = useState(false)
@@ -261,6 +263,7 @@ export const SelectionSheet = memo(function SelectionSheet({
               repoPath={repoPath}
               selectCommit={selectCommit}
               selection={selection}
+              tipCommit={tipCommit}
             />
           </div>
         )}

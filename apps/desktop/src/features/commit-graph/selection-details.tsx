@@ -335,11 +335,13 @@ function RefBody({
   menus,
   selectCommit,
   selection,
+  tipCommit,
 }: {
   canSelectCommit: (hash: string) => boolean
   menus: ChipMenuContext
   selectCommit: (hash: string) => void
   selection: RefSelection
+  tipCommit: Commit | null
 }) {
   const { ref } = selection
   const pullRequest = ref.pullRequest
@@ -352,6 +354,23 @@ function RefBody({
           selectCommit={selectCommit}
         />
       </Field>
+      {tipCommit && (
+        <Field label="Tip">
+          <span className="min-w-0 truncate" title={tipCommit.subject}>
+            {tipCommit.subject || "(no subject)"}
+          </span>
+          <span className="shrink-0 truncate text-muted-foreground">
+            {tipCommit.author}
+          </span>
+          <time
+            className="shrink-0 text-muted-foreground"
+            dateTime={tipCommit.date}
+            title={absoluteDate(tipCommit.date)}
+          >
+            {relativeDate(tipCommit.date)}
+          </time>
+        </Field>
+      )}
       {ref.sync && (
         <Field label="Upstream">
           <span className="truncate">{syncDescription(ref)}</span>
@@ -425,6 +444,7 @@ export const SelectionDetails = memo(function SelectionDetails({
   repoPath,
   selectCommit,
   selection,
+  tipCommit,
 }: {
   canSelectCommit: (hash: string) => boolean
   menus: ChipMenuContext
@@ -432,6 +452,7 @@ export const SelectionDetails = memo(function SelectionDetails({
   repoPath: string
   selectCommit: (hash: string) => void
   selection: Selection
+  tipCommit: Commit | null
 }) {
   const singleCommit =
     selection.kind === "commits" && selection.commits.length === 1 ?
@@ -446,6 +467,7 @@ export const SelectionDetails = memo(function SelectionDetails({
           menus={menus}
           selectCommit={selectCommit}
           selection={selection}
+          tipCommit={tipCommit}
         />
       : singleCommit ?
         <CommitBody
