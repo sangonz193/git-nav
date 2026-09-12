@@ -125,8 +125,8 @@ const MAX_HIGHLIGHT_LINES = 10_000
 const DIFF_FONT_SIZE = 12
 const DIFF_ROW_HEIGHT = DIFF_FONT_SIZE * 1.6
 const HUNK_ROW_HEIGHT = 30
-const FILE_HEADER_HEIGHT = 30
-const FILE_ROW_GAP = 8
+const FILE_HEADER_HEIGHT = 34
+const FILE_ROW_GAP = 12
 const COLLAPSED_BODY_HEIGHT = 40
 const IMAGE_BODY_HEIGHT = 280
 const SEARCH_DEBOUNCE = 120
@@ -1685,7 +1685,7 @@ export function DiffPanel({
           </PopoverTrigger>
           {pickerMenu("head")}
         </Popover>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {!isNarrow && (
             <ButtonGroup>
               <Hinted hint="Show both sides">
