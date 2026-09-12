@@ -29,7 +29,6 @@ import {
 import {
   type ComponentRef,
   type ComponentType,
-  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -67,6 +66,7 @@ import {
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
 import { toast } from "@workspace/shadcn/components/sonner"
+import { Hinted } from "@/components/hinted"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import {
@@ -190,15 +190,6 @@ type FileTreeNode = {
 }
 
 type PickerSide = "base" | "head"
-
-function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  )
-}
 
 function HeadPickerLabel({
   label,

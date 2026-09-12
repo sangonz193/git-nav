@@ -7,55 +7,24 @@ import {
 } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
-import { invoke, isDesktop, stream } from "@/lib/ipc"
-import { panelId } from "@/lib/panel-id"
-import { createUserWinningRestore } from "@/lib/pending-restore"
-import { WORKTREE_REF } from "@/lib/repository-constants"
+import { invoke } from "@/lib/ipc"
 import {
   openPullRequest,
   openWorktree,
   type WorktreeTarget,
 } from "@/lib/navigation"
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
 import { cn } from "@workspace/shadcn/lib/utils"
-import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@workspace/shadcn/components/context-menu"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@workspace/shadcn/components/popover"
 import { toast } from "@workspace/shadcn/components/sonner"
 import {
   Tooltip,
@@ -63,38 +32,9 @@ import {
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import {
-  AppWindow,
-  Archive,
-  ArrowDown,
-  ArrowUp,
-  Broom,
-  ChevronDown,
-  ChevronsDownUp,
-  CodeXml,
-  Copy,
-  ExternalLink,
-  FileDiff,
-  FilePen,
-  FolderOpen,
-  FoldVertical,
-  GitBranch,
-  GitCompareArrows,
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  LoaderCircle,
-  RefreshCw,
-  Search,
-  SlidersHorizontal,
-  Terminal,
-  UnfoldVertical,
-  X,
-} from "lucide-react"
+import { ArrowDown, ArrowUp, ChevronsDownUp, FileDiff, X } from "lucide-react"
 import {
   type CSSProperties,
-  type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -106,14 +46,13 @@ import {
   useState,
 } from "react"
 
+import { BranchCleanupDialog } from "./branch-cleanup-dialog"
 import { drawCommitGraph } from "./commit-graph-canvas"
 import {
   ancestryPath,
   chipLabel,
   chipName,
   clampGraphWidth,
-  commitFromTuple,
-  commitSelection,
   displayRefs,
   fitGraphWidth,
   GRAPH_HEADER_HEIGHT,
@@ -123,163 +62,60 @@ import {
   isCurrentCheckout,
   laneColor,
   persistedGraphPanelParams,
-  persistedSelectionHashes,
-  persistedSelectionRestore,
-  pullRequestDescription,
   REF_BUDGET_SHARE,
   refName,
-  refSelection,
-  refSyncLabel,
   relativeDate,
   ROW_HEIGHT,
-  splitRefLabel,
-  syncDescription,
-  worktreeChanges,
-  worktreeDescription,
   unpushedHashes,
   unpushedLanes,
   visibleChipCount,
-  type BranchPullRequest,
-  type BranchSync,
-  type PullRequestState,
-  type RowWorktree,
   type Commit,
-  type CommitBatch,
-  type CommitSelection,
-  type DisplayRef,
-  type RowChip,
-  type PendingOperation,
   type Selection,
-  type SquashMergeInference,
-  type StashEntry,
 } from "./commit-graph"
 import {
   appendGraphRows,
-  CHIP_KIND_LABELS,
+  CHIP_KINDS,
   commitChips,
   isMarkedCommit,
   rowIndexOfCommit,
-  searchGraph,
   useViewConfig,
   type ChipContext,
-  type ChipKind,
-  type CleanOptions,
   type GraphRow,
   type GraphRows,
   type SearchHit,
   type ViewConfig,
   type ViewConfigChange,
 } from "./commit-graph-view"
-import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
+import { Hinted } from "@/components/hinted"
+import { OperationDialog } from "./commit-operation-menu"
 import {
-  LabelText,
-  OperationDialog,
-  OperationMenuItems,
-} from "./commit-operation-menu"
-import {
-  CHIP_ICONS,
   clearConflictPredictions,
-  OPERATION_GROUPS,
   type CompletedOperation,
-  type Label,
-  type OperationGroup,
   type OperationRequest,
-  type RefMenuComponents,
   type RefUpdate,
-  type RepositoryState,
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
-import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
-import type {
-  Project,
-  Worktree as ProjectWorktree,
-} from "../repository/project"
+import { diffTabs } from "./diff-tabs"
+import { GraphToolbar } from "./graph-toolbar"
+import { RowContextMenuBody } from "./row-context-menu"
+import {
+  chipMenuEntry,
+  dropdownMenuComponents,
+  rowChip,
+  SELECTION_LABELS,
+  type ChipMenuContext,
+} from "./row-chips"
+import { useBranchCleanup } from "./use-branch-cleanup"
+import { useGraphData } from "./use-graph-data"
+import { useGraphSearch } from "./use-graph-search"
+import { useGraphSelection } from "./use-graph-selection"
 
 const EMPTY_COMMITS: Commit[] = []
-const PULL_REQUEST_SYNC_INTERVAL = 60_000
-const BROWSER_GRAPH_WINDOW_SIZE = 2_000
-const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
-const REPOSITORY_FOCUS_DEBOUNCE = 150
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TOAST_DURATION = 10_000
-const SEARCH_DEBOUNCE = 120
-type BranchCleanup = {
-  candidates: string[]
-  deleted: string[]
-  failed: string[]
-}
-type BranchSelection = { baseRef: string; headRef: string }
-type CleanResult = { report: string } | { result: BranchCleanup }
-type CleanupCandidate = { branch: string; reasons: CleanupReason[] }
-type CleanupReason =
-  | "squashMergedPullRequest"
-  | "mergedIntoDefaultBranch"
-  | "squashedIntoDefaultBranch"
-type RangeDrag = { anchorIndex: number; focusIndex: number }
-type SelectedRef = { ref: DisplayRef; sha: string }
-type SelectionRange = { anchorHash: string; focusHash: string }
-type WorktreeStatus = {
-  path: string
-  branch: string
-  head: string
-  isDetached: boolean
-  changedFiles: number
-  untrackedFiles: number
-  pendingOperation: PendingOperation | null
-}
-type WorktreeStatusScope = "all" | "current"
-type GraphWindowComplete = { hasMore: boolean }
-const contextMenuComponents: RefMenuComponents = {
-  Item: ContextMenuItem,
-  Label: ContextMenuLabel,
-  Separator: ContextMenuSeparator,
-  Sub: ContextMenuSub,
-  SubContent: ContextMenuSubContent,
-  SubTrigger: ContextMenuSubTrigger,
-}
-const dropdownMenuComponents: RefMenuComponents = {
-  Item: DropdownMenuItem,
-  Label: DropdownMenuLabel,
-  Separator: DropdownMenuSeparator,
-  Sub: DropdownMenuSub,
-  SubContent: DropdownMenuSubContent,
-  SubTrigger: DropdownMenuSubTrigger,
-}
-const SELECTION_LABELS = {
-  branch: "Branch",
-  remote: "Remote branch",
-  tag: "Tag",
-}
-// Destructive operations sit at the bottom of a menu, after anything that only reads the repository.
-const DANGER_GROUPS: OperationGroup[] = ["danger"]
-const SAFE_GROUPS = OPERATION_GROUPS.filter(
-  (group) => !DANGER_GROUPS.includes(group),
-)
-const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
-const PULL_REQUEST_ICONS = {
-  open: GitPullRequest,
-  draft: GitPullRequestDraft,
-  merged: GitMerge,
-  closed: GitPullRequestClosed,
-}
-
-function PullRequestIcon({ state }: { state: PullRequestState }) {
-  const Icon = PULL_REQUEST_ICONS[state]
-  return <Icon />
-}
-
-function Hinted({ children, hint }: { children: ReactNode; hint: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  )
-}
-
 const commitTableFeatures = tableFeatures({
   columnSizingFeature,
   columnResizingFeature,
@@ -315,146 +151,6 @@ const commitColumns = commitColumnHelper.columns([
   }),
 ])
 
-// Context menu content stays behind this boundary so its render cost does not grow with history depth.
-function RowContextMenuBody({
-  canSelectRange,
-  chipMenuEntry,
-  chips,
-  commit,
-  copyText,
-  diffSelectedRange,
-  index,
-  menuHeader,
-  onRequest,
-  openCommitDiff,
-  openRangeDiff,
-  repository,
-  selectCommit,
-  selectRangeTo,
-  selected,
-  source,
-  targetForRow,
-}: {
-  canSelectRange: (index: number) => boolean
-  chipMenuEntry: (
-    chip: RowChip,
-    sha: string,
-    key: string,
-    components: RefMenuComponents,
-  ) => ReactNode
-  chips: RowChip[]
-  commit: Commit
-  copyText: (value: string) => void
-  diffSelectedRange: CommitSelection | null
-  index: number
-  menuHeader: (
-    components: RefMenuComponents,
-    name: Label,
-    detail?: string | null,
-  ) => ReactNode
-  onRequest: (request: OperationRequest) => void
-  openCommitDiff: (commit: Commit) => void
-  openRangeDiff: (selection: CommitSelection) => void
-  repository: RepositoryState | null
-  selectCommit: (commit: Commit) => void
-  selectRangeTo: (commit: Commit) => void
-  selected: boolean
-  source: Selection | null
-  targetForRow: (index: number) => CommitSelection
-}) {
-  const target = targetForRow(index)
-  return (
-    <>
-      {menuHeader(
-        contextMenuComponents,
-        target.commits.length === 1 ?
-          target.tip.hash.slice(0, 8)
-        : `${target.commits.length} commits`,
-        commit.subject || "(no subject)",
-      )}
-      <ContextMenuItem onSelect={() => selectCommit(commit)}>
-        <GitCompareArrows />
-        Select commit
-      </ContextMenuItem>
-      {canSelectRange(index) && (
-        <ContextMenuItem onSelect={() => selectRangeTo(commit)}>
-          <GitCompareArrows />
-          Select range to here
-        </ContextMenuItem>
-      )}
-      <OperationMenuItems
-        components={contextMenuComponents}
-        groups={SAFE_GROUPS}
-        onSelect={onRequest}
-        repository={repository}
-        source={source}
-        target={target}
-      />
-      <ContextMenuItem
-        disabled={commit.parents.length === 0}
-        onSelect={() => openCommitDiff(commit)}
-      >
-        <FileDiff />
-        Show commit diff
-      </ContextMenuItem>
-      {selected &&
-        diffSelectedRange &&
-        diffSelectedRange.commits.length > 1 && (
-          <ContextMenuItem
-            disabled={!diffSelectedRange.base}
-            onSelect={() => openRangeDiff(diffSelectedRange)}
-          >
-            <FileDiff />
-            Diff selected range
-          </ContextMenuItem>
-        )}
-      {chips.length === 1 &&
-        chipMenuEntry(
-          chips[0],
-          commit.hash,
-          chipName(chips[0]),
-          contextMenuComponents,
-        )}
-      {chips.length > 1 && (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>
-            <GitBranch />
-            Refs
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {chips.map((chip, index) =>
-              chipMenuEntry(
-                chip,
-                commit.hash,
-                `${chipName(chip)}-${index}`,
-                contextMenuComponents,
-              ),
-            )}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-      )}
-      <ContextMenuSeparator />
-      <ContextMenuItem onSelect={() => copyText(commit.hash)}>
-        <Copy />
-        Copy SHA
-      </ContextMenuItem>
-      <ContextMenuItem onSelect={() => copyText(commit.subject)}>
-        <Copy />
-        Copy commit subject
-      </ContextMenuItem>
-      <OperationMenuItems
-        components={contextMenuComponents}
-        groups={DANGER_GROUPS}
-        onSelect={onRequest}
-        repository={repository}
-        separator="before"
-        source={source}
-        target={target}
-      />
-    </>
-  )
-}
-
 export function CommitGraphPanel(props: IDockviewPanelProps<GraphPanelParams>) {
   const [config, updateConfig] = useViewConfig()
   if (!config) {
@@ -481,44 +177,11 @@ function CommitGraphPanelContent({
   config: ViewConfig
   updateConfig: (change: ViewConfigChange) => void
 }) {
-  const repositoryPanelParams = { name: params.name, path: params.path }
   const operationToastId = `commit-graph-operation-${api.id}`
   const undoInFlight = useRef(false)
-  const [commits, setCommits] = useState<Commit[]>([])
-  const [squashMergeInferences, setSquashMergeInferences] = useState<
-    SquashMergeInference[]
-  >([])
   const [error, setError] = useState<string | null>(null)
-  const [isCleanConfirmationOpen, setIsCleanConfirmationOpen] = useState(false)
   const cleanOptions = config.cleanOptions
-  const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(
-    null,
-  )
-  const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(
-    null,
-  )
   const [request, setRequest] = useState<OperationRequest | null>(null)
-  const [graphVersion, setGraphVersion] = useState(0)
-  const [graphOffset, setGraphOffset] = useState(0)
-  const [hasOlderCommits, setHasOlderCommits] = useState(false)
-  const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(true)
-  const [projectWorktrees, setProjectWorktrees] = useState<ProjectWorktree[]>(
-    [],
-  )
-  const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(
-    new Map(),
-  )
-  const [pullRequests, setPullRequests] = useState<
-    Map<string, BranchPullRequest>
-  >(new Map())
-  const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
-  const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(
-    null,
-  )
-  const [selectedRef, setSelectedRef] = useState<SelectedRef | null>(null)
-  const [repository, setRepository] = useState<RepositoryState | null>(null)
-  const [stashes, setStashes] = useState<StashEntry[]>([])
-  const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
   const [rowHeight, setRowHeight] = useState(ROW_HEIGHT)
@@ -528,46 +191,18 @@ function CommitGraphPanelContent({
   const [collapseUnmarked, setCollapseUnmarked] = useState(
     params.userPreferences?.collapseUnmarked ?? true,
   )
-  const selectionRestore = useRef(
-    createUserWinningRestore(params.selectedCommitHashes !== undefined),
-  ).current
-  const [selectionRestored, setSelectionRestored] = useState(
-    !selectionRestore.pending,
-  )
-  const beginUserSelection = useCallback(() => {
-    selectionRestore.userAction(() => setSelectionRestored(true))
-  }, [selectionRestore])
-  const clearSelection = useCallback(() => {
-    beginUserSelection()
-    setSelectionRange(null)
-    setSelectedRef(null)
-  }, [beginUserSelection])
   // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
-  const [isSearchOpen, setIsSearchOpen] = useState(false)
-  const [searchInput, setSearchInput] = useState("")
-  const [searchQuery, setSearchQuery] = useState("")
-  const [searchHitIndex, setSearchHitIndex] = useState(0)
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
-  const searchField = useRef<HTMLInputElement>(null)
   const savedScrollTop = useRef(0)
   const refreshAnchor = useRef<{ hash: string; offset: number } | null>(null)
   const pendingScrollHash = useRef<string | null>(null)
-  const commitsRef = useRef(commits)
   const rowsRef = useRef<GraphRow[] | null>(null)
-  const fingerprint = useRef<string | null>(null)
-  const fingerprintGeneration = useRef(0)
-  const squashMergeInferenceRequest = useRef<{
-    graphVersion: number
-    path: string
-    request: Promise<SquashMergeInference[] | null>
-  } | null>(null)
   const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
-  const refreshGraph = useCallback(() => {
-    setError(null)
+  const captureScrollAnchor = useCallback(() => {
     const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
     const row = Math.floor(scrollTop / rowHeight)
     const commit =
@@ -576,58 +211,73 @@ function CommitGraphPanelContent({
       ]
     refreshAnchor.current =
       commit ? { hash: commit.hash, offset: scrollTop - row * rowHeight } : null
-    // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
-    fingerprint.current = null
-    fingerprintGeneration.current += 1
-    setGraphOffset(0)
-    setGraphVersion((version) => version + 1)
   }, [rowHeight])
-  // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
-  const refreshWorktreeStatus = useCallback(
-    (scope: WorktreeStatusScope = "all", isDisposed?: () => boolean) => {
-      return Promise.all([
-        invoke<Project>("project_snapshot", { path: params.path })
-          .then((project) => {
-            if (!isDisposed?.()) {
-              setProjectWorktrees(
-                project.worktrees.filter((worktree) => !worktree.isPrunable),
-              )
-            }
-          })
-          .catch((message: unknown) => {
-            if (!isDisposed?.()) {
-              setError(String(message))
-            }
-          }),
-        invoke<WorktreeStatus[]>("worktree_status", {
-          repoPath: params.path,
-          worktreePaths: scope === "current" ? [params.path] : undefined,
-        })
-          .then((statuses) => {
-            setWorktreeStatuses((current) => {
-              if (scope === "all") {
-                return statuses
-              }
-              const merged = new Map(
-                current.map((status) => [status.path, status]),
-              )
-              for (const status of statuses) {
-                merged.set(status.path, status)
-              }
-              return [...merged.values()]
-            })
-          })
-          .catch(() => undefined),
-        invoke<RepositoryState>("repository_state", { repoPath: params.path })
-          .then(setRepository)
-          .catch(() => undefined),
-        invoke<StashEntry[]>("stash_list", { repoPath: params.path })
-          .then(setStashes)
-          .catch(() => undefined),
-      ])
-    },
-    [params.path],
+  const {
+    branchSync,
+    commits,
+    graphOffset,
+    graphVersion,
+    hasOlderCommits,
+    isGraphWindowLoading,
+    pullRequests,
+    refreshGraph,
+    refreshWorktreeStatus,
+    remoteNames,
+    remotes,
+    repository,
+    setGraphOffset,
+    squashMergeInferences,
+    stashes,
+    stashesByBase,
+    worktreesByHead,
+  } = useGraphData({
+    onBeforeReload: captureScrollAnchor,
+    onError: setError,
+    repoPath: params.path,
+  })
+  const commitsRef = useRef(commits)
+  const persistSelection = useCallback(
+    (selectedCommitHashes: string[]) =>
+      api.updateParameters(
+        persistedGraphPanelParams(
+          params.name,
+          params.path,
+          selectedCommitHashes,
+          columnSizing,
+          collapseUnmarked,
+        ),
+      ),
+    [api, collapseUnmarked, columnSizing, params.name, params.path],
   )
+  const {
+    beginUserSelection,
+    canSelectRange,
+    clearSelection,
+    commitsSelection,
+    rangeDrag,
+    rowTarget,
+    selectCommit,
+    selectCommitFromKeyboard,
+    selectRangeTo,
+    selectRef,
+    selectedHashes,
+    selectedRef,
+    selection,
+    selectionEdges,
+    selectionRange,
+    setRangeDrag,
+    setSelectedRef,
+    setSelectionRange,
+  } = useGraphSelection({
+    branchSync,
+    commits,
+    isGraphWindowLoading,
+    persist: persistSelection,
+    persistedHashes: params.selectedCommitHashes,
+    pullRequests,
+    remotes,
+    worktreesByHead,
+  })
   const table = useTable({
     columnResizeMode: "onChange",
     onColumnSizingChange: setColumnSizing,
@@ -643,208 +293,12 @@ function CommitGraphPanelContent({
   // Refs share the commit column with the subject, which keeps whatever they do not take.
   const refBudget = table.getAllLeafColumns()[0].getSize() * REF_BUDGET_SHARE
   const tableWidth = graphWidth + table.getTotalSize()
-  // Until the repository reports its remotes, refs are classified against the conventional one rather than
-  // against none, which would read every remote branch as a local one. Repository state is re-read on a timer,
-  // so the list is held by its contents: a fresh array each poll would redraw the whole graph.
-  const remoteNames = repository?.remotes?.join("\n")
-  const remotes = useMemo(() => remoteNames?.split("\n"), [remoteNames])
   const currentCheckoutIndex = useMemo(
     () => commits.findIndex((commit) => isCurrentCheckout(commit.refs)),
     [commits],
   )
-  // A worktree's name and openness come from the project snapshot while its uncommitted work and pending
-  // operation come from its status, and the two only describe the same checkout once they are joined.
-  const worktrees = useMemo(() => {
-    const statuses = new Map(
-      worktreeStatuses.map((status) => [status.path, status]),
-    )
-    return projectWorktrees.map((worktree): RowWorktree => {
-      const status = statuses.get(worktree.path)
-      return {
-        branch: worktree.isDetached ? null : worktree.branch,
-        changedFiles: status?.changedFiles ?? 0,
-        head: worktree.head,
-        isCurrent: worktree.path === params.path,
-        isOpen: worktree.isOpen,
-        name: worktree.name,
-        path: worktree.path,
-        pendingOperation: status?.pendingOperation ?? null,
-        untrackedFiles: status?.untrackedFiles ?? 0,
-      }
-    })
-  }, [params.path, projectWorktrees, worktreeStatuses])
-  const worktreesByHead = useMemo(() => {
-    const byHead = new Map<string, RowWorktree[]>()
-    for (const worktree of worktrees) {
-      byHead.set(worktree.head, [
-        ...(byHead.get(worktree.head) ?? []),
-        worktree,
-      ])
-    }
-    return byHead
-  }, [worktrees])
-  const commitsSelection = useMemo(() => {
-    if (rangeDrag) {
-      return commitSelection(
-        commits,
-        rangeDrag.anchorIndex,
-        rangeDrag.focusIndex,
-        remotes,
-      )
-    }
-    if (!selectionRange) {
-      return null
-    }
-    const anchorIndex = commits.findIndex(
-      (commit) => commit.hash === selectionRange.anchorHash,
-    )
-    const focusIndex = commits.findIndex(
-      (commit) => commit.hash === selectionRange.focusHash,
-    )
-    return anchorIndex === -1 || focusIndex === -1 ?
-        null
-      : commitSelection(commits, anchorIndex, focusIndex, remotes)
-  }, [commits, rangeDrag, remotes, selectionRange])
-  // A ref selection outlives the graph it was made on, so it is re-read from the commit it sits on after every
-  // refresh and falls back to what it was made from while the graph it belongs to is still streaming in.
-  const selection = useMemo<Selection | null>(() => {
-    if (!selectedRef) {
-      return commitsSelection
-    }
-    const commit = commits.find(
-      (candidate) => candidate.hash === selectedRef.sha,
-    )
-    const ref =
-      commit &&
-      displayRefs(commit.refs, {
-        branchSync,
-        pullRequests,
-        remotes,
-        worktrees: worktreesByHead.get(selectedRef.sha),
-      }).find((candidate) => refName(candidate) === refName(selectedRef.ref))
-    return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
-  }, [
-    branchSync,
-    commits,
-    commitsSelection,
-    pullRequests,
-    remotes,
-    selectedRef,
-    worktreesByHead,
-  ])
-  const selectedHashes = useMemo(
-    () => new Set(commitsSelection?.commits.map((commit) => commit.hash)),
-    [commitsSelection],
-  )
-  const selectedCommitHashes = useMemo(
-    () => persistedSelectionHashes(selectionRange),
-    [selectionRange],
-  )
 
-  useEffect(() => {
-    if (
-      !selectionRestore.pending ||
-      params.selectedCommitHashes === undefined
-    ) {
-      return
-    }
-    const restored = persistedSelectionRestore(
-      commits,
-      params.selectedCommitHashes,
-      isGraphWindowLoading,
-    )
-    if (restored === undefined) {
-      return
-    }
-    selectionRestore.restore(() => {
-      api.updateParameters(
-        persistedGraphPanelParams(
-          params.name,
-          params.path,
-          restored.selectedCommitHashes,
-          columnSizing,
-          collapseUnmarked,
-        ),
-      )
-      setSelectionRange(restored.range)
-      setSelectionRestored(true)
-    })
-  }, [
-    api,
-    collapseUnmarked,
-    columnSizing,
-    commits,
-    isGraphWindowLoading,
-    params.name,
-    params.path,
-    params.selectedCommitHashes,
-    selectionRestore,
-  ])
-
-  useEffect(() => {
-    if (!selectionRestored) {
-      return
-    }
-    api.updateParameters(
-      persistedGraphPanelParams(
-        params.name,
-        params.path,
-        selectedCommitHashes,
-        columnSizing,
-        collapseUnmarked,
-      ),
-    )
-  }, [
-    api,
-    collapseUnmarked,
-    columnSizing,
-    params.name,
-    params.path,
-    selectedCommitHashes,
-    selectionRestored,
-  ])
-  const selectionEndpointIndexes = useMemo(
-    () =>
-      selectionRange ?
-        {
-          anchor: commits.findIndex(
-            (commit) => commit.hash === selectionRange.anchorHash,
-          ),
-          focus: commits.findIndex(
-            (commit) => commit.hash === selectionRange.focusHash,
-          ),
-        }
-      : null,
-    [commits, selectionRange],
-  )
-  // The dragged end can be either the newer or the older one, so the brackets follow the rows, not the anchor.
-  // A drag in flight is read from the drag itself, so the bracket stays under the pointer moving it.
-  const selectionEdges = useMemo(() => {
-    if (!commitsSelection) {
-      return null
-    }
-    const ends =
-      rangeDrag ?
-        { anchor: rangeDrag.anchorIndex, focus: rangeDrag.focusIndex }
-      : selectionEndpointIndexes
-    if (!ends || ends.anchor === -1 || ends.focus === -1) {
-      return null
-    }
-    return {
-      top: Math.min(ends.anchor, ends.focus),
-      bottom: Math.max(ends.anchor, ends.focus),
-    }
-  }, [commitsSelection, rangeDrag, selectionEndpointIndexes])
-  // A stash is drawn on the commit it was made from, which is the only place in the graph it belongs to.
-  const stashesByBase = useMemo(() => {
-    const byBase = new Map<string, StashEntry[]>()
-    for (const entry of stashes) {
-      if (entry.base) {
-        byBase.set(entry.base, [...(byBase.get(entry.base) ?? []), entry])
-      }
-    }
-    return byBase
-  }, [stashes])
+  const search = useGraphSearch({ commits, remotes, stashesByBase })
   const unpushed = useMemo(
     () => unpushedHashes(commits, remotes),
     [commits, remotes],
@@ -916,24 +370,6 @@ function CommitGraphPanelContent({
     rowsCache.current = { commits, marksKey, revealed, value }
     return value.rows
   }, [chipContext, collapseUnmarked, commits, marksKey, revealed])
-  const searchHits = useMemo(
-    () =>
-      isSearchOpen ?
-        searchGraph(commits, searchQuery, { remotes, stashesByBase })
-      : [],
-    [commits, isSearchOpen, remotes, searchQuery, stashesByBase],
-  )
-  const searchMenuItems = useMemo(
-    () =>
-      searchHits.map((hit): SearchMenuItem => ({
-        detail: hit.detail,
-        icon: hit.kind === "commit" ? GitCompareArrows : CHIP_ICONS[hit.kind],
-        key: `${hit.kind}-${hit.commitIndex}-${hit.label}`,
-        label: hit.label,
-      })),
-    [searchHits],
-  )
-  const cleanCandidateCount = cleanPreview?.length ?? 0
   const rowCount = rows ? rows.length : commits.length
   const commitIndexAtRow = useCallback(
     (row: number) => (rows ? (rows[row]?.index ?? 0) : row),
@@ -1012,55 +448,6 @@ function CommitGraphPanelContent({
     onSuccess: () => refreshGraph(),
     onError: (message) => setError(String(message)),
   })
-  const cleanMutation = useMutation({
-    mutationFn: async (): Promise<CleanResult> => {
-      if (!Object.values(cleanOptions).some(Boolean)) {
-        return { report: "Select at least one cleanup option." }
-      }
-      return {
-        result: await invoke<BranchCleanup>("delete_squashed_branches", {
-          repoPath: params.path,
-          options: cleanOptions,
-        }),
-      }
-    },
-    onMutate: () => setError(null),
-    onSuccess: (outcome) => {
-      setIsCleanConfirmationOpen(false)
-      if ("report" in outcome) {
-        toast(outcome.report)
-        return
-      }
-      const { result } = outcome
-      const details = [
-        result.deleted.length ?
-          `Deleted ${result.deleted.length} merged PR branch${result.deleted.length === 1 ? "" : "es"}.`
-        : null,
-        result.failed.length ?
-          `Could not delete: ${result.failed.join(", ")}`
-        : null,
-        !result.deleted.length && !result.failed.length ?
-          "No branches were deleted because the candidate list changed."
-        : null,
-      ].filter(Boolean)
-      const [title, ...description] = details
-      toast(title, { description: description.join("\n") })
-      refreshGraph()
-    },
-    onError: (message) => setError(String(message)),
-  })
-  const { isPending: isCleanPreviewPending, mutate: previewCleanCandidates } =
-    useMutation({
-      mutationFn: (options: CleanOptions) =>
-        invoke<CleanupCandidate[]>("preview_cleanup_candidates", {
-          repoPath: params.path,
-          options,
-        }),
-      // The count stands until a newer one replaces it, so a refresh does not blank the badge on its way through.
-      onMutate: () => setCleanPreviewError(null),
-      onSuccess: setCleanPreview,
-      onError: (message) => setCleanPreviewError(String(message)),
-    })
   const openWorktreeMutation = useMutation({
     mutationFn: ({ path, target }: { path: string; target: WorktreeTarget }) =>
       openWorktree(path, target),
@@ -1082,6 +469,26 @@ function CommitGraphPanelContent({
       undoInFlight.current = false
       setError(String(message))
     },
+  })
+  const {
+    openCommitDiff,
+    openRangeDiff,
+    openRefDiff,
+    openStashDiff,
+    openWorktreeDiff,
+  } = diffTabs({
+    containerApi,
+    name: params.name,
+    onError: setError,
+    panel: api.id,
+    repoPath: params.path,
+  })
+  const cleanup = useBranchCleanup({
+    cleanOptions,
+    graphVersion,
+    onError: setError,
+    refreshGraph,
+    repoPath: params.path,
   })
 
   const updateScroll = useCallback(() => {
@@ -1123,127 +530,6 @@ function CommitGraphPanelContent({
   }, [rowVirtualizer, updateScroll])
 
   useEffect(() => {
-    let disposed = false
-    let inferenceInterval: number | null = null
-    let inferenceTimeout: number | null = null
-    setCommits([])
-    setHasOlderCommits(false)
-    setIsGraphWindowLoading(true)
-    function refreshSquashMergeInferences() {
-      if (document.hidden) {
-        return
-      }
-      const current = squashMergeInferenceRequest.current
-      const request =
-        current?.graphVersion === graphVersion && current.path === params.path ?
-          current.request
-        : invoke<SquashMergeInference[]>("inferred_squash_merge_edges", {
-            repoPath: params.path,
-          }).catch(() => null)
-      squashMergeInferenceRequest.current = {
-        graphVersion,
-        path: params.path,
-        request,
-      }
-      request.finally(() => {
-        if (squashMergeInferenceRequest.current?.request === request) {
-          squashMergeInferenceRequest.current = null
-        }
-      })
-      return request.then((inferences) => {
-        if (!disposed && inferences !== null) {
-          setSquashMergeInferences(inferences)
-        }
-      })
-    }
-    function scheduleSquashMergeInferences() {
-      if (inferenceTimeout !== null || inferenceInterval !== null) {
-        return
-      }
-      inferenceTimeout = window.setTimeout(() => {
-        inferenceTimeout = null
-        refreshSquashMergeInferences()
-        inferenceInterval = window.setInterval(
-          refreshSquashMergeInferences,
-          PULL_REQUEST_SYNC_INTERVAL,
-        )
-      })
-    }
-    const refreshSquashMergeInferencesOnVisibility = () => {
-      if (!document.hidden) {
-        refreshSquashMergeInferences()
-      }
-    }
-    document.addEventListener(
-      "visibilitychange",
-      refreshSquashMergeInferencesOnVisibility,
-    )
-
-    if (graphOffset === 0) {
-      invoke<BranchSync[]>("branch_sync", { repoPath: params.path })
-        .then((entries) => {
-          if (!disposed) {
-            setBranchSync(
-              new Map(entries.map((entry) => [entry.branch, entry])),
-            )
-          }
-        })
-        .catch(() => undefined)
-    }
-    const stopStream = stream<CommitBatch>(
-      "stream_commit_graph",
-      isDesktop ?
-        { repoPath: params.path }
-      : {
-          repoPath: params.path,
-          offset: graphOffset,
-          limit: BROWSER_GRAPH_WINDOW_SIZE,
-        },
-      (batch) => {
-        if (!disposed) {
-          setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
-          if (graphOffset === 0) {
-            scheduleSquashMergeInferences()
-          }
-        }
-      },
-      (message) => {
-        if (!disposed) {
-          setError(message)
-          setIsGraphWindowLoading(false)
-        }
-      },
-      (data) => {
-        if (!disposed) {
-          if (
-            !isDesktop &&
-            typeof data === "object" &&
-            data !== null &&
-            "hasMore" in data
-          ) {
-            setHasOlderCommits((data as GraphWindowComplete).hasMore)
-          }
-          setIsGraphWindowLoading(false)
-        }
-      },
-    )
-    return () => {
-      disposed = true
-      stopStream()
-      if (inferenceTimeout !== null) {
-        window.clearTimeout(inferenceTimeout)
-      }
-      if (inferenceInterval !== null) {
-        window.clearInterval(inferenceInterval)
-      }
-      document.removeEventListener(
-        "visibilitychange",
-        refreshSquashMergeInferencesOnVisibility,
-      )
-    }
-  }, [graphOffset, graphVersion, params.path, refreshWorktreeStatus])
-
-  useEffect(() => {
     const query = window.matchMedia("(pointer: coarse)")
     const updateRowHeight = () =>
       setRowHeight(query.matches ? COARSE_POINTER_ROW_HEIGHT : ROW_HEIGHT)
@@ -1279,55 +565,6 @@ function CommitGraphPanelContent({
   }, [commits, rowOfCommit, rowVirtualizer])
 
   useEffect(() => {
-    let disposed = false
-    let isPolling = false
-    let focusTimeout: number | null = null
-    const poll = () => {
-      if (isPolling || document.hidden) {
-        return
-      }
-      isPolling = true
-      const generation = fingerprintGeneration.current
-      return invoke<string>("repository_fingerprint", { repoPath: params.path })
-        .then((value) => {
-          // A refresh that started while this was in flight already invalidated the answer.
-          if (disposed || generation !== fingerprintGeneration.current) {
-            return
-          }
-          if (fingerprint.current !== null && fingerprint.current !== value) {
-            refreshGraph()
-          }
-          fingerprint.current = value
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          isPolling = false
-        })
-    }
-    const pollOnFocus = () => {
-      if (focusTimeout !== null) {
-        window.clearTimeout(focusTimeout)
-      }
-      focusTimeout = window.setTimeout(() => {
-        focusTimeout = null
-        poll()
-      }, REPOSITORY_FOCUS_DEBOUNCE)
-    }
-
-    poll()
-    const interval = window.setInterval(poll, REPOSITORY_FINGERPRINT_INTERVAL)
-    window.addEventListener("focus", pollOnFocus)
-    return () => {
-      disposed = true
-      window.clearInterval(interval)
-      if (focusTimeout !== null) {
-        window.clearTimeout(focusTimeout)
-      }
-      window.removeEventListener("focus", pollOnFocus)
-    }
-  }, [params.path, refreshGraph])
-
-  useEffect(() => {
     const anchor = refreshAnchor.current
     const element = scrollElement.current
     if (!anchor || !element) {
@@ -1340,96 +577,6 @@ function CommitGraphPanelContent({
     element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
     refreshAnchor.current = null
   }, [commits, rowHeight, rowOfCommit])
-
-  // The badge counts what the dialog would delete, so the candidates are read for the options in force and
-  // re-read when the repository changes rather than on a timer of their own.
-  useEffect(() => {
-    previewCleanCandidates(cleanOptions)
-  }, [cleanOptions, graphVersion, previewCleanCandidates])
-
-  useEffect(() => {
-    const timeout = window.setTimeout(
-      () => setSearchQuery(searchInput),
-      SEARCH_DEBOUNCE,
-    )
-    return () => window.clearTimeout(timeout)
-  }, [searchInput])
-
-  useEffect(() => {
-    setSearchHitIndex(0)
-  }, [searchQuery])
-
-  useEffect(() => {
-    let disposed = false
-    let isRefreshing = false
-    let intervalTicks = 0
-    const refresh = (isInterval = false) => {
-      if (isRefreshing || document.hidden) {
-        return
-      }
-      const scope = isInterval && ++intervalTicks % 6 !== 0 ? "current" : "all"
-      isRefreshing = true
-      return refreshWorktreeStatus(scope, () => disposed).finally(() => {
-        isRefreshing = false
-      })
-    }
-
-    refresh()
-    const refreshOnFocus = () => refresh()
-    window.addEventListener("focus", refreshOnFocus)
-    const refreshOnVisibility = () => {
-      if (!document.hidden) {
-        refresh()
-      }
-    }
-    document.addEventListener("visibilitychange", refreshOnVisibility)
-    const interval = window.setInterval(() => refresh(true), 10_000)
-    return () => {
-      disposed = true
-      window.removeEventListener("focus", refreshOnFocus)
-      document.removeEventListener("visibilitychange", refreshOnVisibility)
-      window.clearInterval(interval)
-    }
-  }, [params.path, refreshWorktreeStatus])
-
-  // The backend answers from what it has already stored and refreshes from GitHub on its own interval, so a
-  // poll costs a read whether or not it lands on one of those refreshes.
-  useEffect(() => {
-    let disposed = false
-    const refresh = () => {
-      invoke<BranchPullRequest[]>("branch_pull_requests", {
-        repoPath: params.path,
-      })
-        .then((entries) => {
-          if (!disposed) {
-            setPullRequests(
-              new Map(entries.map((entry) => [entry.branch, entry])),
-            )
-          }
-        })
-        .catch(() => undefined)
-    }
-
-    refresh()
-    const interval = window.setInterval(refresh, PULL_REQUEST_SYNC_INTERVAL)
-    return () => {
-      disposed = true
-      window.clearInterval(interval)
-    }
-  }, [graphVersion, params.path])
-
-  useEffect(() => {
-    if (!selection) {
-      return
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        clearSelection()
-      }
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [clearSelection, selection])
 
   useEffect(() => {
     if (canvas.current) {
@@ -1535,15 +682,10 @@ function CommitGraphPanelContent({
     setRevealed((current) => new Set(current).add(startHash))
   }
 
-  function openSearch() {
-    setIsSearchOpen(true)
-    requestAnimationFrame(() => searchField.current?.select())
-  }
-
   function onPanelKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
     if ((event.metaKey || event.ctrlKey) && event.key === "f") {
       event.preventDefault()
-      openSearch()
+      search.open()
     }
   }
 
@@ -1586,36 +728,6 @@ function CommitGraphPanelContent({
     scrollToCommit(currentCheckoutIndex)
   }
 
-  async function openRefDiff(reference: string) {
-    try {
-      const selection = await invoke<BranchSelection>("select_branch_range", {
-        repoPath: params.path,
-        reference,
-      })
-      const referencePanel = containerApi.getPanel(api.id)
-      if (!referencePanel) {
-        throw new Error("Could not open a diff tab.")
-      }
-      containerApi.addPanel({
-        component: "diff",
-        id: panelId("diff"),
-        params: {
-          ...repositoryPanelParams,
-          baseRef: selection.baseRef,
-          headRef: selection.headRef,
-          mergeBase: true,
-        },
-        position: { direction: "within", referencePanel },
-        tabComponent: "diff",
-        title: branchRangeTitle(
-          selectedRefs(selection.baseRef, selection.headRef, true),
-        ),
-      })
-    } catch (message) {
-      setError(String(message))
-    }
-  }
-
   async function copyText(value: string) {
     try {
       await navigator.clipboard.writeText(value)
@@ -1624,106 +736,10 @@ function CommitGraphPanelContent({
     }
   }
 
-  function openCommitDiff(commit: Commit) {
-    const baseRef = commit.parents[0]
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!baseRef || !referencePanel) {
-      setError("Could not open a commit diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        baseRef,
-        headRef: commit.hash,
-        headLabel: commit.subject || "(no subject)",
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: refLabel(commit.hash),
-    })
-  }
-
-  // The diff is scoped to the dirty worktree, which is not always the one this panel was opened on.
-  function openWorktreeDiff(worktree: RowWorktree) {
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!referencePanel) {
-      setError("Could not open a working tree diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        path: worktree.path,
-        baseRef: "HEAD",
-        headRef: WORKTREE_REF,
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: worktree.name,
-    })
-  }
-
-  // A stash entry records the working tree against the commit it was made from, which is its first parent.
-  function openStashDiff(entry: StashEntry) {
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!referencePanel) {
-      setError("Could not open a stash diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        baseRef: `${entry.sha}^`,
-        headRef: entry.sha,
-        headLabel: entry.name,
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: entry.name,
-    })
-  }
-
-  function openRangeDiff({ base, tip }: CommitSelection) {
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!base || !referencePanel) {
-      setError("Could not open a range diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        baseRef: base.hash,
-        headRef: tip.hash,
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: `${refLabel(base.hash)}..${refLabel(tip.hash)}`,
-    })
-  }
-
   function selectionSummary(selection: Selection) {
     return selection.kind === "commits" ?
         `${selection.commits.length} commit${selection.commits.length === 1 ? "" : "s"}${selection.branches[0] ? ` · ${selection.branches[0].branch}` : ""}`
       : `${SELECTION_LABELS[selection.kind]} · ${refName(selection.ref)}`
-  }
-
-  function selectRef(ref: DisplayRef, sha: string) {
-    beginUserSelection()
-    setSelectionRange(null)
-    setSelectedRef((current) =>
-      current && refName(current.ref) === refName(ref) && current.sha === sha ?
-        null
-      : { ref, sha },
-    )
   }
 
   function onOperationCompleted(result: CompletedOperation) {
@@ -1749,39 +765,6 @@ function CommitGraphPanelContent({
     clearConflictPredictions()
     refreshWorktreeStatus()
     refreshGraph()
-  }
-
-  // Right-clicking inside the selection keeps it whole, and right-clicking outside it acts on the row under the pointer.
-  function rowTarget(index: number) {
-    return selectedHashes.has(commits[index].hash) && commitsSelection ?
-        commitsSelection
-      : commitSelection(commits, index, index)!
-  }
-
-  function canSelectRange(index: number) {
-    return (
-      selectionEndpointIndexes !== null &&
-      selectionEndpointIndexes.anchor !== -1 &&
-      ancestryPath(commits, selectionEndpointIndexes.anchor, index).length > 0
-    )
-  }
-
-  function selectCommit(commit: Commit) {
-    beginUserSelection()
-    setSelectedRef(null)
-    setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
-  }
-
-  function selectRangeTo(commit: Commit) {
-    if (!selectionEndpointIndexes) {
-      return
-    }
-    beginUserSelection()
-    setSelectedRef(null)
-    setSelectionRange({
-      anchorHash: commits[selectionEndpointIndexes.anchor].hash,
-      focusHash: commit.hash,
-    })
   }
 
   function startRangeDrag(
@@ -1920,545 +903,19 @@ function CommitGraphPanelContent({
     window.addEventListener("pointercancel", onPointerCancel)
   }
 
-  function selectCommitFromKeyboard(
-    event: ReactKeyboardEvent<HTMLElement>,
-    index: number,
-  ) {
-    if (
-      event.target !== event.currentTarget ||
-      (event.key !== "Enter" && event.key !== " ")
-    ) {
-      return
-    }
-    event.preventDefault()
-    const anchorIndex =
-      event.shiftKey && selectionRange ?
-        commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
-      : index
-    const rangeAnchorIndex = anchorIndex === -1 ? index : anchorIndex
-    if (ancestryPath(commits, rangeAnchorIndex, index).length > 0) {
-      beginUserSelection()
-      setSelectedRef(null)
-      setSelectionRange({
-        anchorHash: commits[rangeAnchorIndex].hash,
-        focusHash: commits[index].hash,
-      })
-    }
-  }
-
-  function menuHeader(
-    { Label, Separator }: RefMenuComponents,
-    name: Label,
-    detail?: string | null,
-  ) {
-    return (
-      <>
-        <Label>
-          <span className="block max-w-80 text-foreground">
-            <LabelText label={name} />
-          </span>
-          {detail && (
-            <span className="block max-w-80 truncate font-normal">
-              {detail}
-            </span>
-          )}
-        </Label>
-        <Separator />
-      </>
-    )
-  }
-
-  function refMenuItems(
-    ref: DisplayRef,
-    sha: string,
-    components: RefMenuComponents,
-  ) {
-    const { Item, Sub, SubContent, SubTrigger } = components
-    const reference = refName(ref)
-    const pullRequest = ref.pullRequest
-    return (
-      <>
-        {menuHeader(
-          components,
-          { kind: ref.kind, name: reference },
-          syncDescription(ref) ?? SELECTION_LABELS[ref.kind],
-        )}
-        <OperationMenuItems
-          components={components}
-          groups={SAFE_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          source={selection}
-          target={refSelection(ref, sha)}
-        />
-        {reference !== repository?.defaultBranch && (
-          <Item onSelect={() => openRefDiff(reference)}>
-            <FileDiff />
-            {`Compare with ${repository?.defaultBranch ?? "the default branch"}`}
-          </Item>
-        )}
-        <Item onSelect={() => copyText(reference)}>
-          <Copy />
-          {`Copy ${SELECTION_LABELS[ref.kind].toLowerCase()} name`}
-        </Item>
-        {pullRequest && (
-          <Item
-            onSelect={() => openPullRequestMutation.mutate(pullRequest.url)}
-          >
-            <PullRequestIcon state={pullRequest.state} />
-            {`Open pull request #${pullRequest.number}`}
-          </Item>
-        )}
-        {ref.worktrees.length > 0 && (
-          <Sub>
-            <SubTrigger>
-              <ExternalLink />
-              {ref.worktrees.length === 1 && !ref.worktrees[0].isCurrent ?
-                <LabelText
-                  label={{
-                    before: "Open ",
-                    kind: "worktree",
-                    name: ref.worktrees[0].name,
-                    after: " in",
-                  }}
-                />
-              : "Open in"}
-            </SubTrigger>
-            <SubContent>
-              {ref.worktrees.flatMap((worktree) => {
-                const suffix =
-                  ref.worktrees.length > 1 ? ` (${worktree.name})` : ""
-                return [
-                  <Item
-                    key={`${worktree.path}-git-nav`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "git-nav",
-                      })
-                    }
-                  >
-                    <AppWindow />
-                    {`Git Nav${suffix}`}
-                  </Item>,
-                  <Item
-                    key={`${worktree.path}-vscode`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "vscode",
-                      })
-                    }
-                  >
-                    <CodeXml />
-                    {`VS Code${suffix}`}
-                  </Item>,
-                  <Item
-                    key={`${worktree.path}-terminal`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "terminal",
-                      })
-                    }
-                  >
-                    <Terminal />
-                    {`Terminal${suffix}`}
-                  </Item>,
-                  <Item
-                    key={`${worktree.path}-finder`}
-                    onSelect={() =>
-                      openWorktreeMutation.mutate({
-                        path: worktree.path,
-                        target: "finder",
-                      })
-                    }
-                  >
-                    <FolderOpen />
-                    {`File manager${suffix}`}
-                  </Item>,
-                ]
-              })}
-            </SubContent>
-          </Sub>
-        )}
-        <OperationMenuItems
-          components={components}
-          groups={DANGER_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          separator="before"
-          source={selection}
-          target={refSelection(ref, sha)}
-        />
-      </>
-    )
-  }
-
-  function refMenuEntry(
-    ref: DisplayRef,
-    sha: string,
-    key: string,
-    components: RefMenuComponents,
-  ) {
-    const { Item, Sub, SubContent, SubTrigger } = components
-    return (
-      <Sub key={key}>
-        <SubTrigger>
-          <LabelText label={{ kind: ref.kind, name: ref.label }} />
-        </SubTrigger>
-        <SubContent>
-          <Item onSelect={() => selectRef(ref, sha)}>
-            <GitBranch />
-            {`Select ${refName(ref)}`}
-          </Item>
-          {refMenuItems(ref, sha, components)}
-        </SubContent>
-      </Sub>
-    )
-  }
-
-  function stashMenuItems(entry: StashEntry, components: RefMenuComponents) {
-    const { Item } = components
-    return (
-      <>
-        {menuHeader(
-          components,
-          { kind: "stash", name: entry.name },
-          entry.message,
-        )}
-        <OperationMenuItems
-          components={components}
-          groups={SAFE_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          source={null}
-          target={{ kind: "stash", entry }}
-        />
-        <Item onSelect={() => openStashDiff(entry)}>
-          <FileDiff />
-          Show stashed changes
-        </Item>
-        <OperationMenuItems
-          components={components}
-          groups={DANGER_GROUPS}
-          onSelect={setRequest}
-          repository={repository}
-          separator="before"
-          source={null}
-          target={{ kind: "stash", entry }}
-        />
-      </>
-    )
-  }
-
-  function stashMenuEntry(entry: StashEntry, components: RefMenuComponents) {
-    const { Sub, SubContent, SubTrigger } = components
-    return (
-      <Sub key={entry.sha}>
-        <SubTrigger>
-          <LabelText
-            label={{
-              kind: "stash",
-              name: `${entry.name}${entry.branch ? ` · ${entry.branch}` : ""}`,
-            }}
-          />
-        </SubTrigger>
-        <SubContent>{stashMenuItems(entry, components)}</SubContent>
-      </Sub>
-    )
-  }
-
-  function chipMenuItems(
-    chip: RowChip,
-    sha: string,
-    components: RefMenuComponents,
-  ) {
-    if (chip.kind === "stash") {
-      return stashMenuItems(chip.entry, components)
-    }
-    return chip.kind === "worktree" ?
-        worktreeMenuItems(chip.worktree, components)
-      : refMenuItems(chip.ref, sha, components)
-  }
-
-  function chipMenuEntry(
-    chip: RowChip,
-    sha: string,
-    key: string,
-    components: RefMenuComponents,
-  ) {
-    if (chip.kind === "stash") {
-      return stashMenuEntry(chip.entry, components)
-    }
-    return chip.kind === "worktree" ?
-        worktreeMenuEntry(chip.worktree, components)
-      : refMenuEntry(chip.ref, sha, key, components)
-  }
-
-  function worktreeMarker(worktree: RowWorktree) {
-    const changes = worktreeChanges(worktree)
-    const classes = [
-      "commit-ref-worktree",
-      worktree.isOpen && "commit-ref-worktree-open",
-      worktree.pendingOperation && "commit-ref-worktree-pending",
-    ]
-      .filter(Boolean)
-      .join(" ")
-    return (
-      <span className={classes} key={worktree.path}>
-        <span className="commit-ref-worktree-icon">
-          <AppWindow />
-        </span>
-        {changes > 0 && (
-          <span className="commit-ref-worktree-changes">
-            <FilePen />
-            <span className="commit-ref-worktree-count">{changes}</span>
-          </span>
-        )}
-      </span>
-    )
-  }
-
-  function worktreeOpenItems(
-    worktree: RowWorktree,
-    { Item, Sub, SubContent, SubTrigger }: RefMenuComponents,
-  ) {
-    return (
-      <Sub>
-        <SubTrigger>
-          <ExternalLink />
-          Open in
-        </SubTrigger>
-        <SubContent>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "git-nav",
-              })
-            }
-          >
-            <AppWindow />
-            Git Nav
-          </Item>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "vscode",
-              })
-            }
-          >
-            <CodeXml />
-            VS Code
-          </Item>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "terminal",
-              })
-            }
-          >
-            <Terminal />
-            Terminal
-          </Item>
-          <Item
-            onSelect={() =>
-              openWorktreeMutation.mutate({
-                path: worktree.path,
-                target: "finder",
-              })
-            }
-          >
-            <FolderOpen />
-            File manager
-          </Item>
-        </SubContent>
-      </Sub>
-    )
-  }
-
-  function worktreeMenuItems(
-    worktree: RowWorktree,
-    components: RefMenuComponents,
-  ) {
-    const { Item } = components
-    const changes = worktreeChanges(worktree)
-    return (
-      <>
-        {menuHeader(
-          components,
-          { kind: "worktree", name: worktree.name },
-          worktreeDescription(worktree),
-        )}
-        {changes > 0 && (
-          <Item onSelect={() => openWorktreeDiff(worktree)}>
-            <FileDiff />
-            {`Show ${changes} uncommitted change${changes === 1 ? "" : "s"}`}
-          </Item>
-        )}
-        {worktreeOpenItems(worktree, components)}
-      </>
-    )
-  }
-
-  function worktreeMenuEntry(
-    worktree: RowWorktree,
-    components: RefMenuComponents,
-  ) {
-    const { Sub, SubContent, SubTrigger } = components
-    return (
-      <Sub key={worktree.path}>
-        <SubTrigger>
-          <LabelText label={{ kind: "worktree", name: worktree.name }} />
-        </SubTrigger>
-        <SubContent>{worktreeMenuItems(worktree, components)}</SubContent>
-      </Sub>
-    )
-  }
-
-  function chipAriaLabel(chip: RowChip) {
-    if (chip.kind === "stash") {
-      return `Show the changes in ${chip.entry.name}`
-    }
-    if (chip.kind === "worktree") {
-      const changes = worktreeChanges(chip.worktree)
-      return changes > 0 ?
-          `Show ${changes} uncommitted change${changes === 1 ? "" : "s"} in ${chip.worktree.name}`
-        : `The ${chip.worktree.name} worktree`
-    }
-    return (
-      chip.ref.checkedOut ? "Currently checked out"
-      : chip.ref.worktrees.length > 0 ?
-        `Checked out in the ${chip.ref.worktrees[0].name} worktree`
-      : undefined
-    )
-  }
-
-  function chipTitle(chip: RowChip) {
-    if (chip.kind === "stash") {
-      return [
-        chip.entry.name,
-        chip.entry.message,
-        chip.entry.branch && `On ${chip.entry.branch}`,
-      ]
-        .filter(Boolean)
-        .join("\n")
-    }
-    if (chip.kind === "worktree") {
-      return worktreeDescription(chip.worktree)
-    }
-    return [
-      chip.ref.label,
-      pullRequestDescription(chip.ref),
-      syncDescription(chip.ref),
-      ...chip.ref.worktrees.map(worktreeDescription),
-    ]
-      .filter(Boolean)
-      .join("\n")
-  }
-
-  function rowChip(chip: RowChip, sha: string, key?: string) {
-    const Icon = CHIP_ICONS[chip.kind]
-    const ref =
-      chip.kind === "stash" || chip.kind === "worktree" ? null : chip.ref
-    // A ref name is distinguished by its tail, so the middle of it goes first. A stash message and a worktree
-    // name read the other way round and keep their opening characters instead.
-    const { start, end } =
-      ref ? splitRefLabel(ref.label) : { start: chipLabel(chip), end: "" }
-    const sync = ref && refSyncLabel(ref)
-    const pullRequest = ref?.pullRequest ?? null
-    // A worktree holding no branch is a chip of its own; one holding a branch is a marker inside that chip.
-    const chipWorktrees =
-      chip.kind === "worktree" ? [chip.worktree] : (ref?.worktrees ?? [])
-    const selected =
-      ref !== null &&
-      selectedRef !== null &&
-      refName(selectedRef.ref) === refName(ref) &&
-      selectedRef.sha === sha
-    // Neither a stash nor a worktree has a place in a selection, so their chips go straight to their changes.
-    const activate = () => {
-      if (chip.kind === "stash") {
-        return openStashDiff(chip.entry)
-      }
-      if (chip.kind === "worktree") {
-        return worktreeChanges(chip.worktree) > 0 ?
-            openWorktreeDiff(chip.worktree)
-          : undefined
-      }
-      return selectRef(chip.ref, sha)
-    }
-    return (
-      <ContextMenu key={key}>
-        <Tooltip>
-          {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
-          <ContextMenuTrigger
-            asChild
-            onContextMenu={(event) => event.stopPropagation()}
-          >
-            <TooltipTrigger asChild>
-              <button
-                aria-label={chipAriaLabel(chip)}
-                aria-pressed={ref === null ? undefined : selected}
-                className={cn(
-                  "commit-ref",
-                  `commit-ref-${chip.kind}`,
-                  ref?.checkedOut && "commit-ref-current",
-                  chip.kind === "worktree" &&
-                    !chip.worktree.branch &&
-                    "commit-ref-detached",
-                  selected && "commit-ref-selected",
-                )}
-                // Keyboard activation arrives as a click with no pointer behind it.
-                onClick={(event) => event.detail === 0 && activate()}
-                onPointerDown={(event) => {
-                  event.stopPropagation()
-                  // Acting on click would also answer the stray click a context menu leaves behind when it closes over this chip.
-                  if (event.button === 0) {
-                    activate()
-                  }
-                }}
-                type="button"
-              >
-                {ref?.checkedOut && (
-                  <span className="commit-ref-head">HEAD</span>
-                )}
-                {chipWorktrees.map(worktreeMarker)}
-                <Icon />
-                <span className="commit-ref-label">
-                  <span className="commit-ref-label-start">{start}</span>
-                  {end && <span className="commit-ref-label-end">{end}</span>}
-                </span>
-                {pullRequest && (
-                  <span
-                    className={`commit-ref-pull-request commit-ref-pull-request-${pullRequest.state}`}
-                  >
-                    <PullRequestIcon state={pullRequest.state} />
-                    {`#${pullRequest.number}`}
-                  </span>
-                )}
-                {sync && (
-                  <span
-                    className={cn(
-                      "commit-ref-sync",
-                      ref?.sync?.isGone && "commit-ref-sync-gone",
-                    )}
-                  >
-                    {sync}
-                  </span>
-                )}
-              </button>
-            </TooltipTrigger>
-          </ContextMenuTrigger>
-          <TooltipContent>{chipTitle(chip)}</TooltipContent>
-        </Tooltip>
-        <ContextMenuContent>
-          {chipMenuItems(chip, sha, contextMenuComponents)}
-        </ContextMenuContent>
-      </ContextMenu>
-    )
+  const menus: ChipMenuContext = {
+    copyText,
+    openPullRequest: (url) => openPullRequestMutation.mutate(url),
+    openRefDiff,
+    openStashDiff,
+    openWorktree: (path, target) =>
+      openWorktreeMutation.mutate({ path, target }),
+    openWorktreeDiff,
+    repository,
+    selectRef,
+    selectedRef,
+    selection,
+    setRequest,
   }
 
   return (
@@ -2466,241 +923,24 @@ function CommitGraphPanelContent({
       className="relative flex h-full flex-col overflow-hidden bg-background"
       onKeyDown={onPanelKeyDown}
     >
-      <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
-        <div className="flex items-center gap-1">
-          <Popover
-            onOpenChange={(open) =>
-              open ? openSearch() : setIsSearchOpen(false)
-            }
-            open={isSearchOpen}
-          >
-            <Tooltip>
-              <PopoverTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label="Search the graph"
-                    size="icon-sm"
-                    type="button"
-                    variant="outline"
-                  >
-                    <Search />
-                  </Button>
-                </TooltipTrigger>
-              </PopoverTrigger>
-              <TooltipContent>Find a branch, tag or commit</TooltipContent>
-            </Tooltip>
-            <PopoverContent
-              align="start"
-              className="w-80"
-              onOpenAutoFocus={(event) => event.preventDefault()}
-            >
-              <SearchMenu
-                activeIndex={searchHitIndex}
-                inputLabel="Search refs and commits"
-                inputRef={searchField}
-                items={searchMenuItems}
-                onClose={() => setIsSearchOpen(false)}
-                onHighlight={(index) => {
-                  setSearchHitIndex(index)
-                  activateSearchHit(searchHits[index])
-                }}
-                onQueryChange={setSearchInput}
-                onSelect={(index, source) => {
-                  setSearchHitIndex(index)
-                  activateSearchHit(searchHits[index])
-                  if (source === "enter") {
-                    setIsSearchOpen(false)
-                  }
-                }}
-                placeholder="Branch, tag or commit"
-                query={searchInput}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-        <div className="flex items-center gap-1">
-          <Hinted
-            hint={
-              collapseUnmarked ? "Show every commit" : (
-                "Collapse commits nothing points at"
-              )
-            }
-          >
-            <Button
-              aria-label="Collapse commits nothing points at"
-              aria-pressed={collapseUnmarked}
-              className={collapseUnmarked ? "bg-muted" : undefined}
-              onClick={() => collapseUnmarkedCommits(!collapseUnmarked)}
-              size="icon-sm"
-              type="button"
-              variant="outline"
-            >
-              {collapseUnmarked ?
-                <UnfoldVertical />
-              : <FoldVertical />}
-            </Button>
-          </Hinted>
-          <DropdownMenu>
-            <Tooltip>
-              <DropdownMenuTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button size="sm" type="button" variant="outline">
-                    <SlidersHorizontal />
-                    View
-                  </Button>
-                </TooltipTrigger>
-              </DropdownMenuTrigger>
-              <TooltipContent>Choose what the graph shows</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Show</DropdownMenuLabel>
-              {CHIP_KINDS.map((kind) => (
-                <DropdownMenuCheckboxItem
-                  checked={config.chipKinds[kind]}
-                  key={kind}
-                  onCheckedChange={(checked) =>
-                    updateConfig({ chipKinds: { [kind]: checked === true } })
-                  }
-                  onSelect={(event) => event.preventDefault()}
-                >
-                  {CHIP_KIND_LABELS[kind]}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {!isDesktop && graphOffset > 0 && (
-            <Hinted hint="Show newer commits">
-              <Button
-                disabled={isGraphWindowLoading}
-                onClick={() =>
-                  showGraphWindow(
-                    Math.max(0, graphOffset - BROWSER_GRAPH_WINDOW_SIZE),
-                  )
-                }
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                Newer
-              </Button>
-            </Hinted>
-          )}
-          {!isDesktop && hasOlderCommits && (
-            <Hinted hint="Show older commits">
-              <Button
-                disabled={isGraphWindowLoading}
-                onClick={() =>
-                  showGraphWindow(graphOffset + BROWSER_GRAPH_WINDOW_SIZE)
-                }
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                Older
-              </Button>
-            </Hinted>
-          )}
-          <DropdownMenu>
-            <Tooltip>
-              <DropdownMenuTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button size="sm" type="button" variant="outline">
-                    <Archive />
-                    <span className="tabular-nums">
-                      {stashes.length > 0 ? stashes.length : "Stash"}
-                    </span>
-                  </Button>
-                </TooltipTrigger>
-              </DropdownMenuTrigger>
-              <TooltipContent>Stashed changes</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent>
-              <OperationMenuItems
-                components={dropdownMenuComponents}
-                onSelect={setRequest}
-                repository={repository}
-                source={null}
-                target={{ kind: "worktree" }}
-              />
-              {stashes.map((entry) =>
-                stashMenuEntry(entry, dropdownMenuComponents),
-              )}
-              {stashes.length === 0 && !repository?.isDirty && (
-                <DropdownMenuItem disabled>Nothing is stashed</DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Hinted
-            hint={
-              cleanCandidateCount > 0 ?
-                `${cleanCandidateCount} branch${cleanCandidateCount === 1 ? "" : "es"} can be cleaned`
-              : "Clean merged branches"
-            }
-          >
-            <Button
-              aria-label="Clean merged branches"
-              disabled={fetchMutation.isPending || cleanMutation.isPending}
-              onClick={() => setIsCleanConfirmationOpen(true)}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              {cleanMutation.isPending ?
-                <LoaderCircle className="animate-spin" />
-              : <Broom />}
-              {cleanCandidateCount > 0 && (
-                <span className="tabular-nums">{cleanCandidateCount}</span>
-              )}
-            </Button>
-          </Hinted>
-          <ButtonGroup>
-            <Hinted hint="Refresh graph">
-              <Button
-                aria-label="Refresh graph"
-                disabled={fetchMutation.isPending || cleanMutation.isPending}
-                onClick={() => refreshGraph()}
-                size="icon-sm"
-                type="button"
-                variant="outline"
-              >
-                {fetchMutation.isPending ?
-                  <LoaderCircle className="animate-spin" />
-                : <RefreshCw />}
-              </Button>
-            </Hinted>
-            <DropdownMenu>
-              <Tooltip>
-                <DropdownMenuTrigger asChild>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label="Fetch options"
-                      className="w-6"
-                      disabled={
-                        fetchMutation.isPending || cleanMutation.isPending
-                      }
-                      size="icon-sm"
-                      type="button"
-                      variant="outline"
-                    >
-                      <ChevronDown />
-                    </Button>
-                  </TooltipTrigger>
-                </DropdownMenuTrigger>
-                <TooltipContent>Fetch options</TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent>
-                <DropdownMenuItem
-                  disabled={fetchMutation.isPending}
-                  onSelect={() => fetchMutation.mutate()}
-                >
-                  <RefreshCw />
-                  Fetch from origin
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </ButtonGroup>
-        </div>
-      </div>
+      <GraphToolbar
+        cleanup={cleanup}
+        collapseUnmarked={collapseUnmarked}
+        config={config}
+        fetch={() => fetchMutation.mutate()}
+        graphOffset={graphOffset}
+        hasOlderCommits={hasOlderCommits}
+        isFetching={fetchMutation.isPending}
+        isGraphWindowLoading={isGraphWindowLoading}
+        menus={menus}
+        onActivateSearchHit={activateSearchHit}
+        onCollapseUnmarked={collapseUnmarkedCommits}
+        refreshGraph={refreshGraph}
+        search={search}
+        showGraphWindow={showGraphWindow}
+        stashes={stashes}
+        updateConfig={updateConfig}
+      />
       <div
         aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."
         aria-multiselectable
@@ -2892,6 +1132,7 @@ function CommitGraphPanelContent({
                           .slice(0, shown)
                           .map((chip, index) =>
                             rowChip(
+                              menus,
                               chip,
                               commit.hash,
                               `${chipName(chip)}-${index}`,
@@ -2921,6 +1162,7 @@ function CommitGraphPanelContent({
                             <DropdownMenuContent>
                               {overflowChips.map((chip, index) =>
                                 chipMenuEntry(
+                                  menus,
                                   chip,
                                   commit.hash,
                                   `${chipName(chip)}-${index}`,
@@ -2955,21 +1197,16 @@ function CommitGraphPanelContent({
                 <ContextMenuContent>
                   <RowContextMenuBody
                     canSelectRange={canSelectRange}
-                    chipMenuEntry={chipMenuEntry}
                     chips={chips}
                     commit={commit}
-                    copyText={copyText}
                     diffSelectedRange={selected ? commitsSelection : null}
                     index={index}
-                    menuHeader={menuHeader}
-                    onRequest={setRequest}
+                    menus={menus}
                     openCommitDiff={openCommitDiff}
                     openRangeDiff={openRangeDiff}
-                    repository={repository}
                     selectCommit={selectCommit}
                     selectRangeTo={selectRangeTo}
                     selected={selected}
-                    source={selection}
                     targetForRow={rowTarget}
                   />
                 </ContextMenuContent>
@@ -3047,135 +1284,11 @@ function CommitGraphPanelContent({
           {error}
         </p>
       )}
-      <AlertDialog
-        onOpenChange={setIsCleanConfirmationOpen}
-        open={isCleanConfirmationOpen}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Clean merged branches?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Selected local branches will be permanently deleted.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="grid gap-3 text-sm">
-            <label className="flex items-start gap-2">
-              <input
-                checked={cleanOptions.deleteMergedPullRequestBranches}
-                className="mt-0.5 size-4 accent-primary"
-                onChange={(event) =>
-                  updateConfig({
-                    cleanOptions: {
-                      deleteMergedPullRequestBranches: event.target.checked,
-                    },
-                  })
-                }
-                type="checkbox"
-              />
-              <span>
-                Delete branches whose merged pull request head matches the local
-                tip.
-              </span>
-            </label>
-            <label className="flex items-start gap-2">
-              <input
-                checked={cleanOptions.deleteMergedBranches}
-                className="mt-0.5 size-4 accent-primary"
-                onChange={(event) =>
-                  updateConfig({
-                    cleanOptions: {
-                      deleteMergedBranches: event.target.checked,
-                    },
-                  })
-                }
-                type="checkbox"
-              />
-              <span>
-                Delete branches with no commits ahead of the default branch that
-                are not checked out in any worktree.
-              </span>
-            </label>
-            <label className="flex items-start gap-2">
-              <input
-                checked={cleanOptions.deleteSquashMergedBranches}
-                className="mt-0.5 size-4 accent-primary"
-                onChange={(event) =>
-                  updateConfig({
-                    cleanOptions: {
-                      deleteSquashMergedBranches: event.target.checked,
-                    },
-                  })
-                }
-                type="checkbox"
-              />
-              <span>
-                Delete branches whose changes already sit on the default branch
-                as one squashed commit, matched by content rather than by a
-                record of the merge.
-              </span>
-            </label>
-          </div>
-          <div className="max-h-52 overflow-y-auto rounded-lg border p-3 text-sm">
-            {isCleanPreviewPending && (
-              <p className="text-muted-foreground">
-                Finding branches to clean…
-              </p>
-            )}
-            {cleanPreviewError && (
-              <p className="text-destructive">{cleanPreviewError}</p>
-            )}
-            {cleanPreview?.length === 0 && (
-              <p className="text-muted-foreground">
-                No branches match the selected cleanup options.
-              </p>
-            )}
-            {cleanPreview && cleanPreview.length > 0 && (
-              <div className="grid gap-3">
-                {[
-                  ["Squash-merged pull requests", "squashMergedPullRequest"],
-                  ["Merged into the default branch", "mergedIntoDefaultBranch"],
-                  [
-                    "Squashed into the default branch",
-                    "squashedIntoDefaultBranch",
-                  ],
-                ].map(([label, reason]) => {
-                  const candidates = cleanPreview.filter((candidate) =>
-                    candidate.reasons.includes(reason as CleanupReason),
-                  )
-                  return candidates.length === 0 ?
-                      null
-                    : <section className="grid gap-1" key={reason}>
-                        <h3 className="font-medium">{label}</h3>
-                        <ul className="font-mono text-xs text-muted-foreground">
-                          {candidates.map((candidate) => (
-                            <li key={candidate.branch}>{candidate.branch}</li>
-                          ))}
-                        </ul>
-                      </section>
-                })}
-              </div>
-            )}
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={cleanMutation.isPending}>
-              Cancel
-            </AlertDialogCancel>
-            <Button
-              disabled={
-                cleanMutation.isPending ||
-                !cleanPreview ||
-                cleanPreview.length === 0 ||
-                Boolean(cleanPreviewError)
-              }
-              onClick={() => cleanMutation.mutate()}
-              type="button"
-              variant="destructive"
-            >
-              {cleanMutation.isPending ? "Cleaning…" : "Clean branches"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <BranchCleanupDialog
+        cleanOptions={cleanOptions}
+        cleanup={cleanup}
+        updateConfig={updateConfig}
+      />
       {request && (
         <OperationDialog
           onClose={() => setRequest(null)}
