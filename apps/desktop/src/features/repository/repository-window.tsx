@@ -7,7 +7,7 @@ import {
   type IWatermarkPanelProps,
 } from "dockview-react"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { FileDiff, GitGraph, Plus } from "lucide-react"
+import { FileDiff, GitGraph, Plus, X } from "lucide-react"
 import {
   createContext,
   useCallback,
@@ -19,6 +19,13 @@ import {
 } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@workspace/shadcn/components/context-menu"
 import { toast } from "@workspace/shadcn/components/sonner"
 import {
   DropdownMenu,
@@ -33,6 +40,7 @@ import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
 import { closedTabHistory, reopenedPanel } from "../../lib/closed-tabs"
 import { panelId } from "../../lib/panel-id"
+import { tabsToClose, type TabCloseScope } from "../../lib/tab-closing"
 import { useTabShortcuts } from "../../lib/tab-shortcuts"
 import { invoke, isDesktop } from "../../lib/ipc"
 import {
@@ -53,12 +61,61 @@ import type { RepositoryPanelParams } from "../../lib/panel-params"
 function panelTab(Icon: ComponentType<{ className?: string }>) {
   return function PanelTab(props: IDockviewPanelHeaderProps) {
     return (
-      <div className="flex h-full w-full min-w-0 items-center gap-1.5">
-        <Icon className="pointer-events-none size-3.5 shrink-0" />
-        <DockviewDefaultTab {...props} />
-      </div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="flex h-full w-full min-w-0 items-center gap-1.5">
+            <Icon className="pointer-events-none size-3.5 shrink-0" />
+            <DockviewDefaultTab {...props} />
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <TabMenuItems api={props.api} />
+        </ContextMenuContent>
+      </ContextMenu>
     )
   }
+}
+
+// The menu reads the group when it opens: siblings come and go without this tab rendering again.
+function TabMenuItems({ api }: { api: IDockviewPanelHeaderProps["api"] }) {
+  const panels = api.group.panels
+  const closeScope = (scope: TabCloseScope) => {
+    for (const panel of tabsToClose(panels, api.id, scope)) {
+      panel.api.close()
+    }
+  }
+  const disabled = (scope: TabCloseScope) =>
+    tabsToClose(panels, api.id, scope).length === 0
+  return (
+    <>
+      <ContextMenuItem onSelect={() => api.close()}>
+        <X />
+        Close
+      </ContextMenuItem>
+      <ContextMenuItem
+        disabled={disabled("others")}
+        onSelect={() => closeScope("others")}
+      >
+        Close Others
+      </ContextMenuItem>
+      <ContextMenuItem
+        disabled={disabled("left")}
+        onSelect={() => closeScope("left")}
+      >
+        Close Tabs to the Left
+      </ContextMenuItem>
+      <ContextMenuItem
+        disabled={disabled("right")}
+        onSelect={() => closeScope("right")}
+      >
+        Close Tabs to the Right
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => closeScope("all")}>
+        Close All
+      </ContextMenuItem>
+    </>
+  )
 }
 
 const repositoryTabs = {
