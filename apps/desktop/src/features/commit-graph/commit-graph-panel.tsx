@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
-import { invoke, isDesktop, stream } from "@/lib/ipc"
+import { invoke, isDesktop } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
 import { createUserWinningRestore } from "@/lib/pending-restore"
 import { WORKTREE_REF } from "@/lib/repository-constants"
@@ -80,7 +80,6 @@ import {
   chipLabel,
   chipName,
   clampGraphWidth,
-  commitFromTuple,
   commitSelection,
   displayRefs,
   fitGraphWidth,
@@ -101,16 +100,11 @@ import {
   unpushedHashes,
   unpushedLanes,
   visibleChipCount,
-  type BranchPullRequest,
-  type BranchSync,
   type RowWorktree,
   type Commit,
-  type CommitBatch,
   type CommitSelection,
   type DisplayRef,
-  type PendingOperation,
   type Selection,
-  type SquashMergeInference,
   type StashEntry,
 } from "./commit-graph"
 import {
@@ -136,7 +130,6 @@ import {
   type CompletedOperation,
   type OperationRequest,
   type RefUpdate,
-  type RepositoryState,
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
 import { RowContextMenuBody } from "./row-context-menu"
@@ -149,18 +142,11 @@ import {
   type ChipMenuContext,
 } from "./row-chips"
 import { useBranchCleanup } from "./use-branch-cleanup"
+import { BROWSER_GRAPH_WINDOW_SIZE, useGraphData } from "./use-graph-data"
 import { useGraphSearch } from "./use-graph-search"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
-import type {
-  Project,
-  Worktree as ProjectWorktree,
-} from "../repository/project"
 
 const EMPTY_COMMITS: Commit[] = []
-const PULL_REQUEST_SYNC_INTERVAL = 60_000
-const BROWSER_GRAPH_WINDOW_SIZE = 2_000
-const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
-const REPOSITORY_FOCUS_DEBOUNCE = 150
 const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
@@ -170,17 +156,6 @@ type BranchSelection = { baseRef: string; headRef: string }
 type RangeDrag = { anchorIndex: number; focusIndex: number }
 type SelectedRef = { ref: DisplayRef; sha: string }
 type SelectionRange = { anchorHash: string; focusHash: string }
-type WorktreeStatus = {
-  path: string
-  branch: string
-  head: string
-  isDetached: boolean
-  changedFiles: number
-  untrackedFiles: number
-  pendingOperation: PendingOperation | null
-}
-type WorktreeStatusScope = "all" | "current"
-type GraphWindowComplete = { hasMore: boolean }
 const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
 const commitTableFeatures = tableFeatures({
   columnSizingFeature,
@@ -246,33 +221,13 @@ function CommitGraphPanelContent({
   const repositoryPanelParams = { name: params.name, path: params.path }
   const operationToastId = `commit-graph-operation-${api.id}`
   const undoInFlight = useRef(false)
-  const [commits, setCommits] = useState<Commit[]>([])
-  const [squashMergeInferences, setSquashMergeInferences] = useState<
-    SquashMergeInference[]
-  >([])
   const [error, setError] = useState<string | null>(null)
   const cleanOptions = config.cleanOptions
   const [request, setRequest] = useState<OperationRequest | null>(null)
-  const [graphVersion, setGraphVersion] = useState(0)
-  const [graphOffset, setGraphOffset] = useState(0)
-  const [hasOlderCommits, setHasOlderCommits] = useState(false)
-  const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(true)
-  const [projectWorktrees, setProjectWorktrees] = useState<ProjectWorktree[]>(
-    [],
-  )
-  const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(
-    new Map(),
-  )
-  const [pullRequests, setPullRequests] = useState<
-    Map<string, BranchPullRequest>
-  >(new Map())
-  const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(
     null,
   )
   const [selectedRef, setSelectedRef] = useState<SelectedRef | null>(null)
-  const [repository, setRepository] = useState<RepositoryState | null>(null)
-  const [stashes, setStashes] = useState<StashEntry[]>([])
   const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
@@ -304,20 +259,11 @@ function CommitGraphPanelContent({
   const savedScrollTop = useRef(0)
   const refreshAnchor = useRef<{ hash: string; offset: number } | null>(null)
   const pendingScrollHash = useRef<string | null>(null)
-  const commitsRef = useRef(commits)
   const rowsRef = useRef<GraphRow[] | null>(null)
-  const fingerprint = useRef<string | null>(null)
-  const fingerprintGeneration = useRef(0)
-  const squashMergeInferenceRequest = useRef<{
-    graphVersion: number
-    path: string
-    request: Promise<SquashMergeInference[] | null>
-  } | null>(null)
   const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
-  const refreshGraph = useCallback(() => {
-    setError(null)
+  const captureScrollAnchor = useCallback(() => {
     const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
     const row = Math.floor(scrollTop / rowHeight)
     const commit =
@@ -326,58 +272,31 @@ function CommitGraphPanelContent({
       ]
     refreshAnchor.current =
       commit ? { hash: commit.hash, offset: scrollTop - row * rowHeight } : null
-    // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
-    fingerprint.current = null
-    fingerprintGeneration.current += 1
-    setGraphOffset(0)
-    setGraphVersion((version) => version + 1)
   }, [rowHeight])
-  // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
-  const refreshWorktreeStatus = useCallback(
-    (scope: WorktreeStatusScope = "all", isDisposed?: () => boolean) => {
-      return Promise.all([
-        invoke<Project>("project_snapshot", { path: params.path })
-          .then((project) => {
-            if (!isDisposed?.()) {
-              setProjectWorktrees(
-                project.worktrees.filter((worktree) => !worktree.isPrunable),
-              )
-            }
-          })
-          .catch((message: unknown) => {
-            if (!isDisposed?.()) {
-              setError(String(message))
-            }
-          }),
-        invoke<WorktreeStatus[]>("worktree_status", {
-          repoPath: params.path,
-          worktreePaths: scope === "current" ? [params.path] : undefined,
-        })
-          .then((statuses) => {
-            setWorktreeStatuses((current) => {
-              if (scope === "all") {
-                return statuses
-              }
-              const merged = new Map(
-                current.map((status) => [status.path, status]),
-              )
-              for (const status of statuses) {
-                merged.set(status.path, status)
-              }
-              return [...merged.values()]
-            })
-          })
-          .catch(() => undefined),
-        invoke<RepositoryState>("repository_state", { repoPath: params.path })
-          .then(setRepository)
-          .catch(() => undefined),
-        invoke<StashEntry[]>("stash_list", { repoPath: params.path })
-          .then(setStashes)
-          .catch(() => undefined),
-      ])
-    },
-    [params.path],
-  )
+  const {
+    branchSync,
+    commits,
+    graphOffset,
+    graphVersion,
+    hasOlderCommits,
+    isGraphWindowLoading,
+    pullRequests,
+    refreshGraph,
+    refreshWorktreeStatus,
+    remoteNames,
+    remotes,
+    repository,
+    setGraphOffset,
+    squashMergeInferences,
+    stashes,
+    stashesByBase,
+    worktreesByHead,
+  } = useGraphData({
+    onBeforeReload: captureScrollAnchor,
+    onError: setError,
+    repoPath: params.path,
+  })
+  const commitsRef = useRef(commits)
   const table = useTable({
     columnResizeMode: "onChange",
     onColumnSizingChange: setColumnSizing,
@@ -393,46 +312,10 @@ function CommitGraphPanelContent({
   // Refs share the commit column with the subject, which keeps whatever they do not take.
   const refBudget = table.getAllLeafColumns()[0].getSize() * REF_BUDGET_SHARE
   const tableWidth = graphWidth + table.getTotalSize()
-  // Until the repository reports its remotes, refs are classified against the conventional one rather than
-  // against none, which would read every remote branch as a local one. Repository state is re-read on a timer,
-  // so the list is held by its contents: a fresh array each poll would redraw the whole graph.
-  const remoteNames = repository?.remotes?.join("\n")
-  const remotes = useMemo(() => remoteNames?.split("\n"), [remoteNames])
   const currentCheckoutIndex = useMemo(
     () => commits.findIndex((commit) => isCurrentCheckout(commit.refs)),
     [commits],
   )
-  // A worktree's name and openness come from the project snapshot while its uncommitted work and pending
-  // operation come from its status, and the two only describe the same checkout once they are joined.
-  const worktrees = useMemo(() => {
-    const statuses = new Map(
-      worktreeStatuses.map((status) => [status.path, status]),
-    )
-    return projectWorktrees.map((worktree): RowWorktree => {
-      const status = statuses.get(worktree.path)
-      return {
-        branch: worktree.isDetached ? null : worktree.branch,
-        changedFiles: status?.changedFiles ?? 0,
-        head: worktree.head,
-        isCurrent: worktree.path === params.path,
-        isOpen: worktree.isOpen,
-        name: worktree.name,
-        path: worktree.path,
-        pendingOperation: status?.pendingOperation ?? null,
-        untrackedFiles: status?.untrackedFiles ?? 0,
-      }
-    })
-  }, [params.path, projectWorktrees, worktreeStatuses])
-  const worktreesByHead = useMemo(() => {
-    const byHead = new Map<string, RowWorktree[]>()
-    for (const worktree of worktrees) {
-      byHead.set(worktree.head, [
-        ...(byHead.get(worktree.head) ?? []),
-        worktree,
-      ])
-    }
-    return byHead
-  }, [worktrees])
   const commitsSelection = useMemo(() => {
     if (rangeDrag) {
       return commitSelection(
@@ -585,16 +468,6 @@ function CommitGraphPanelContent({
       bottom: Math.max(ends.anchor, ends.focus),
     }
   }, [commitsSelection, rangeDrag, selectionEndpointIndexes])
-  // A stash is drawn on the commit it was made from, which is the only place in the graph it belongs to.
-  const stashesByBase = useMemo(() => {
-    const byBase = new Map<string, StashEntry[]>()
-    for (const entry of stashes) {
-      if (entry.base) {
-        byBase.set(entry.base, [...(byBase.get(entry.base) ?? []), entry])
-      }
-    }
-    return byBase
-  }, [stashes])
   const search = useGraphSearch({ commits, remotes, stashesByBase })
   const unpushed = useMemo(
     () => unpushedHashes(commits, remotes),
@@ -814,127 +687,6 @@ function CommitGraphPanelContent({
   }, [rowVirtualizer, updateScroll])
 
   useEffect(() => {
-    let disposed = false
-    let inferenceInterval: number | null = null
-    let inferenceTimeout: number | null = null
-    setCommits([])
-    setHasOlderCommits(false)
-    setIsGraphWindowLoading(true)
-    function refreshSquashMergeInferences() {
-      if (document.hidden) {
-        return
-      }
-      const current = squashMergeInferenceRequest.current
-      const request =
-        current?.graphVersion === graphVersion && current.path === params.path ?
-          current.request
-        : invoke<SquashMergeInference[]>("inferred_squash_merge_edges", {
-            repoPath: params.path,
-          }).catch(() => null)
-      squashMergeInferenceRequest.current = {
-        graphVersion,
-        path: params.path,
-        request,
-      }
-      request.finally(() => {
-        if (squashMergeInferenceRequest.current?.request === request) {
-          squashMergeInferenceRequest.current = null
-        }
-      })
-      return request.then((inferences) => {
-        if (!disposed && inferences !== null) {
-          setSquashMergeInferences(inferences)
-        }
-      })
-    }
-    function scheduleSquashMergeInferences() {
-      if (inferenceTimeout !== null || inferenceInterval !== null) {
-        return
-      }
-      inferenceTimeout = window.setTimeout(() => {
-        inferenceTimeout = null
-        refreshSquashMergeInferences()
-        inferenceInterval = window.setInterval(
-          refreshSquashMergeInferences,
-          PULL_REQUEST_SYNC_INTERVAL,
-        )
-      })
-    }
-    const refreshSquashMergeInferencesOnVisibility = () => {
-      if (!document.hidden) {
-        refreshSquashMergeInferences()
-      }
-    }
-    document.addEventListener(
-      "visibilitychange",
-      refreshSquashMergeInferencesOnVisibility,
-    )
-
-    if (graphOffset === 0) {
-      invoke<BranchSync[]>("branch_sync", { repoPath: params.path })
-        .then((entries) => {
-          if (!disposed) {
-            setBranchSync(
-              new Map(entries.map((entry) => [entry.branch, entry])),
-            )
-          }
-        })
-        .catch(() => undefined)
-    }
-    const stopStream = stream<CommitBatch>(
-      "stream_commit_graph",
-      isDesktop ?
-        { repoPath: params.path }
-      : {
-          repoPath: params.path,
-          offset: graphOffset,
-          limit: BROWSER_GRAPH_WINDOW_SIZE,
-        },
-      (batch) => {
-        if (!disposed) {
-          setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
-          if (graphOffset === 0) {
-            scheduleSquashMergeInferences()
-          }
-        }
-      },
-      (message) => {
-        if (!disposed) {
-          setError(message)
-          setIsGraphWindowLoading(false)
-        }
-      },
-      (data) => {
-        if (!disposed) {
-          if (
-            !isDesktop &&
-            typeof data === "object" &&
-            data !== null &&
-            "hasMore" in data
-          ) {
-            setHasOlderCommits((data as GraphWindowComplete).hasMore)
-          }
-          setIsGraphWindowLoading(false)
-        }
-      },
-    )
-    return () => {
-      disposed = true
-      stopStream()
-      if (inferenceTimeout !== null) {
-        window.clearTimeout(inferenceTimeout)
-      }
-      if (inferenceInterval !== null) {
-        window.clearInterval(inferenceInterval)
-      }
-      document.removeEventListener(
-        "visibilitychange",
-        refreshSquashMergeInferencesOnVisibility,
-      )
-    }
-  }, [graphOffset, graphVersion, params.path, refreshWorktreeStatus])
-
-  useEffect(() => {
     const query = window.matchMedia("(pointer: coarse)")
     const updateRowHeight = () =>
       setRowHeight(query.matches ? COARSE_POINTER_ROW_HEIGHT : ROW_HEIGHT)
@@ -970,55 +722,6 @@ function CommitGraphPanelContent({
   }, [commits, rowOfCommit, rowVirtualizer])
 
   useEffect(() => {
-    let disposed = false
-    let isPolling = false
-    let focusTimeout: number | null = null
-    const poll = () => {
-      if (isPolling || document.hidden) {
-        return
-      }
-      isPolling = true
-      const generation = fingerprintGeneration.current
-      return invoke<string>("repository_fingerprint", { repoPath: params.path })
-        .then((value) => {
-          // A refresh that started while this was in flight already invalidated the answer.
-          if (disposed || generation !== fingerprintGeneration.current) {
-            return
-          }
-          if (fingerprint.current !== null && fingerprint.current !== value) {
-            refreshGraph()
-          }
-          fingerprint.current = value
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          isPolling = false
-        })
-    }
-    const pollOnFocus = () => {
-      if (focusTimeout !== null) {
-        window.clearTimeout(focusTimeout)
-      }
-      focusTimeout = window.setTimeout(() => {
-        focusTimeout = null
-        poll()
-      }, REPOSITORY_FOCUS_DEBOUNCE)
-    }
-
-    poll()
-    const interval = window.setInterval(poll, REPOSITORY_FINGERPRINT_INTERVAL)
-    window.addEventListener("focus", pollOnFocus)
-    return () => {
-      disposed = true
-      window.clearInterval(interval)
-      if (focusTimeout !== null) {
-        window.clearTimeout(focusTimeout)
-      }
-      window.removeEventListener("focus", pollOnFocus)
-    }
-  }, [params.path, refreshGraph])
-
-  useEffect(() => {
     const anchor = refreshAnchor.current
     const element = scrollElement.current
     if (!anchor || !element) {
@@ -1031,65 +734,6 @@ function CommitGraphPanelContent({
     element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
     refreshAnchor.current = null
   }, [commits, rowHeight, rowOfCommit])
-
-  useEffect(() => {
-    let disposed = false
-    let isRefreshing = false
-    let intervalTicks = 0
-    const refresh = (isInterval = false) => {
-      if (isRefreshing || document.hidden) {
-        return
-      }
-      const scope = isInterval && ++intervalTicks % 6 !== 0 ? "current" : "all"
-      isRefreshing = true
-      return refreshWorktreeStatus(scope, () => disposed).finally(() => {
-        isRefreshing = false
-      })
-    }
-
-    refresh()
-    const refreshOnFocus = () => refresh()
-    window.addEventListener("focus", refreshOnFocus)
-    const refreshOnVisibility = () => {
-      if (!document.hidden) {
-        refresh()
-      }
-    }
-    document.addEventListener("visibilitychange", refreshOnVisibility)
-    const interval = window.setInterval(() => refresh(true), 10_000)
-    return () => {
-      disposed = true
-      window.removeEventListener("focus", refreshOnFocus)
-      document.removeEventListener("visibilitychange", refreshOnVisibility)
-      window.clearInterval(interval)
-    }
-  }, [params.path, refreshWorktreeStatus])
-
-  // The backend answers from what it has already stored and refreshes from GitHub on its own interval, so a
-  // poll costs a read whether or not it lands on one of those refreshes.
-  useEffect(() => {
-    let disposed = false
-    const refresh = () => {
-      invoke<BranchPullRequest[]>("branch_pull_requests", {
-        repoPath: params.path,
-      })
-        .then((entries) => {
-          if (!disposed) {
-            setPullRequests(
-              new Map(entries.map((entry) => [entry.branch, entry])),
-            )
-          }
-        })
-        .catch(() => undefined)
-    }
-
-    refresh()
-    const interval = window.setInterval(refresh, PULL_REQUEST_SYNC_INTERVAL)
-    return () => {
-      disposed = true
-      window.clearInterval(interval)
-    }
-  }, [graphVersion, params.path])
 
   useEffect(() => {
     if (!selection) {
