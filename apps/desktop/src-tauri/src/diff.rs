@@ -1,6 +1,7 @@
+use base64::Engine;
 use serde::Serialize;
-use std::{collections::HashSet, fs, path::Path};
-use crate::git::{WORKTREE_REF, git_output_allow_empty, git_output_bytes, git_result, worktree_path};
+use std::{collections::HashSet, fs, io::Read, path::Path};
+use crate::git::{WORKTREE_REF, git_output, git_output_allow_empty, git_output_bytes, git_result, worktree_path};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +38,15 @@ pub(crate) struct FileDiff {
     pub(crate) new_content: Option<String>,
     pub(crate) hunks: Vec<String>,
     pub(crate) is_binary: bool,
+    pub(crate) old_binary: Option<BinaryContent>,
+    pub(crate) new_binary: Option<BinaryContent>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BinaryContent {
+    pub(crate) size: u64,
+    pub(crate) image: Option<String>,
 }
 
 /// Counts the rows `@git-diff-view` renders for one file: every patch body line becomes a unified
@@ -287,7 +297,25 @@ fn file_diff(
     };
     // Content lines in a patch always carry a leading marker, so an unprefixed header is git's own.
     if patch.lines().any(|line| line.starts_with("Binary files ") || line == "GIT binary patch") {
+        let old_binary = old_path
+            .as_ref()
+            .map(|path| git_binary_content(repo_path, base_sha, path))
+            .transpose()?;
+        let new_binary = if is_worktree {
+            let root = worktree_path(repo_path)?;
+            new_path
+                .as_ref()
+                .map(|path| worktree_binary_content(&root, path))
+                .transpose()?
+        } else {
+            new_path
+                .as_ref()
+                .map(|path| git_binary_content(repo_path, head_sha, path))
+                .transpose()?
+        };
         return Ok(FileDiff {
+            old_binary,
+            new_binary,
             old_file_name: old_path,
             new_file_name: new_path,
             old_content: None,
@@ -312,7 +340,69 @@ fn file_diff(
         new_content,
         hunks: (!patch.is_empty()).then_some(vec![patch]).unwrap_or_default(),
         is_binary: false,
+        old_binary: None,
+        new_binary: None,
     })
+}
+
+pub(crate) const IMAGE_PREVIEW_LIMIT: usize = 8 * 1024 * 1024;
+
+fn image_mime_type(path: &str) -> Option<&'static str> {
+    let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        "svg" => "image/svg+xml",
+        _ => return None,
+    })
+}
+
+fn binary_content(path: &str, size: u64, bytes: Option<Vec<u8>>) -> BinaryContent {
+    let image = image_mime_type(path).and_then(|mime| {
+        bytes.map(|bytes| format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    });
+    BinaryContent { size, image }
+}
+
+fn git_binary_content(repo_path: &str, sha: &str, path: &str) -> Result<BinaryContent, String> {
+    let object = format!("{sha}:{path}");
+    let size = git_output(repo_path, &["cat-file", "-s", &object])
+        .ok_or_else(|| format!("Could not read {path} at {sha}."))?
+        .parse()
+        .map_err(|error: std::num::ParseIntError| error.to_string())?;
+    let bytes = image_mime_type(path)
+        .filter(|_| size <= IMAGE_PREVIEW_LIMIT as u64)
+        .map(|_| git_output_bytes(repo_path, &["show", &object]).ok_or_else(|| format!("Could not read {path} at {sha}.")))
+        .transpose()?;
+    Ok(binary_content(path, size, bytes))
+}
+
+fn worktree_binary_content(root: &str, path: &str) -> Result<BinaryContent, String> {
+    let file = Path::new(root).join(path);
+    let symlink_metadata = fs::symlink_metadata(&file).map_err(|error| error.to_string())?;
+    if symlink_metadata.file_type().is_symlink() {
+        return Ok(binary_content(path, symlink_metadata.len(), None));
+    }
+    let file = fs::File::open(file).map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let size = metadata.len();
+    let bytes = metadata.file_type().is_file().then_some(())
+        .and(image_mime_type(path))
+        .map(|_| {
+            let mut bytes = Vec::new();
+            file.take(IMAGE_PREVIEW_LIMIT as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            Ok::<_, String>(bytes)
+        })
+        .transpose()?
+        .filter(|bytes| bytes.len() <= IMAGE_PREVIEW_LIMIT);
+    Ok(binary_content(path, size, bytes))
 }
 
 #[git_nav_macros::http_command]

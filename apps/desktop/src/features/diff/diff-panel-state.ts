@@ -8,6 +8,19 @@ import type { SelectedRefs } from "./diff-title"
 
 export const NARROW_DIFF_PANEL_WIDTH = 620
 export const WIDE_DIFF_PANEL_WIDTH = 900
+export const IMAGE_PREVIEW_LIMIT = 8 * 1024 * 1024
+
+const IMAGE_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "ico",
+  "avif",
+  "svg",
+])
 
 export type ChangedFile = {
   status: string
@@ -25,6 +38,51 @@ export type ChangedFile = {
 
 export function fileName(file: ChangedFile) {
   return file.newPath ?? file.oldPath ?? "Unknown file"
+}
+
+export function isImagePath(path: string | null) {
+  const fileName = path?.split("/").pop()
+  const extension = fileName?.slice(fileName.lastIndexOf(".") + 1)
+  return (
+    fileName !== extension &&
+    fileName !== `.${extension}` &&
+    IMAGE_EXTENSIONS.has(extension?.toLowerCase() ?? "")
+  )
+}
+
+export function isSvgPath(path: string | null) {
+  const fileName = path?.split("/").pop()
+  const extension = fileName?.slice(fileName.lastIndexOf(".") + 1)
+  return (
+    fileName !== extension &&
+    fileName !== `.${extension}` &&
+    extension?.toLowerCase() === "svg"
+  )
+}
+
+export function svgContent(source: string | null) {
+  if (source === null) {
+    return null
+  }
+  const size = new TextEncoder().encode(source).length
+  return {
+    size,
+    image:
+      size <= IMAGE_PREVIEW_LIMIT ?
+        `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`
+      : null,
+  }
+}
+
+export function formatBytes(size: number) {
+  const units = ["B", "KB", "MB", "GB"]
+  let value = size
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`
 }
 
 // A mark stands for the patch a file was read at, so everything the card shows belongs to it: both blobs,

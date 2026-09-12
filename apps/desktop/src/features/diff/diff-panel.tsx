@@ -97,11 +97,16 @@ import {
   changedFilesLabel,
   fileIdentity,
   fileName,
+  formatBytes,
+  IMAGE_PREVIEW_LIMIT,
   initialDiffLayout,
   isFoldedFile,
+  isImagePath,
+  isSvgPath,
   isViewedFile,
   NARROW_DIFF_PANEL_WIDTH,
   persistedDiffPanelParams,
+  svgContent,
   toggledDiffFileTree,
   WIDE_DIFF_PANEL_WIDTH,
   type ChangedFile,
@@ -123,6 +128,7 @@ const HUNK_ROW_HEIGHT = 30
 const FILE_HEADER_HEIGHT = 30
 const FILE_ROW_GAP = 8
 const COLLAPSED_BODY_HEIGHT = 40
+const IMAGE_BODY_HEIGHT = 280
 const SEARCH_DEBOUNCE = 120
 const PICKER_MENU_WIDTH = 320
 
@@ -164,6 +170,11 @@ type BranchSelection = {
   headRef: string
 }
 
+type BinaryContent = {
+  size: number
+  image: string | null
+}
+
 type FileDiff = {
   oldFileName: string | null
   newFileName: string | null
@@ -171,6 +182,8 @@ type FileDiff = {
   newContent: string | null
   hunks: string[]
   isBinary: boolean
+  oldBinary: BinaryContent | null
+  newBinary: BinaryContent | null
 }
 
 type DiffData = {
@@ -180,7 +193,13 @@ type DiffData = {
 }
 
 type DiffEntry =
-  { state: "loaded"; data: DiffData } | { state: "error"; message: string }
+  | { state: "loaded"; data: DiffData }
+  | {
+      state: "binary"
+      oldBinary: BinaryContent | null
+      newBinary: BinaryContent | null
+    }
+  | { state: "error"; message: string }
 
 type FileTreeNode = {
   name: string
@@ -223,6 +242,10 @@ function isLargeDiff(file: ChangedFile) {
   return file.additions + file.deletions > LARGE_DIFF_LINES
 }
 
+function isSvgFile(file: ChangedFile) {
+  return isSvgPath(fileName(file))
+}
+
 function estimatedBodyHeight(
   file: ChangedFile,
   mode: DiffModeEnum,
@@ -231,11 +254,19 @@ function estimatedBodyHeight(
   if (collapsed) {
     return 0
   }
-  if (file.isBinary || isLargeDiff(file)) {
+  if (file.isBinary) {
+    return isImagePath(fileName(file)) ? IMAGE_BODY_HEIGHT : (
+        COLLAPSED_BODY_HEIGHT
+      )
+  }
+  if (isLargeDiff(file)) {
     return COLLAPSED_BODY_HEIGHT
   }
   const rows = mode & DiffModeEnum.Split ? file.splitRows : file.unifiedRows
-  return Math.round(rows * DIFF_ROW_HEIGHT + file.hunkRows * HUNK_ROW_HEIGHT)
+  return (
+    Math.round(rows * DIFF_ROW_HEIGHT + file.hunkRows * HUNK_ROW_HEIGHT) +
+    (isSvgFile(file) ? IMAGE_BODY_HEIGHT : 0)
+  )
 }
 
 function fileTree(files: ChangedFile[]) {
@@ -493,11 +524,19 @@ function useDiffLoader(
   const loader = useRef({
     queued: [] as ChangedFile[],
     started: new Set<string>(),
+    requested: new Set<string>(),
+    binary: new Set<string>(),
     inFlight: 0,
   })
 
   const reset = useCallback(() => {
-    loader.current = { queued: [], started: new Set(), inFlight: 0 }
+    loader.current = {
+      queued: [],
+      started: new Set(),
+      requested: new Set(),
+      binary: new Set(),
+      inFlight: 0,
+    }
     setEntries({})
   }, [])
 
@@ -508,6 +547,25 @@ function useDiffLoader(
         return
       }
       const state = loader.current
+      const requested = new Set(files.map(fileKey))
+      state.requested = requested
+      let evicted = false
+      for (const key of state.binary) {
+        if (!requested.has(key)) {
+          state.binary.delete(key)
+          state.started.delete(key)
+          evicted = true
+        }
+      }
+      if (evicted) {
+        setEntries((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(
+              ([key, entry]) => entry.state !== "binary" || requested.has(key),
+            ),
+          ),
+        )
+      }
       state.queued = files.filter((file) => !state.started.has(fileKey(file)))
       const drain = async () => {
         for (
@@ -525,26 +583,42 @@ function useDiffLoader(
             newPath: file.newPath,
             ignoreWhitespace,
           })
-            .then((diff): DiffEntry => ({
-              state: "loaded",
-              data: {
-                oldFile: {
-                  fileName: diff.oldFileName,
-                  content: diff.oldContent,
+            .then((diff): DiffEntry =>
+              diff.isBinary ?
+                {
+                  state: "binary",
+                  oldBinary: diff.oldBinary,
+                  newBinary: diff.newBinary,
+                }
+              : {
+                  state: "loaded",
+                  data: {
+                    oldFile: {
+                      fileName: diff.oldFileName,
+                      content: diff.oldContent,
+                    },
+                    newFile: {
+                      fileName: diff.newFileName,
+                      content: diff.newContent,
+                    },
+                    hunks: diff.hunks,
+                  },
                 },
-                newFile: {
-                  fileName: diff.newFileName,
-                  content: diff.newContent,
-                },
-                hunks: diff.hunks,
-              },
-            }))
+            )
             .catch((message: unknown): DiffEntry => ({
               state: "error",
               message: String(message),
             }))
           if (loader.current !== state) {
             return
+          }
+          if (entry.state === "binary") {
+            state.binary.add(key)
+            if (!state.requested.has(key)) {
+              state.binary.delete(key)
+              state.started.delete(key)
+              continue
+            }
           }
           setEntries((current) => ({ ...current, [key]: entry }))
         }
@@ -563,6 +637,91 @@ function useDiffLoader(
   )
 
   return { entries, request, reset }
+}
+
+function BinaryDiff({
+  newImage,
+  newBinary,
+  newPath,
+  oldImage,
+  oldBinary,
+  oldPath,
+}: {
+  newImage: boolean
+  newBinary: BinaryContent | null
+  newPath: string | null
+  oldImage: boolean
+  oldBinary: BinaryContent | null
+  oldPath: string | null
+}) {
+  if (!oldBinary?.image && !newBinary?.image) {
+    const sizes = [oldBinary, newBinary]
+      .filter((content) => content !== null)
+      .map((content) => formatBytes(content.size))
+    const tooLargeToPreview = [
+      { content: oldBinary, path: oldPath },
+      { content: newBinary, path: newPath },
+    ].some(
+      ({ content, path }) =>
+        content !== null &&
+        isImagePath(path) &&
+        content.size > IMAGE_PREVIEW_LIMIT,
+    )
+    return (
+      <p className="diff-file-card-notice">
+        {tooLargeToPreview ? "Too large to preview" : "Binary file changed"}
+        <span className="text-xs">{sizes.join(" → ")}</span>
+      </p>
+    )
+  }
+  return (
+    <div className="diff-binary-preview">
+      {oldBinary && (
+        <ImageSide content={oldBinary} imageType={oldImage} side="old" />
+      )}
+      {newBinary && (
+        <ImageSide content={newBinary} imageType={newImage} side="new" />
+      )}
+    </div>
+  )
+}
+
+function ImageSide({
+  content,
+  imageType,
+  side,
+}: {
+  content: BinaryContent
+  imageType: boolean
+  side: "old" | "new"
+}) {
+  const [dimensions, setDimensions] = useState<string | null>(null)
+  const [previewFailed, setPreviewFailed] = useState(false)
+  return (
+    <figure className={`diff-binary-side is-${side}`}>
+      {content.image && !previewFailed ?
+        <img
+          alt={side === "old" ? "Before" : "After"}
+          onError={() => setPreviewFailed(true)}
+          onLoad={(event) =>
+            setDimensions(
+              `${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`,
+            )
+          }
+          src={content.image}
+        />
+      : <p className="diff-file-card-notice">
+          {!previewFailed && imageType && content.size > IMAGE_PREVIEW_LIMIT ?
+            "Too large to preview"
+          : "No preview"}
+        </p>
+      }
+      <figcaption>
+        {formatBytes(content.size)}
+        {dimensions && ` · ${dimensions}`}
+      </figcaption>
+    </figure>
+  )
 }
 
 function FileDiffCard({
@@ -596,6 +755,22 @@ function FileDiffCard({
 }) {
   const diffView = useRef<ComponentRef<typeof DiffView>>(null)
   const loaded = entry?.state === "loaded"
+  const svg = useMemo(
+    () =>
+      entry?.state === "loaded" ?
+        {
+          newBinary:
+            isSvgPath(file.newPath) ?
+              svgContent(entry.data.newFile.content)
+            : null,
+          oldBinary:
+            isSvgPath(file.oldPath) ?
+              svgContent(entry.data.oldFile.content)
+            : null,
+        }
+      : { newBinary: null, oldBinary: null },
+    [entry, file],
+  )
 
   // The diff view holds its unfolded context, and a card scrolled out of the virtual window loses that view,
   // so the choice is kept up here and replayed onto whichever view is mounted.
@@ -617,8 +792,17 @@ function FileDiffCard({
   }, [allExpanded, collapsed, loaded, mode])
 
   const body = () => {
-    if (file.isBinary) {
-      return <p className="diff-file-card-notice">Binary file changed</p>
+    if (entry?.state === "binary") {
+      return (
+        <BinaryDiff
+          newBinary={entry.newBinary}
+          newImage={isImagePath(file.newPath)}
+          newPath={file.newPath}
+          oldBinary={entry.oldBinary}
+          oldImage={isImagePath(file.oldPath)}
+          oldPath={file.oldPath}
+        />
+      )
     }
     if (entry?.state === "error") {
       return (
@@ -629,15 +813,27 @@ function FileDiffCard({
     }
     if (entry?.state === "loaded") {
       return (
-        <DiffView
-          data={entry.data}
-          diffViewFontSize={DIFF_FONT_SIZE}
-          diffViewHighlight
-          diffViewMode={mode}
-          diffViewTheme={theme}
-          diffViewWrap={wrap}
-          ref={diffView}
-        />
+        <>
+          {(svg.oldBinary || svg.newBinary) && (
+            <BinaryDiff
+              newBinary={svg.newBinary}
+              newImage
+              newPath={file.newPath}
+              oldBinary={svg.oldBinary}
+              oldImage
+              oldPath={file.oldPath}
+            />
+          )}
+          <DiffView
+            data={entry.data}
+            diffViewFontSize={DIFF_FONT_SIZE}
+            diffViewHighlight
+            diffViewMode={mode}
+            diffViewTheme={theme}
+            diffViewWrap={wrap}
+            ref={diffView}
+          />
+        </>
       )
     }
     if (isLargeDiff(file) && !expanded) {
@@ -1026,7 +1222,6 @@ export function DiffPanel({
         .map((row) => files[row.index])
         .filter(
           (file) =>
-            !file.isBinary &&
             !isFolded(file) &&
             (!isLargeDiff(file) || expanded.has(fileKey(file))),
         ),
