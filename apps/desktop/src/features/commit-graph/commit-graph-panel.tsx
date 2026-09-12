@@ -26,6 +26,7 @@ import {
   AlertDialogTitle,
 } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
+import { cn } from "@workspace/shadcn/lib/utils"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import {
   ContextMenu,
@@ -2394,7 +2395,15 @@ function CommitGraphPanelContent({
               <button
                 aria-label={chipAriaLabel(chip)}
                 aria-pressed={ref === null ? undefined : selected}
-                className={`commit-ref commit-ref-${chip.kind}${ref?.checkedOut ? "commit-ref-current" : ""}${chip.kind === "worktree" && !chip.worktree.branch ? "commit-ref-detached" : ""}${selected ? "commit-ref-selected" : ""}`}
+                className={cn(
+                  "commit-ref",
+                  `commit-ref-${chip.kind}`,
+                  ref?.checkedOut && "commit-ref-current",
+                  chip.kind === "worktree" &&
+                    !chip.worktree.branch &&
+                    "commit-ref-detached",
+                  selected && "commit-ref-selected",
+                )}
                 // Keyboard activation arrives as a click with no pointer behind it.
                 onClick={(event) => event.detail === 0 && activate()}
                 onPointerDown={(event) => {
@@ -2425,7 +2434,10 @@ function CommitGraphPanelContent({
                 )}
                 {sync && (
                   <span
-                    className={`commit-ref-sync${ref?.sync?.isGone ? "commit-ref-sync-gone" : ""}`}
+                    className={cn(
+                      "commit-ref-sync",
+                      ref?.sync?.isGone && "commit-ref-sync-gone",
+                    )}
                   >
                     {sync}
                   </span>
@@ -2685,7 +2697,11 @@ function CommitGraphPanelContent({
       <div
         aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."
         aria-multiselectable
-        className={`commit-graph-scroll${rangeDrag ? "is-selecting" : ""}${rangeDrag && !selection ? "is-unrelated" : ""}`}
+        className={cn(
+          "commit-graph-scroll",
+          rangeDrag && "is-selecting",
+          rangeDrag && !selection && "is-unrelated",
+        )}
         onScroll={onScroll}
         ref={scrollElement}
         role="grid"
@@ -2709,7 +2725,10 @@ function CommitGraphPanelContent({
             >
               <div
                 aria-label="Resize Graph column"
-                className={`commit-graph-resize-handle${isResizingGraph ? "is-resizing" : ""}`}
+                className={cn(
+                  "commit-graph-resize-handle",
+                  isResizingGraph && "is-resizing",
+                )}
                 onDoubleClick={() => setGraphWidth(fitGraphWidth(commits))}
                 onMouseDown={(event) => {
                   event.preventDefault()
@@ -2736,7 +2755,10 @@ function CommitGraphPanelContent({
                   {header.column.getCanResize() && (
                     <div
                       aria-label={`Resize ${String(header.column.columnDef.header)} column`}
-                      className={`commit-graph-resize-handle${header.column.getIsResizing() ? "is-resizing" : ""}`}
+                      className={cn(
+                        "commit-graph-resize-handle",
+                        header.column.getIsResizing() && "is-resizing",
+                      )}
                       onDoubleClick={() => header.column.resetSize()}
                       onMouseDown={(event) => {
                         event.preventDefault()
@@ -2812,7 +2834,11 @@ function CommitGraphPanelContent({
                     aria-keyshortcuts="Enter Space Shift+Enter Shift+Space"
                     aria-rowindex={row.index + 2}
                     aria-selected={selected}
-                    className={`commit-graph-row${currentCheckout ? "commit-graph-row-current" : ""}${selected ? "commit-graph-row-selected" : ""}`}
+                    className={cn(
+                      "commit-graph-row",
+                      currentCheckout && "commit-graph-row-current",
+                      selected && "commit-graph-row-selected",
+                    )}
                     onKeyDown={(event) =>
                       selectCommitFromKeyboard(event, index)
                     }

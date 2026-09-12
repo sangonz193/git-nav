@@ -10,6 +10,7 @@ import {
   AlertDialogTitle,
 } from "@workspace/shadcn/components/alert-dialog"
 import { Button } from "@workspace/shadcn/components/button"
+import { cn } from "@workspace/shadcn/lib/utils"
 import { TriangleAlert } from "lucide-react"
 import { Fragment, useEffect, useMemo, useState } from "react"
 
@@ -51,7 +52,10 @@ export function RefName({ kind, name }: { kind?: NameKind; name: string }) {
   const Icon = kind && CHIP_ICONS[kind]
   return (
     <span
-      className={`flex min-w-0 items-center${Icon ? "rounded-sm bg-foreground/10 px-1 [&_svg]:size-3!" : ""}`}
+      className={cn(
+        "flex min-w-0 items-center",
+        Icon && "rounded-sm bg-foreground/10 px-1 [&_svg]:size-3!",
+      )}
     >
       {Icon && <Icon className="mr-1" />}
       <span className="min-w-0 truncate whitespace-pre">{start}</span>
@@ -124,7 +128,10 @@ export function OperationMenuItems({
               </Label>
             )}
             <Item
-              className={`max-w-80${operation.destructive ? "text-destructive" : ""}`}
+              className={cn(
+                "max-w-80",
+                operation.destructive && "text-destructive",
+              )}
               disabled={unavailable !== null}
               // The menu closes on the same gesture that picks an item, so a dialog opened here would still be under
               // the pointer when the click that follows lands and would take that click as a dismissal.
