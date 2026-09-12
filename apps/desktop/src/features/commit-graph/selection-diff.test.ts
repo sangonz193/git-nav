@@ -5,7 +5,7 @@ import { EMPTY_TREE_REF } from "@/lib/repository-constants"
 import { commitSelection, displayRefs, refSelection } from "./commit-graph"
 import {
   canDiffSelection,
-  divergenceTarget,
+  divergenceTargets,
   rangeBaseHash,
 } from "./selection-diff"
 
@@ -71,8 +71,8 @@ describe("canDiffSelection", () => {
   })
 })
 
-describe("divergenceTarget", () => {
-  test("uses the configured remote upstream", () => {
+describe("divergenceTargets", () => {
+  test("includes the configured upstream before the default branch", () => {
     const [topic] = displayRefs(["topic", "origin/topic"], {
       branchSync: new Map([
         [
@@ -88,20 +88,20 @@ describe("divergenceTarget", () => {
       ]),
     })
 
-    expect(divergenceTarget(topic, "origin/main")).toEqual({
-      label: "origin/topic",
-      reference: "topic@{upstream}",
-    })
+    expect(divergenceTargets(topic, "origin/main")).toEqual([
+      { label: "origin/topic", reference: "topic@{upstream}" },
+      { label: "origin/main", reference: "origin/main" },
+    ])
   })
 
-  test("uses the configured local upstream", () => {
-    const [topic] = displayRefs(["topic", "main"], {
+  test("does not duplicate a remote upstream that tracks the default branch", () => {
+    const [topic] = displayRefs(["topic", "origin/main"], {
       branchSync: new Map([
         [
           "topic",
           {
             branch: "topic",
-            upstream: "main",
+            upstream: "origin/main",
             ahead: 0,
             behind: 0,
             isGone: false,
@@ -110,63 +110,9 @@ describe("divergenceTarget", () => {
       ]),
     })
 
-    expect(divergenceTarget(topic, "main")).toEqual({
-      label: "main",
-      reference: "topic@{upstream}",
-    })
-  })
-
-  test("uses an ambiguously qualified upstream", () => {
-    const [topic] = displayRefs(["topic"], {
-      branchSync: new Map([
-        [
-          "topic",
-          {
-            branch: "topic",
-            upstream: "heads/main",
-            ahead: 0,
-            behind: 0,
-            isGone: false,
-          },
-        ],
-      ]),
-    })
-
-    expect(divergenceTarget(topic, "main")).toEqual({
-      label: "heads/main",
-      reference: "topic@{upstream}",
-    })
-  })
-
-  test("falls back to the default branch when the upstream is gone", () => {
-    const [topic] = displayRefs(["topic"], {
-      branchSync: new Map([
-        [
-          "topic",
-          {
-            branch: "topic",
-            upstream: "origin/topic",
-            ahead: 0,
-            behind: 0,
-            isGone: true,
-          },
-        ],
-      ]),
-    })
-
-    expect(divergenceTarget(topic, "origin/main")).toEqual({
-      label: "origin/main",
-      reference: "origin/main",
-    })
-  })
-
-  test("uses the default branch when there is no upstream", () => {
-    const [topic] = displayRefs(["topic"])
-
-    expect(divergenceTarget(topic, "origin/main")).toEqual({
-      label: "origin/main",
-      reference: "origin/main",
-    })
+    expect(divergenceTargets(topic, "main")).toEqual([
+      { label: "origin/main", reference: "topic@{upstream}" },
+    ])
   })
 
   test("compares the default branch with its upstream", () => {
@@ -185,24 +131,43 @@ describe("divergenceTarget", () => {
       ]),
     })
 
-    expect(divergenceTarget(main, "main")).toEqual({
-      label: "origin/main",
-      reference: "main@{upstream}",
-    })
+    expect(divergenceTargets(main, "main")).toEqual([
+      { label: "origin/main", reference: "main@{upstream}" },
+    ])
   })
 
-  test("does not compare the default branch with itself", () => {
+  test("does not compare the default branch without an upstream", () => {
     const [main] = displayRefs(["main"])
 
-    expect(divergenceTarget(main, "main")).toBeNull()
+    expect(divergenceTargets(main, "main")).toEqual([])
   })
 
   test("uses the default branch for a remote ref", () => {
     const [topic] = displayRefs(["origin/topic"])
 
-    expect(divergenceTarget(topic, "origin/main")).toEqual({
-      label: "origin/main",
-      reference: "origin/main",
+    expect(divergenceTargets(topic, "origin/main")).toEqual([
+      { label: "origin/main", reference: "origin/main" },
+    ])
+  })
+
+  test("uses the default branch when the upstream is gone", () => {
+    const [topic] = displayRefs(["topic"], {
+      branchSync: new Map([
+        [
+          "topic",
+          {
+            branch: "topic",
+            upstream: "origin/topic",
+            ahead: 0,
+            behind: 0,
+            isGone: true,
+          },
+        ],
+      ]),
     })
+
+    expect(divergenceTargets(topic, "origin/main")).toEqual([
+      { label: "origin/main", reference: "origin/main" },
+    ])
   })
 })

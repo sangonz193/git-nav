@@ -20,7 +20,7 @@ import {
   type Selection,
 } from "./commit-graph"
 import { OperationMenuItems } from "./commit-operation-menu"
-import { divergenceTarget, rangeBaseHash } from "./selection-diff"
+import { divergenceTargets, rangeBaseHash } from "./selection-diff"
 import type { RefMenuComponents } from "./commit-operations"
 import {
   DANGER_GROUPS,
@@ -397,6 +397,67 @@ function DivergenceList({
   )
 }
 
+function DivergenceSections({
+  against,
+  canSelectCommit,
+  reference,
+  refreshKey,
+  repoPath,
+  selectCommit,
+  sha,
+}: {
+  against: { label: string; reference: string }
+  canSelectCommit: (hash: string) => boolean
+  reference: string
+  refreshKey: number
+  repoPath: string
+  selectCommit: (hash: string) => void
+  sha: string
+}) {
+  const divergence = useQuery({
+    queryFn: () =>
+      invoke<RefDivergence>("ref_divergence", {
+        repoPath,
+        reference: sha,
+        against: against.reference,
+      }),
+    queryKey: [
+      "ref-divergence",
+      repoPath,
+      reference,
+      against.reference,
+      sha,
+      refreshKey,
+    ],
+    retry: false,
+  })
+  return (
+    <>
+      {divergence.data && (
+        <>
+          <DivergenceList
+            against={against.label}
+            canSelectCommit={canSelectCommit}
+            commits={divergence.data.ahead}
+            direction="ahead"
+            selectCommit={selectCommit}
+            total={divergence.data.aheadTotal}
+          />
+          <DivergenceList
+            against={against.label}
+            canSelectCommit={canSelectCommit}
+            commits={divergence.data.behind}
+            direction="behind"
+            selectCommit={selectCommit}
+            total={divergence.data.behindTotal}
+          />
+        </>
+      )}
+      {divergence.error && <QueryError error={divergence.error} />}
+    </>
+  )
+}
+
 function RefBody({
   canSelectCommit,
   menus,
@@ -417,25 +478,7 @@ function RefBody({
   const { ref } = selection
   const pullRequest = ref.pullRequest
   const reference = refName(ref)
-  const against = divergenceTarget(ref, menus.repository?.defaultBranch)
-  const divergence = useQuery({
-    enabled: against !== null,
-    queryFn: () =>
-      invoke<RefDivergence>("ref_divergence", {
-        repoPath,
-        reference: selection.sha,
-        against: against?.reference,
-      }),
-    queryKey: [
-      "ref-divergence",
-      repoPath,
-      reference,
-      against?.reference,
-      selection.sha,
-      refreshKey,
-    ],
-    retry: false,
-  })
+  const divergence = divergenceTargets(ref, menus.repository?.defaultBranch)
   const tagDetails = useQuery({
     enabled: ref.kind === "tag",
     queryFn: () =>
@@ -536,27 +579,18 @@ function RefBody({
       {ref.kind === "tag" && tagDetails.error && (
         <QueryError error={tagDetails.error} />
       )}
-      {divergence.data && against && (
-        <>
-          <DivergenceList
-            against={against.label}
-            canSelectCommit={canSelectCommit}
-            commits={divergence.data.ahead}
-            direction="ahead"
-            selectCommit={selectCommit}
-            total={divergence.data.aheadTotal}
-          />
-          <DivergenceList
-            against={against.label}
-            canSelectCommit={canSelectCommit}
-            commits={divergence.data.behind}
-            direction="behind"
-            selectCommit={selectCommit}
-            total={divergence.data.behindTotal}
-          />
-        </>
-      )}
-      {divergence.error && <QueryError error={divergence.error} />}
+      {divergence.map((against) => (
+        <DivergenceSections
+          against={against}
+          canSelectCommit={canSelectCommit}
+          key={against.reference}
+          reference={reference}
+          refreshKey={refreshKey}
+          repoPath={repoPath}
+          selectCommit={selectCommit}
+          sha={selection.sha}
+        />
+      ))}
     </>
   )
 }

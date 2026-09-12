@@ -24,14 +24,24 @@ export function canDiffSelection(
   return rangeBaseHash(selection) !== null
 }
 
-export function divergenceTarget(
+export function divergenceTargets(
   ref: DisplayRef,
   defaultBranch: string | null | undefined,
 ) {
   const upstream = ref.sync?.isGone ? null : ref.sync?.upstream
-  const target =
-    upstream ? `${refName(ref)}@{upstream}` : (defaultBranch ?? null)
-  return target === refName(ref) || target === null ?
-      null
-    : { label: upstream ?? target, reference: target }
+  const reference = refName(ref)
+  const targets =
+    upstream ? [{ label: upstream, reference: `${reference}@{upstream}` }] : []
+  const upstreamIsDefault =
+    upstream === defaultBranch ||
+    (ref.remote !== null && upstream === `${ref.remote}/${defaultBranch}`)
+  if (
+    defaultBranch !== null &&
+    defaultBranch !== undefined &&
+    reference !== defaultBranch &&
+    !upstreamIsDefault
+  ) {
+    targets.push({ label: defaultBranch, reference: defaultBranch })
+  }
+  return targets
 }
