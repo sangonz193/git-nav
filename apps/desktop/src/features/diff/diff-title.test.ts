@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { WORKTREE_REF } from "@/lib/repository-constants"
+import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
 import {
   branchRangeTitle,
   defaultBranchName,
@@ -40,6 +40,7 @@ describe("refLabel", () => {
 
   test("keeps a ref name whole", () => {
     expect(refLabel("origin/main")).toBe("origin/main")
+    expect(refLabel(EMPTY_TREE_REF)).toBe("empty")
     expect(refLabel(WORKTREE_REF)).toBe("Working tree")
   })
 })

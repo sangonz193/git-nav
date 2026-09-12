@@ -1,9 +1,12 @@
+import { EMPTY_TREE_REF } from "@/lib/repository-constants"
+
 import { refName, type CommitSelection, type Selection } from "./commit-graph"
 
 // The commit before the range is known from the oldest commit's parents even when the graph window ends
 // before it, which is enough to diff against.
 export function rangeBaseHash(selection: CommitSelection) {
-  return selection.commits.at(-1)?.parents[0] ?? null
+  const oldest = selection.commits.at(-1)
+  return oldest ? (oldest.parents[0] ?? EMPTY_TREE_REF) : null
 }
 
 export function canDiffSelection(

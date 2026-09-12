@@ -164,6 +164,7 @@ export function refMenuActions(
   ref: DisplayRef,
   sha: string,
   components: RefMenuComponents,
+  { showCompare = true }: { showCompare?: boolean } = {},
 ) {
   const { Item, Sub, SubContent, SubTrigger } = components
   const reference = refName(ref)
@@ -178,7 +179,7 @@ export function refMenuActions(
         source={menus.selection}
         target={refSelection(ref, sha)}
       />
-      {reference !== menus.repository?.defaultBranch && (
+      {showCompare && reference !== menus.repository?.defaultBranch && (
         <Item onSelect={() => menus.openRefDiff(reference)}>
           <FileDiff />
           {`Compare with ${menus.repository?.defaultBranch ?? "the default branch"}`}

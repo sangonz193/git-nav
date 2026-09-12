@@ -12,6 +12,7 @@ import {
   unresolvablePanelIds,
   usableRepositoryLayout,
 } from "./repository-layout"
+import { EMPTY_TREE_REF } from "./repository-constants"
 
 const path = "/projects/git-nav"
 
@@ -111,6 +112,36 @@ describe("usableRepositoryLayout", () => {
         path,
       ),
     ).not.toBeNull()
+  })
+
+  test("keeps a diff against the empty tree", async () => {
+    const value = storedLayout()
+    const layout = usableRepositoryLayout(
+      {
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            ...value.layout.panels,
+            diff: serializedPanel("diff", "diff", {
+              baseRef: EMPTY_TREE_REF,
+              headRef: "HEAD",
+              name: "git-nav",
+              path,
+            }),
+          },
+        },
+      },
+      path,
+    )
+    const revisions: string[] = []
+
+    expect(
+      await unresolvablePanelIds(layout!, async (_, revision) => {
+        revisions.push(revision)
+      }),
+    ).toEqual([])
+    expect(revisions).toEqual(["HEAD"])
   })
 
   test("identifies only panels with unresolvable persisted revisions", async () => {

@@ -1,6 +1,6 @@
 import { invoke } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
-import { WORKTREE_REF } from "@/lib/repository-constants"
+import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
 import type { DockviewApi } from "dockview-react"
 
 import type {
@@ -60,9 +60,9 @@ export function diffTabs({
   }
 
   function openCommitDiff(commit: Commit, selectedFilePath?: string) {
-    const baseRef = commit.parents[0]
+    const baseRef = commit.parents[0] ?? EMPTY_TREE_REF
     const referencePanel = containerApi.getPanel(panel)
-    if (!baseRef || !referencePanel) {
+    if (!referencePanel) {
       onError("Could not open a commit diff.")
       return
     }

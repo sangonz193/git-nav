@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Hinted } from "@/components/hinted"
 import { FileStat, FileStatusLetter } from "@/features/diff/file-stat"
 import { invoke } from "@/lib/ipc"
+import { EMPTY_TREE_REF } from "@/lib/repository-constants"
 import { Button } from "@workspace/shadcn/components/button"
 import { cn } from "@workspace/shadcn/lib/utils"
 import { AppWindow, Copy } from "lucide-react"
@@ -189,7 +190,11 @@ function CommitBody({
     retry: false,
     staleTime: Infinity,
   })
-  const files = useDiffStat(repoPath, commit.parents[0] ?? null, commit.hash)
+  const files = useDiffStat(
+    repoPath,
+    commit.parents[0] ?? EMPTY_TREE_REF,
+    commit.hash,
+  )
   const body = details.data?.body.trim()
   const committerDiffers =
     details.data &&
@@ -463,7 +468,15 @@ export const SelectionDetails = memo(function SelectionDetails({
         <h3 className="commit-graph-details-heading">Actions</h3>
         <div className="commit-graph-details-actions">
           {selection.kind !== "commits" ?
-            refMenuActions(menus, selection.ref, selection.sha, listComponents)
+            refMenuActions(
+              menus,
+              selection.ref,
+              selection.sha,
+              listComponents,
+              {
+                showCompare: false,
+              },
+            )
           : <>
               <OperationMenuItems
                 components={listComponents}

@@ -1,7 +1,7 @@
 use base64::Engine;
 use serde::Serialize;
 use std::{collections::HashSet, fs, io::Read, path::Path};
-use crate::git::{WORKTREE_REF, git_output, git_output_allow_empty, git_output_bytes, git_result, worktree_path};
+use crate::git::{WORKTREE_REF, git_output, git_output_allow_empty, git_output_bytes, git_result, resolve_diff_base, worktree_path};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -488,8 +488,8 @@ pub(crate) fn diff_file(
 #[git_nav_macros::http_command]
 #[tauri::command(async)]
 pub(crate) fn diff_stat(repo_path: String, base: String, head: String) -> Result<Vec<DiffStatFile>, String> {
-    let base = crate::git::resolve_commit(&repo_path, &base)?;
     let head = crate::git::resolve_commit(&repo_path, &head)?;
+    let base = resolve_diff_base(&repo_path, &base, &head)?;
     let revisions = [base.as_str(), head.as_str()];
     let output = git_output_bytes(&repo_path, &[&DIFF_STAT_ARGUMENTS[..], &revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
@@ -499,6 +499,74 @@ pub(crate) fn diff_stat(repo_path: String, base: String, head: String) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::{EMPTY_TREE_REF, git_output, git_result};
+    use std::{fs, path::Path};
+    use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+    #[test]
+    fn diffs_a_root_commit_against_the_empty_tree() {
+        let (path, run) = scratch_repository("root-diff-stat");
+        fs::write(Path::new(&path).join("root.txt"), "contents\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "root"]);
+
+        let files = diff_stat(path.clone(), EMPTY_TREE_REF.to_string(), "HEAD".to_string()).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(files.len(), 1);
+        assert_eq!((files[0].path.as_str(), files[0].status.as_str()), ("root.txt", "A"));
+    }
+
+    #[test]
+    fn diffs_a_real_root_of_a_shallow_repository_against_the_empty_tree() {
+        let (path, run) = scratch_repository("shallow-root-diff-stat");
+        fs::write(Path::new(&path).join("root.txt"), "root\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "root"]);
+        fs::write(Path::new(&path).join("second.txt"), "second\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "second"]);
+
+        let shallow_path = format!("{path}-shallow");
+        let source = format!("file://{path}");
+        let output = git_result(&path, &["clone", "--quiet", "--depth", "2", &source, &shallow_path]).unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let root = git_output(&shallow_path, &["rev-list", "--max-parents=0", "HEAD"]).unwrap();
+        let files = diff_stat(shallow_path.clone(), EMPTY_TREE_REF.to_string(), root);
+        remove_scratch_repository(&shallow_path);
+        remove_scratch_repository(&path);
+
+        let files = files.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!((files[0].path.as_str(), files[0].status.as_str()), ("root.txt", "A"));
+    }
+
+    #[test]
+    fn rejects_shallow_boundaries_against_the_empty_tree() {
+        let (path, run) = scratch_repository("shallow-diff-stat");
+        fs::write(Path::new(&path).join("first.txt"), "first\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "first"]);
+        fs::write(Path::new(&path).join("second.txt"), "second\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "second"]);
+        fs::write(Path::new(&path).join("third.txt"), "third\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "third"]);
+
+        let source = format!("file://{path}");
+        for depth in ["1", "2"] {
+            let shallow_path = format!("{path}-shallow-{depth}");
+            let output = git_result(&path, &["clone", "--quiet", "--depth", depth, &source, &shallow_path]).unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let short_sha = git_output(&shallow_path, &["rev-list", "--max-parents=0", "--abbrev-commit", "HEAD"]).unwrap();
+            let result = diff_stat(shallow_path.clone(), EMPTY_TREE_REF.to_string(), "HEAD".to_string());
+            remove_scratch_repository(&shallow_path);
+
+            assert!(matches!(result, Err(message) if message == format!("{short_sha} is the edge of a shallow clone; its parent has not been fetched.")));
+        }
+        remove_scratch_repository(&path);
+    }
 
     #[test]
     fn reads_counts_renames_and_binaries_from_numstat() {
