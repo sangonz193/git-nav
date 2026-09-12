@@ -1,3 +1,4 @@
+import { highlighter } from "@git-diff-view/lowlight"
 import { DiffModeEnum, DiffView } from "@git-diff-view/react"
 import { invoke } from "@/lib/ipc"
 import { WORKTREE_REF } from "@/lib/repository-constants"
@@ -112,6 +113,8 @@ import type {
 
 const MAX_CONCURRENT_DIFF_LOADS = 4
 const LARGE_DIFF_LINES = 1200
+// The library skips highlighting above 2000 lines, which hand-written sources routinely exceed.
+const MAX_HIGHLIGHT_LINES = 10_000
 // Monospace runs wider than the interface face, so it is set a step below the interface size to read as the
 // same size beside it.
 const DIFF_FONT_SIZE = 12
@@ -122,6 +125,8 @@ const FILE_ROW_GAP = 8
 const COLLAPSED_BODY_HEIGHT = 40
 const SEARCH_DEBOUNCE = 120
 const PICKER_MENU_WIDTH = 320
+
+highlighter.setMaxLineToIgnoreSyntax(MAX_HIGHLIGHT_LINES)
 
 const HIT_ICONS: Record<HitKind, ComponentType<{ className?: string }>> = {
   branch: GitBranch,
