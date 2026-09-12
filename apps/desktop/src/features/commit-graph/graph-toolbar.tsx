@@ -150,7 +150,6 @@ export function GraphToolbar({
           <Button
             aria-label="Collapse commits nothing points at"
             aria-pressed={collapseUnmarked}
-            className={collapseUnmarked ? "bg-muted" : undefined}
             onClick={() => onCollapseUnmarked(!collapseUnmarked)}
             size="icon-sm"
             type="button"

@@ -4,14 +4,68 @@ import { WORKTREE_REF } from "@/lib/repository-constants"
 import {
   changedFilesLabel,
   fileIdentity,
+  formatBytes,
+  IMAGE_PREVIEW_LIMIT,
   initialDiffLayout,
   isFoldedFile,
+  isImagePath,
+  isSvgPath,
   isViewedFile,
   NARROW_DIFF_PANEL_WIDTH,
   persistedDiffPanelParams,
+  svgContent,
   toggledDiffFileTree,
   type ChangedFile,
 } from "./diff-panel-state"
+
+describe("formatBytes", () => {
+  test("formats unit boundaries", () => {
+    expect(formatBytes(0)).toBe("0 B")
+    expect(formatBytes(1023)).toBe("1023 B")
+    expect(formatBytes(1024)).toBe("1.0 KB")
+    expect(formatBytes(1.5 * 1024 * 1024)).toBe("1.5 MB")
+  })
+})
+
+describe("isImagePath", () => {
+  test("recognizes supported image extensions", () => {
+    expect(isImagePath("images/preview.png")).toBe(true)
+    expect(isImagePath("src/index.ts")).toBe(false)
+    expect(isImagePath("images/preview.JPEG")).toBe(true)
+    expect(isImagePath("LICENSE")).toBe(false)
+    expect(isImagePath("svg")).toBe(false)
+    expect(isImagePath(".png")).toBe(false)
+  })
+})
+
+describe("isSvgPath", () => {
+  test("recognizes SVG extensions", () => {
+    expect(isSvgPath("images/preview.SVG")).toBe(true)
+    expect(isSvgPath("images/preview.png")).toBe(false)
+    expect(isSvgPath(".svg")).toBe(false)
+  })
+})
+
+describe("svgContent", () => {
+  test("encodes SVG source as a data URL", () => {
+    const source = "<svg>é</svg>"
+
+    expect(svgContent(null)).toBeNull()
+    expect(svgContent(source)).toEqual({
+      size: new TextEncoder().encode(source).length,
+      image: "data:image/svg+xml;charset=utf-8,%3Csvg%3E%C3%A9%3C%2Fsvg%3E",
+    })
+  })
+
+  test("does not encode SVG source larger than the preview limit", () => {
+    const source = "a".repeat(IMAGE_PREVIEW_LIMIT + 1)
+
+    expect(svgContent(source)).toEqual({
+      size: IMAGE_PREVIEW_LIMIT + 1,
+      image: null,
+    })
+  })
+})
 
 describe("initialDiffLayout", () => {
   test("uses explicit preferences without treating responsive state as one", () => {
