@@ -53,7 +53,6 @@ import {
   ChevronsDownUp,
   FileDiff,
   FoldVertical,
-  GitCompareArrows,
   LoaderCircle,
   RefreshCw,
   Search,
@@ -120,7 +119,6 @@ import {
   commitChips,
   isMarkedCommit,
   rowIndexOfCommit,
-  searchGraph,
   useViewConfig,
   type ChipContext,
   type ChipKind,
@@ -131,10 +129,9 @@ import {
   type ViewConfigChange,
 } from "./commit-graph-view"
 import { Hinted } from "@/components/hinted"
-import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
+import { SearchMenu } from "@/components/search-menu"
 import { OperationDialog, OperationMenuItems } from "./commit-operation-menu"
 import {
-  CHIP_ICONS,
   clearConflictPredictions,
   type CompletedOperation,
   type OperationRequest,
@@ -152,6 +149,7 @@ import {
   type ChipMenuContext,
 } from "./row-chips"
 import { useBranchCleanup } from "./use-branch-cleanup"
+import { useGraphSearch } from "./use-graph-search"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import type {
   Project,
@@ -168,7 +166,6 @@ const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TOAST_DURATION = 10_000
-const SEARCH_DEBOUNCE = 120
 type BranchSelection = { baseRef: string; headRef: string }
 type RangeDrag = { anchorIndex: number; focusIndex: number }
 type SelectedRef = { ref: DisplayRef; sha: string }
@@ -302,13 +299,8 @@ function CommitGraphPanelContent({
   }, [beginUserSelection])
   // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
-  const [isSearchOpen, setIsSearchOpen] = useState(false)
-  const [searchInput, setSearchInput] = useState("")
-  const [searchQuery, setSearchQuery] = useState("")
-  const [searchHitIndex, setSearchHitIndex] = useState(0)
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
-  const searchField = useRef<HTMLInputElement>(null)
   const savedScrollTop = useRef(0)
   const refreshAnchor = useRef<{ hash: string; offset: number } | null>(null)
   const pendingScrollHash = useRef<string | null>(null)
@@ -603,6 +595,7 @@ function CommitGraphPanelContent({
     }
     return byBase
   }, [stashes])
+  const search = useGraphSearch({ commits, remotes, stashesByBase })
   const unpushed = useMemo(
     () => unpushedHashes(commits, remotes),
     [commits, remotes],
@@ -674,23 +667,6 @@ function CommitGraphPanelContent({
     rowsCache.current = { commits, marksKey, revealed, value }
     return value.rows
   }, [chipContext, collapseUnmarked, commits, marksKey, revealed])
-  const searchHits = useMemo(
-    () =>
-      isSearchOpen ?
-        searchGraph(commits, searchQuery, { remotes, stashesByBase })
-      : [],
-    [commits, isSearchOpen, remotes, searchQuery, stashesByBase],
-  )
-  const searchMenuItems = useMemo(
-    () =>
-      searchHits.map((hit): SearchMenuItem => ({
-        detail: hit.detail,
-        icon: hit.kind === "commit" ? GitCompareArrows : CHIP_ICONS[hit.kind],
-        key: `${hit.kind}-${hit.commitIndex}-${hit.label}`,
-        label: hit.label,
-      })),
-    [searchHits],
-  )
   const rowCount = rows ? rows.length : commits.length
   const commitIndexAtRow = useCallback(
     (row: number) => (rows ? (rows[row]?.index ?? 0) : row),
@@ -1057,18 +1033,6 @@ function CommitGraphPanelContent({
   }, [commits, rowHeight, rowOfCommit])
 
   useEffect(() => {
-    const timeout = window.setTimeout(
-      () => setSearchQuery(searchInput),
-      SEARCH_DEBOUNCE,
-    )
-    return () => window.clearTimeout(timeout)
-  }, [searchInput])
-
-  useEffect(() => {
-    setSearchHitIndex(0)
-  }, [searchQuery])
-
-  useEffect(() => {
     let disposed = false
     let isRefreshing = false
     let intervalTicks = 0
@@ -1244,15 +1208,10 @@ function CommitGraphPanelContent({
     setRevealed((current) => new Set(current).add(startHash))
   }
 
-  function openSearch() {
-    setIsSearchOpen(true)
-    requestAnimationFrame(() => searchField.current?.select())
-  }
-
   function onPanelKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
     if ((event.metaKey || event.ctrlKey) && event.key === "f") {
       event.preventDefault()
-      openSearch()
+      search.open()
     }
   }
 
@@ -1679,9 +1638,9 @@ function CommitGraphPanelContent({
         <div className="flex items-center gap-1">
           <Popover
             onOpenChange={(open) =>
-              open ? openSearch() : setIsSearchOpen(false)
+              open ? search.open() : search.setIsOpen(false)
             }
-            open={isSearchOpen}
+            open={search.isOpen}
           >
             <Tooltip>
               <PopoverTrigger asChild>
@@ -1704,25 +1663,25 @@ function CommitGraphPanelContent({
               onOpenAutoFocus={(event) => event.preventDefault()}
             >
               <SearchMenu
-                activeIndex={searchHitIndex}
+                activeIndex={search.hitIndex}
                 inputLabel="Search refs and commits"
-                inputRef={searchField}
-                items={searchMenuItems}
-                onClose={() => setIsSearchOpen(false)}
+                inputRef={search.field}
+                items={search.menuItems}
+                onClose={() => search.setIsOpen(false)}
                 onHighlight={(index) => {
-                  setSearchHitIndex(index)
-                  activateSearchHit(searchHits[index])
+                  search.setHitIndex(index)
+                  activateSearchHit(search.hits[index])
                 }}
-                onQueryChange={setSearchInput}
+                onQueryChange={search.setInput}
                 onSelect={(index, source) => {
-                  setSearchHitIndex(index)
-                  activateSearchHit(searchHits[index])
+                  search.setHitIndex(index)
+                  activateSearchHit(search.hits[index])
                   if (source === "enter") {
-                    setIsSearchOpen(false)
+                    search.setIsOpen(false)
                   }
                 }}
                 placeholder="Branch, tag or commit"
-                query={searchInput}
+                query={search.input}
               />
             </PopoverContent>
           </Popover>
