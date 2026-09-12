@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query"
 import { Hinted } from "@/components/hinted"
+import { FileStat } from "@/features/diff/diff-panel"
 import { invoke } from "@/lib/ipc"
 import { Button } from "@workspace/shadcn/components/button"
 import { cn } from "@workspace/shadcn/lib/utils"
 import { AppWindow, Copy, FileDiff, X } from "lucide-react"
-import type { ReactNode } from "react"
+import { memo, type ReactNode } from "react"
 
 import {
   pullRequestDescription,
@@ -17,6 +18,7 @@ import {
   type RefSelection,
   type Selection,
 } from "./commit-graph"
+import { canDiffSelection } from "./selection-diff"
 import { LabelText, OperationMenuItems } from "./commit-operation-menu"
 import { selectionLabel, type RefMenuComponents } from "./commit-operations"
 import {
@@ -33,7 +35,6 @@ type CommitDetails = {
   committerName: string
   committerEmail: string
   committerDate: string
-  parents: string[]
   message: string
 }
 
@@ -123,12 +124,7 @@ function FileList({
     <section className="commit-graph-details-section">
       <h3 className="commit-graph-details-heading">
         <span>{`${files.length} file${files.length === 1 ? "" : "s"}`}</span>
-        <span className="diff-file-stat">
-          <span className="text-emerald-400">
-            +{additions.toLocaleString()}
-          </span>
-          <span className="text-rose-400">−{deletions.toLocaleString()}</span>
-        </span>
+        <FileStat additions={additions} deletions={deletions} />
       </h3>
       <ul className="commit-graph-details-files">
         {files.map((file) => (
@@ -143,10 +139,10 @@ function FileList({
             >
               <span className="commit-graph-details-path">{file.path}</span>
               {file.additions !== null && file.deletions !== null && (
-                <span className="diff-file-stat">
-                  <span className="text-emerald-400">+{file.additions}</span>
-                  <span className="text-rose-400">−{file.deletions}</span>
-                </span>
+                <FileStat
+                  additions={file.additions}
+                  deletions={file.deletions}
+                />
               )}
             </button>
           </li>
@@ -156,40 +152,58 @@ function FileList({
   )
 }
 
-function useDiffStat(repoPath: string, base: string | null, head: string) {
+function useDiffStat(
+  repoPath: string,
+  base: string | null,
+  head: string,
+  enabled = true,
+) {
   return useQuery({
-    enabled: base !== null,
+    enabled: enabled && base !== null,
     queryFn: () =>
       invoke<DiffStatFile[]>("diff_stat", { repoPath, base, head }),
     queryKey: ["diff-stat", repoPath, base, head],
+    retry: false,
     staleTime: Infinity,
   })
 }
 
 function CommitBody({
+  canSelectCommit,
   commit,
+  isRangeDragging,
   menus,
   onOpenFile,
   repoPath,
   selectCommit,
 }: {
+  canSelectCommit: (hash: string) => boolean
   commit: Commit
+  isRangeDragging: boolean
   menus: ChipMenuContext
   onOpenFile: (path: string) => void
   repoPath: string
   selectCommit: (hash: string) => void
 }) {
   const details = useQuery({
+    enabled: !isRangeDragging,
     queryFn: () =>
       invoke<CommitDetails>("commit_details", { repoPath, hash: commit.hash }),
     queryKey: ["commit-details", repoPath, commit.hash],
+    retry: false,
     staleTime: Infinity,
   })
-  const files = useDiffStat(repoPath, commit.parents[0] ?? null, commit.hash)
+  const files = useDiffStat(
+    repoPath,
+    commit.parents[0] ?? null,
+    commit.hash,
+    !isRangeDragging,
+  )
   const body = details.data?.message
     .split(/\r?\n\r?\n/)
     .slice(1)
     .join("\n\n")
+    .trim()
   const committerDiffers =
     details.data &&
     (details.data.committerName !== details.data.authorName ||
@@ -250,64 +264,66 @@ function CommitBody({
         {commit.parents.length > 0 && (
           <Field label={commit.parents.length === 1 ? "Parent" : "Parents"}>
             {commit.parents.map((parent) => (
-              <button
-                className="commit-graph-details-link"
+              <CommitLink
+                canSelect={canSelectCommit(parent)}
+                hash={parent}
                 key={parent}
-                onClick={() => selectCommit(parent)}
-                type="button"
-              >
-                <code>{parent.slice(0, 8)}</code>
-              </button>
+                selectCommit={selectCommit}
+              />
             ))}
           </Field>
         )}
       </dl>
+      {details.error && <QueryError error={details.error} />}
       {files.data && <FileList files={files.data} onOpen={onOpenFile} />}
+      {files.error && <QueryError error={files.error} />}
     </>
   )
 }
 
 function RangeBody({
+  canSelectCommit,
+  isRangeDragging,
   onOpenFile,
   repoPath,
   selectCommit,
   selection,
 }: {
+  canSelectCommit: (hash: string) => boolean
+  isRangeDragging: boolean
   onOpenFile: (path: string) => void
   repoPath: string
   selectCommit: (hash: string) => void
   selection: CommitSelection
 }) {
+  const oldest = selection.commits.at(-1)!
   const files = useDiffStat(
     repoPath,
     selection.base?.hash ?? null,
     selection.tip.hash,
+    !isRangeDragging,
   )
   return (
     <>
       <dl className="commit-graph-details-fields">
         <Field label="Newest">
-          <button
-            className="commit-graph-details-link"
-            onClick={() => selectCommit(selection.tip.hash)}
-            type="button"
-          >
-            <code>{selection.tip.hash.slice(0, 8)}</code>
-          </button>
+          <CommitLink
+            canSelect={canSelectCommit(selection.tip.hash)}
+            hash={selection.tip.hash}
+            selectCommit={selectCommit}
+          />
           <span className="truncate text-muted-foreground">
             {selection.tip.subject}
           </span>
         </Field>
         <Field label="Oldest">
-          <button
-            className="commit-graph-details-link"
-            onClick={() => selectCommit(selection.commits.at(-1)!.hash)}
-            type="button"
-          >
-            <code>{selection.commits.at(-1)!.hash.slice(0, 8)}</code>
-          </button>
+          <CommitLink
+            canSelect={canSelectCommit(oldest.hash)}
+            hash={oldest.hash}
+            selectCommit={selectCommit}
+          />
           <span className="truncate text-muted-foreground">
-            {selection.commits.at(-1)!.subject}
+            {oldest.subject}
           </span>
         </Field>
         {selection.branches.length > 0 && (
@@ -319,15 +335,18 @@ function RangeBody({
         )}
       </dl>
       {files.data && <FileList files={files.data} onOpen={onOpenFile} />}
+      {files.error && <QueryError error={files.error} />}
     </>
   )
 }
 
 function RefBody({
+  canSelectCommit,
   menus,
   selectCommit,
   selection,
 }: {
+  canSelectCommit: (hash: string) => boolean
   menus: ChipMenuContext
   selectCommit: (hash: string) => void
   selection: RefSelection
@@ -337,13 +356,11 @@ function RefBody({
   return (
     <dl className="commit-graph-details-fields">
       <Field label="Commit">
-        <button
-          className="commit-graph-details-link"
-          onClick={() => selectCommit(selection.sha)}
-          type="button"
-        >
-          <code>{selection.sha.slice(0, 8)}</code>
-        </button>
+        <CommitLink
+          canSelect={canSelectCommit(selection.sha)}
+          hash={selection.sha}
+          selectCommit={selectCommit}
+        />
       </Field>
       {ref.sync && (
         <Field label="Upstream">
@@ -382,21 +399,52 @@ function RefBody({
   )
 }
 
-export function SelectionDetails({
+function CommitLink({
+  canSelect,
+  hash,
+  selectCommit,
+}: {
+  canSelect: boolean
+  hash: string
+  selectCommit: (hash: string) => void
+}) {
+  const content = <code>{hash.slice(0, 8)}</code>
+  return canSelect ?
+      <button
+        className="commit-graph-details-link"
+        onClick={() => selectCommit(hash)}
+        type="button"
+      >
+        {content}
+      </button>
+    : content
+}
+
+function QueryError({ error }: { error: Error }) {
+  return (
+    <section className="commit-graph-details-section" role="alert">
+      <p className="commit-graph-error">{String(error)}</p>
+    </section>
+  )
+}
+
+export const SelectionDetails = memo(function SelectionDetails({
+  canSelectCommit,
   clearSelection,
+  isRangeDragging,
   menus,
   onClose,
-  openCommitDiff,
-  openRangeDiff,
+  openSelectionDiff,
   repoPath,
   selectCommit,
   selection,
 }: {
+  canSelectCommit: (hash: string) => boolean
   clearSelection: () => void
+  isRangeDragging: boolean
   menus: ChipMenuContext
   onClose: () => void
-  openCommitDiff: (commit: Commit, filePath?: string) => void
-  openRangeDiff: (selection: CommitSelection, filePath?: string) => void
+  openSelectionDiff: (selection: Selection, filePath?: string) => void
   repoPath: string
   selectCommit: (hash: string) => void
   selection: Selection
@@ -405,17 +453,8 @@ export function SelectionDetails({
     selection.kind === "commits" && selection.commits.length === 1 ?
       selection.tip
     : null
-  const openDiff = (filePath?: string) => {
-    if (selection.kind !== "commits") {
-      return menus.openRefDiff(refName(selection.ref))
-    }
-    return singleCommit ?
-        openCommitDiff(singleCommit, filePath)
-      : openRangeDiff(selection, filePath)
-  }
-  const canDiff =
-    selection.kind !== "commits" ||
-    (singleCommit ? singleCommit.parents.length > 0 : selection.base !== null)
+  const openDiff = (filePath?: string) => openSelectionDiff(selection, filePath)
+  const canDiff = canDiffSelection(selection, menus.repository?.defaultBranch)
   return (
     <aside aria-label="Selection details" className="commit-graph-details">
       <header className="commit-graph-details-header">
@@ -466,19 +505,24 @@ export function SelectionDetails({
         </div>
         {selection.kind !== "commits" ?
           <RefBody
+            canSelectCommit={canSelectCommit}
             menus={menus}
             selectCommit={selectCommit}
             selection={selection}
           />
         : singleCommit ?
           <CommitBody
+            canSelectCommit={canSelectCommit}
             commit={singleCommit}
+            isRangeDragging={isRangeDragging}
             menus={menus}
             onOpenFile={openDiff}
             repoPath={repoPath}
             selectCommit={selectCommit}
           />
         : <RangeBody
+            canSelectCommit={canSelectCommit}
+            isRangeDragging={isRangeDragging}
             onOpenFile={openDiff}
             repoPath={repoPath}
             selectCommit={selectCommit}
@@ -534,4 +578,4 @@ export function SelectionDetails({
       </div>
     </aside>
   )
-}
+})

@@ -319,7 +319,7 @@ function flattenTree(nodes: FileTreeNode[], files: ChangedFile[] = []) {
   return files
 }
 
-function FileStat({
+export function FileStat({
   additions,
   deletions,
 }: {

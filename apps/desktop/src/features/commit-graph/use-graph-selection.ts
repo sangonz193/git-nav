@@ -200,15 +200,22 @@ export function useGraphSelection({
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [clearSelection, selection])
 
-  function selectRef(ref: DisplayRef, sha: string) {
-    beginUserSelection()
-    setSelectionRange(null)
-    setSelectedRef((current) =>
-      current && refName(current.ref) === refName(ref) && current.sha === sha ?
-        null
-      : { ref, sha },
-    )
-  }
+  const selectRef = useCallback(
+    (ref: DisplayRef, sha: string) => {
+      beginUserSelection()
+      setSelectionRange(null)
+      setSelectedRef((current) =>
+        (
+          current &&
+          refName(current.ref) === refName(ref) &&
+          current.sha === sha
+        ) ?
+          null
+        : { ref, sha },
+      )
+    },
+    [beginUserSelection],
+  )
 
   // Right-clicking inside the selection keeps it whole, and right-clicking outside it acts on the row under the pointer.
   function rowTarget(index: number) {
@@ -225,11 +232,14 @@ export function useGraphSelection({
     )
   }
 
-  function selectCommit(commit: Commit) {
-    beginUserSelection()
-    setSelectedRef(null)
-    setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
-  }
+  const selectCommit = useCallback(
+    (commit: Commit) => {
+      beginUserSelection()
+      setSelectedRef(null)
+      setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
+    },
+    [beginUserSelection],
+  )
 
   function selectRangeTo(commit: Commit) {
     if (!selectionEndpointIndexes) {

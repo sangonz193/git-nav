@@ -106,6 +106,7 @@ import { diffTabs } from "./diff-tabs"
 import { GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
 import { SelectionDetails } from "./selection-details"
+import { canDiffSelection } from "./selection-diff"
 import {
   chipMenuEntry,
   dropdownMenuComponents,
@@ -469,12 +470,12 @@ function CommitGraphPanelContent({
     onSuccess: () => refreshGraph(),
     onError: (message) => setError(String(message)),
   })
-  const openWorktreeMutation = useMutation({
+  const { mutate: mutateWorktree } = useMutation({
     mutationFn: ({ path, target }: { path: string; target: WorktreeTarget }) =>
       openWorktree(path, target),
     onError: (message) => setError(String(message)),
   })
-  const openPullRequestMutation = useMutation({
+  const { mutate: mutatePullRequest } = useMutation({
     mutationFn: (url: string) => openPullRequest(url),
     onError: (message) => setError(String(message)),
   })
@@ -497,13 +498,17 @@ function CommitGraphPanelContent({
     openRefDiff,
     openStashDiff,
     openWorktreeDiff,
-  } = diffTabs({
-    containerApi,
-    name: params.name,
-    onError: setError,
-    panel: api.id,
-    repoPath: params.path,
-  })
+  } = useMemo(
+    () =>
+      diffTabs({
+        containerApi,
+        name: params.name,
+        onError: setError,
+        panel: api.id,
+        repoPath: params.path,
+      }),
+    [api.id, containerApi, params.name, params.path],
+  )
   const cleanup = useBranchCleanup({
     cleanOptions,
     graphVersion,
@@ -676,16 +681,19 @@ function CommitGraphPanelContent({
 
   // A commit inside a collapsed run has no row of its own, so the run it sits in is opened and the scroll
   // waits for the rows that opening it produces.
-  function scrollToCommit(index: number) {
-    const row = rowOfCommit(index)
-    if (rows && rows[row]?.hidden > 0) {
-      const start = commits[rows[row].index].hash
-      pendingScrollHash.current = commits[index].hash
-      setRevealed((current) => new Set(current).add(start))
-      return
-    }
-    rowVirtualizer.scrollToIndex(row, { align: "center" })
-  }
+  const scrollToCommit = useCallback(
+    (index: number) => {
+      const row = rowOfCommit(index)
+      if (rows && rows[row]?.hidden > 0) {
+        const start = commits[rows[row].index].hash
+        pendingScrollHash.current = commits[index].hash
+        setRevealed((current) => new Set(current).add(start))
+        return
+      }
+      rowVirtualizer.scrollToIndex(row, { align: "center" })
+    },
+    [commits, rowOfCommit, rows, rowVirtualizer],
+  )
 
   function collapseUnmarkedCommits(collapse: boolean) {
     const top =
@@ -742,15 +750,25 @@ function CommitGraphPanelContent({
     rowVirtualizer.scrollToIndex(0)
   }
 
-  // A commit named from the details is selected where it sits, which may be inside a collapsed run.
-  function selectCommitByHash(hash: string) {
-    const index = commits.findIndex((commit) => commit.hash === hash)
-    if (index === -1) {
-      return
-    }
-    selectCommit(commits[index])
-    scrollToCommit(index)
-  }
+  const navigableCommitHashes = useMemo(
+    () => new Set(commits.map((commit) => commit.hash)),
+    [commits],
+  )
+  const canSelectCommitByHash = useCallback(
+    (hash: string) => navigableCommitHashes.has(hash),
+    [navigableCommitHashes],
+  )
+  const selectCommitByHash = useCallback(
+    (hash: string) => {
+      const index = commits.findIndex((commit) => commit.hash === hash)
+      if (index === -1) {
+        return
+      }
+      selectCommit(commits[index])
+      scrollToCommit(index)
+    },
+    [commits, scrollToCommit, selectCommit],
+  )
 
   function scrollToCurrentCheckout() {
     if (currentCheckoutIndex === -1) {
@@ -759,13 +777,13 @@ function CommitGraphPanelContent({
     scrollToCommit(currentCheckoutIndex)
   }
 
-  async function copyText(value: string) {
+  const copyText = useCallback(async (value: string) => {
     try {
       await navigator.clipboard.writeText(value)
     } catch (message) {
       setError(String(message))
     }
-  }
+  }, [])
 
   function selectionSummary(selection: Selection) {
     return selection.kind === "commits" ?
@@ -934,20 +952,54 @@ function CommitGraphPanelContent({
     window.addEventListener("pointercancel", onPointerCancel)
   }
 
-  const menus: ChipMenuContext = {
-    copyText,
-    openPullRequest: (url) => openPullRequestMutation.mutate(url),
-    openRefDiff,
-    openStashDiff,
-    openWorktree: (path, target) =>
-      openWorktreeMutation.mutate({ path, target }),
-    openWorktreeDiff,
-    repository,
-    selectRef,
-    selectedRef,
-    selection,
-    setRequest,
-  }
+  const triggerPullRequest = useCallback(
+    (url: string) => mutatePullRequest(url),
+    [mutatePullRequest],
+  )
+  const triggerWorktree = useCallback(
+    (path: string, target: WorktreeTarget) => mutateWorktree({ path, target }),
+    [mutateWorktree],
+  )
+  const menus = useMemo<ChipMenuContext>(
+    () => ({
+      copyText,
+      openPullRequest: triggerPullRequest,
+      openRefDiff,
+      openStashDiff,
+      openWorktree: triggerWorktree,
+      openWorktreeDiff,
+      repository,
+      selectRef,
+      selectedRef,
+      selection,
+      setRequest,
+    }),
+    [
+      copyText,
+      triggerPullRequest,
+      openRefDiff,
+      openStashDiff,
+      triggerWorktree,
+      openWorktreeDiff,
+      repository,
+      selectRef,
+      selectedRef,
+      selection,
+      setRequest,
+    ],
+  )
+  const openSelectionDiff = useCallback(
+    (selected: Selection, filePath?: string) => {
+      if (selected.kind !== "commits") {
+        return openRefDiff(refName(selected.ref))
+      }
+      return selected.commits.length === 1 ?
+          openCommitDiff(selected.tip, filePath)
+        : openRangeDiff(selected, filePath)
+    },
+    [openCommitDiff, openRangeDiff, openRefDiff],
+  )
+  const closeDetails = useCallback(() => setDetailsOpen(false), [])
 
   return (
     <main
@@ -1249,11 +1301,12 @@ function CommitGraphPanelContent({
         </div>
         {detailsOpen && selection && (
           <SelectionDetails
+            canSelectCommit={canSelectCommitByHash}
             clearSelection={clearSelection}
+            isRangeDragging={rangeDrag !== null}
             menus={menus}
-            onClose={() => setDetailsOpen(false)}
-            openCommitDiff={openCommitDiff}
-            openRangeDiff={openRangeDiff}
+            onClose={closeDetails}
+            openSelectionDiff={openSelectionDiff}
             repoPath={params.path}
             selectCommit={selectCommitByHash}
             selection={selection}
@@ -1284,8 +1337,10 @@ function CommitGraphPanelContent({
           {selection.kind === "commits" ?
             <Hinted hint="Diff the selected range">
               <Button
-                disabled={!selection.base}
-                onClick={() => openRangeDiff(selection)}
+                disabled={
+                  !canDiffSelection(selection, repository?.defaultBranch)
+                }
+                onClick={() => openSelectionDiff(selection)}
                 size="sm"
                 type="button"
                 variant="outline"
@@ -1298,7 +1353,10 @@ function CommitGraphPanelContent({
               hint={`Diff ${refName(selection.ref)} against the default branch`}
             >
               <Button
-                onClick={() => openRefDiff(refName(selection.ref))}
+                disabled={
+                  !canDiffSelection(selection, repository?.defaultBranch)
+                }
+                onClick={() => openSelectionDiff(selection)}
                 size="sm"
                 type="button"
                 variant="outline"

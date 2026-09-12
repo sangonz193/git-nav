@@ -165,23 +165,10 @@ fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
 fn files_changed_beyond_whitespace(path: &str, revisions: &[&str]) -> Result<HashSet<String>, String> {
     let output = git_output_bytes(path, &[&NUMSTAT_ARGUMENTS[..], whitespace_arguments(true), revisions].concat())
         .ok_or_else(|| "git diff failed.".to_string())?;
-    let mut fields = output
-        .split(|byte| *byte == 0)
-        .filter(|field| !field.is_empty())
-        .map(|field| String::from_utf8_lossy(field).into_owned());
-    let mut paths = HashSet::new();
-    while let Some(record) = fields.next() {
-        match record.splitn(3, '\t').nth(2) {
-            Some(path) if !path.is_empty() => {
-                paths.insert(path.to_string());
-            }
-            // A rename carries its two paths in the fields following the counts.
-            _ => {
-                paths.extend(fields.by_ref().take(2));
-            }
-        }
-    }
-    Ok(paths)
+    Ok(parse_numstat(&output)
+        .into_iter()
+        .flat_map(|file| file.old_path.into_iter().chain(std::iter::once(file.path)))
+        .collect())
 }
 
 // A blob of nothing is what git reports for a side a file does not have, and for a working tree file it
