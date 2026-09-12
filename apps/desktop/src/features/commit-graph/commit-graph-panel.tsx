@@ -8,8 +8,6 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
 import { invoke } from "@/lib/ipc"
-import { panelId } from "@/lib/panel-id"
-import { WORKTREE_REF } from "@/lib/repository-constants"
 import {
   openPullRequest,
   openWorktree,
@@ -71,11 +69,8 @@ import {
   unpushedHashes,
   unpushedLanes,
   visibleChipCount,
-  type RowWorktree,
   type Commit,
-  type CommitSelection,
   type Selection,
-  type StashEntry,
 } from "./commit-graph"
 import {
   appendGraphRows,
@@ -100,6 +95,7 @@ import {
   type RefUpdate,
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
+import { diffTabs } from "./diff-tabs"
 import { GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
 import {
@@ -113,7 +109,6 @@ import { useBranchCleanup } from "./use-branch-cleanup"
 import { useGraphData } from "./use-graph-data"
 import { useGraphSearch } from "./use-graph-search"
 import { useGraphSelection } from "./use-graph-selection"
-import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 
 const EMPTY_COMMITS: Commit[] = []
 const DRAG_THRESHOLD = 4
@@ -121,7 +116,6 @@ const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TOAST_DURATION = 10_000
-type BranchSelection = { baseRef: string; headRef: string }
 const commitTableFeatures = tableFeatures({
   columnSizingFeature,
   columnResizingFeature,
@@ -183,7 +177,6 @@ function CommitGraphPanelContent({
   config: ViewConfig
   updateConfig: (change: ViewConfigChange) => void
 }) {
-  const repositoryPanelParams = { name: params.name, path: params.path }
   const operationToastId = `commit-graph-operation-${api.id}`
   const undoInFlight = useRef(false)
   const [error, setError] = useState<string | null>(null)
@@ -477,6 +470,19 @@ function CommitGraphPanelContent({
       setError(String(message))
     },
   })
+  const {
+    openCommitDiff,
+    openRangeDiff,
+    openRefDiff,
+    openStashDiff,
+    openWorktreeDiff,
+  } = diffTabs({
+    containerApi,
+    name: params.name,
+    onError: setError,
+    panel: api.id,
+    repoPath: params.path,
+  })
   const cleanup = useBranchCleanup({
     cleanOptions,
     graphVersion,
@@ -722,128 +728,12 @@ function CommitGraphPanelContent({
     scrollToCommit(currentCheckoutIndex)
   }
 
-  async function openRefDiff(reference: string) {
-    try {
-      const selection = await invoke<BranchSelection>("select_branch_range", {
-        repoPath: params.path,
-        reference,
-      })
-      const referencePanel = containerApi.getPanel(api.id)
-      if (!referencePanel) {
-        throw new Error("Could not open a diff tab.")
-      }
-      containerApi.addPanel({
-        component: "diff",
-        id: panelId("diff"),
-        params: {
-          ...repositoryPanelParams,
-          baseRef: selection.baseRef,
-          headRef: selection.headRef,
-          mergeBase: true,
-        },
-        position: { direction: "within", referencePanel },
-        tabComponent: "diff",
-        title: branchRangeTitle(
-          selectedRefs(selection.baseRef, selection.headRef, true),
-        ),
-      })
-    } catch (message) {
-      setError(String(message))
-    }
-  }
-
   async function copyText(value: string) {
     try {
       await navigator.clipboard.writeText(value)
     } catch (message) {
       setError(String(message))
     }
-  }
-
-  function openCommitDiff(commit: Commit) {
-    const baseRef = commit.parents[0]
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!baseRef || !referencePanel) {
-      setError("Could not open a commit diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        baseRef,
-        headRef: commit.hash,
-        headLabel: commit.subject || "(no subject)",
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: refLabel(commit.hash),
-    })
-  }
-
-  // The diff is scoped to the dirty worktree, which is not always the one this panel was opened on.
-  function openWorktreeDiff(worktree: RowWorktree) {
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!referencePanel) {
-      setError("Could not open a working tree diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        path: worktree.path,
-        baseRef: "HEAD",
-        headRef: WORKTREE_REF,
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: worktree.name,
-    })
-  }
-
-  // A stash entry records the working tree against the commit it was made from, which is its first parent.
-  function openStashDiff(entry: StashEntry) {
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!referencePanel) {
-      setError("Could not open a stash diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        baseRef: `${entry.sha}^`,
-        headRef: entry.sha,
-        headLabel: entry.name,
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: entry.name,
-    })
-  }
-
-  function openRangeDiff({ base, tip }: CommitSelection) {
-    const referencePanel = containerApi.getPanel(api.id)
-    if (!base || !referencePanel) {
-      setError("Could not open a range diff.")
-      return
-    }
-    containerApi.addPanel({
-      component: "diff",
-      id: panelId("diff"),
-      params: {
-        ...repositoryPanelParams,
-        baseRef: base.hash,
-        headRef: tip.hash,
-      },
-      position: { direction: "within", referencePanel },
-      tabComponent: "diff",
-      title: `${refLabel(base.hash)}..${refLabel(tip.hash)}`,
-    })
   }
 
   function selectionSummary(selection: Selection) {
