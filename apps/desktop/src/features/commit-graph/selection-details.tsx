@@ -468,7 +468,15 @@ export const SelectionDetails = memo(function SelectionDetails({
         <h3 className="commit-graph-details-heading">Actions</h3>
         <div className="commit-graph-details-actions">
           {selection.kind !== "commits" ?
-            refMenuActions(menus, selection.ref, selection.sha, listComponents)
+            refMenuActions(
+              menus,
+              selection.ref,
+              selection.sha,
+              listComponents,
+              {
+                showCompare: false,
+              },
+            )
           : <>
               <OperationMenuItems
                 components={listComponents}
