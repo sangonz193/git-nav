@@ -56,6 +56,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/shadcn/components/popover"
+import { toast } from "@workspace/shadcn/components/sonner"
 import {
   Tooltip,
   TooltipContent,
@@ -88,7 +89,6 @@ import {
   Search,
   SlidersHorizontal,
   Terminal,
-  Undo2,
   UnfoldVertical,
   X,
 } from "lucide-react"
@@ -116,10 +116,10 @@ import {
   commitSelection,
   displayRefs,
   fitGraphWidth,
-  GRAPH_CANVAS_OVERSCAN,
   GRAPH_HEADER_HEIGHT,
   GRAPH_WIDTH,
   graphCanvasHeight,
+  graphCanvasTop,
   isCurrentCheckout,
   laneColor,
   persistedGraphPanelParams,
@@ -204,7 +204,7 @@ const DRAG_THRESHOLD = 4
 const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
-const UNDO_TIMEOUT = 30_000
+const UNDO_TOAST_DURATION = 10_000
 const SEARCH_DEBOUNCE = 120
 type BranchCleanup = {
   candidates: string[]
@@ -482,12 +482,13 @@ function CommitGraphPanelContent({
   updateConfig: (change: ViewConfigChange) => void
 }) {
   const repositoryPanelParams = { name: params.name, path: params.path }
+  const operationToastId = `commit-graph-operation-${api.id}`
+  const undoInFlight = useRef(false)
   const [commits, setCommits] = useState<Commit[]>([])
   const [squashMergeInferences, setSquashMergeInferences] = useState<
     SquashMergeInference[]
   >([])
   const [error, setError] = useState<string | null>(null)
-  const [cleanupReport, setCleanupReport] = useState<string | null>(null)
   const [isCleanConfirmationOpen, setIsCleanConfirmationOpen] = useState(false)
   const cleanOptions = config.cleanOptions
   const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(
@@ -497,7 +498,6 @@ function CommitGraphPanelContent({
     null,
   )
   const [request, setRequest] = useState<OperationRequest | null>(null)
-  const [completed, setCompleted] = useState<CompletedOperation | null>(null)
   const [graphVersion, setGraphVersion] = useState(0)
   const [graphOffset, setGraphOffset] = useState(0)
   const [hasOlderCommits, setHasOlderCommits] = useState(false)
@@ -566,31 +566,22 @@ function CommitGraphPanelContent({
   const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({ top: 0, height: 0 })
   const scrollFrame = useRef<number | null>(null)
-  const refreshGraph = useCallback(
-    (clearReport = true) => {
-      setError(null)
-      if (clearReport) {
-        setCleanupReport(null)
-      }
-      const scrollTop =
-        scrollElement.current?.scrollTop ?? savedScrollTop.current
-      const row = Math.floor(scrollTop / rowHeight)
-      const commit =
-        commitsRef.current[
-          rowsRef.current ? (rowsRef.current[row]?.index ?? -1) : row
-        ]
-      refreshAnchor.current =
-        commit ?
-          { hash: commit.hash, offset: scrollTop - row * rowHeight }
-        : null
-      // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
-      fingerprint.current = null
-      fingerprintGeneration.current += 1
-      setGraphOffset(0)
-      setGraphVersion((version) => version + 1)
-    },
-    [rowHeight],
-  )
+  const refreshGraph = useCallback(() => {
+    setError(null)
+    const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
+    const row = Math.floor(scrollTop / rowHeight)
+    const commit =
+      commitsRef.current[
+        rowsRef.current ? (rowsRef.current[row]?.index ?? -1) : row
+      ]
+    refreshAnchor.current =
+      commit ? { hash: commit.hash, offset: scrollTop - row * rowHeight } : null
+    // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
+    fingerprint.current = null
+    fingerprintGeneration.current += 1
+    setGraphOffset(0)
+    setGraphVersion((version) => version + 1)
+  }, [rowHeight])
   // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
   const refreshWorktreeStatus = useCallback(
     (scope: WorktreeStatusScope = "all", isDisposed?: () => boolean) => {
@@ -957,12 +948,21 @@ function CommitGraphPanelContent({
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
     overscan: 12,
+    // Room past the last row lets it be scrolled up out of the corner, where the selection bar sits.
+    paddingEnd: Math.max(
+      0,
+      Math.floor((scroll.height - GRAPH_HEADER_HEIGHT) / 2),
+    ),
     scrollMargin: GRAPH_HEADER_HEIGHT,
     scrollPaddingStart: GRAPH_HEADER_HEIGHT,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
   const virtualScrollTop = rowVirtualizer.scrollOffset ?? 0
-  const graphScrollTop = virtualScrollTop - GRAPH_CANVAS_OVERSCAN
+  const graphScrollTop = graphCanvasTop(
+    virtualScrollTop,
+    scroll.height,
+    rowVirtualizer.getTotalSize(),
+  )
   const currentCheckoutRow =
     currentCheckoutIndex === -1 ? -1 : rowOfCommit(currentCheckoutIndex)
   // The brackets are drawn on rows while the drag they adjust is anchored on commits, so an endpoint carries both.
@@ -1008,10 +1008,7 @@ function CommitGraphPanelContent({
   const fetchMutation = useMutation({
     mutationFn: () =>
       invoke("fetch_and_sync_pull_requests", { repoPath: params.path }),
-    onMutate: () => {
-      setError(null)
-      setCleanupReport(null)
-    },
+    onMutate: () => setError(null),
     onSuccess: () => refreshGraph(),
     onError: (message) => setError(String(message)),
   })
@@ -1027,14 +1024,11 @@ function CommitGraphPanelContent({
         }),
       }
     },
-    onMutate: () => {
-      setError(null)
-      setCleanupReport(null)
-    },
+    onMutate: () => setError(null),
     onSuccess: (outcome) => {
       setIsCleanConfirmationOpen(false)
       if ("report" in outcome) {
-        setCleanupReport(outcome.report)
+        toast(outcome.report)
         return
       }
       const { result } = outcome
@@ -1049,8 +1043,9 @@ function CommitGraphPanelContent({
           "No branches were deleted because the candidate list changed."
         : null,
       ].filter(Boolean)
-      setCleanupReport(details.join("\n"))
-      refreshGraph(false)
+      const [title, ...description] = details
+      toast(title, { description: description.join("\n") })
+      refreshGraph()
     },
     onError: (message) => setError(String(message)),
   })
@@ -1079,10 +1074,14 @@ function CommitGraphPanelContent({
     mutationFn: (updates: RefUpdate[]) =>
       invoke("undo_ref_updates", { repoPath: params.path, updates }),
     onSuccess: () => {
-      setCompleted(null)
+      undoInFlight.current = false
+      toast.dismiss(operationToastId)
       refreshGraph()
     },
-    onError: (message) => setError(String(message)),
+    onError: (message) => {
+      undoInFlight.current = false
+      setError(String(message))
+    },
   })
 
   const updateScroll = useCallback(() => {
@@ -1296,7 +1295,7 @@ function CommitGraphPanelContent({
             return
           }
           if (fingerprint.current !== null && fingerprint.current !== value) {
-            refreshGraph(false)
+            refreshGraph()
           }
           fingerprint.current = value
         })
@@ -1341,22 +1340,6 @@ function CommitGraphPanelContent({
     element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
     refreshAnchor.current = null
   }, [commits, rowHeight, rowOfCommit])
-
-  useEffect(() => {
-    if (!cleanupReport) {
-      return
-    }
-    const timeout = window.setTimeout(() => setCleanupReport(null), 6_000)
-    return () => window.clearTimeout(timeout)
-  }, [cleanupReport])
-
-  useEffect(() => {
-    if (!completed) {
-      return
-    }
-    const timeout = window.setTimeout(() => setCompleted(null), UNDO_TIMEOUT)
-    return () => window.clearTimeout(timeout)
-  }, [completed])
 
   // The badge counts what the dialog would delete, so the candidates are read for the options in force and
   // re-read when the repository changes rather than on a timer of their own.
@@ -1745,7 +1728,24 @@ function CommitGraphPanelContent({
 
   function onOperationCompleted(result: CompletedOperation) {
     setRequest(null)
-    setCompleted(result)
+    toast(result.summary, {
+      action:
+        result.updates.length > 0 ?
+          {
+            label: "Undo",
+            onClick: (event) => {
+              event.preventDefault()
+              if (undoInFlight.current) {
+                return
+              }
+              undoInFlight.current = true
+              undoMutation.mutate(result.updates)
+            },
+          }
+        : undefined,
+      duration: UNDO_TOAST_DURATION,
+      id: operationToastId,
+    })
     clearConflictPredictions()
     refreshWorktreeStatus()
     refreshGraph()
@@ -3046,26 +3046,6 @@ function CommitGraphPanelContent({
         <p className="commit-graph-error" role="alert">
           {error}
         </p>
-      )}
-      {cleanupReport && (
-        <p className="commit-graph-cleanup-report">{cleanupReport}</p>
-      )}
-      {completed && (
-        <div className="commit-graph-cleanup-report flex items-center gap-3">
-          <span>{completed.summary}</span>
-          {completed.updates.length > 0 && (
-            <Button
-              disabled={undoMutation.isPending}
-              onClick={() => undoMutation.mutate(completed.updates)}
-              size="xs"
-              type="button"
-              variant="outline"
-            >
-              <Undo2 />
-              {undoMutation.isPending ? "Undoing…" : "Undo"}
-            </Button>
-          )}
-        </div>
       )}
       <AlertDialog
         onOpenChange={setIsCleanConfirmationOpen}
