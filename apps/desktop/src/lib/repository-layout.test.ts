@@ -208,6 +208,18 @@ describe("usableRepositoryLayout", () => {
         path,
       ),
     ).toBeNull()
+    expect(
+      usableRepositoryLayout(
+        storedLayout({ userPreferences: { collapseUnmarked: false } }),
+        path,
+      ),
+    ).not.toBeNull()
+    expect(
+      usableRepositoryLayout(
+        storedLayout({ userPreferences: { collapseUnmarked: "no" } }),
+        path,
+      ),
+    ).toBeNull()
 
     const value = storedLayout()
     expect(

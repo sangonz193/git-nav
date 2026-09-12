@@ -99,7 +99,7 @@ describe("loadViewConfig", () => {
         throw new Error("unreachable")
       },
       async () => undefined,
-      JSON.stringify({ chipKinds: { tag: false }, collapseUnmarked: false }),
+      JSON.stringify({ chipKinds: { tag: false } }),
       "desktop",
     )
     expect(config.chipKinds).toEqual({
@@ -108,7 +108,6 @@ describe("loadViewConfig", () => {
       stash: true,
       tag: false,
     })
-    expect(config.collapseUnmarked).toBe(false)
     expect(config.cleanOptions).toEqual(DEFAULT_VIEW_CONFIG.cleanOptions)
   })
 
@@ -121,14 +120,12 @@ describe("loadViewConfig", () => {
       JSON.stringify({
         chipKinds: { branch: "yes", tag: false },
         cleanOptions: { deleteMergedBranches: 1 },
-        collapseUnmarked: "yes",
       }),
       "desktop",
     )
     expect(config).toEqual({
       chipKinds: { branch: true, remote: true, stash: true, tag: false },
       cleanOptions: DEFAULT_VIEW_CONFIG.cleanOptions,
-      collapseUnmarked: true,
     })
   })
 })
@@ -152,7 +149,7 @@ describe("loadViewConfig", () => {
     expect(config.chipKinds.tag).toBe(false)
     expect(saved).toContainEqual([keys.chipKinds.tag, false])
     expect(saved).toContainEqual([keys.chipKinds.branch, true])
-    expect(saved).toHaveLength(8)
+    expect(saved).toHaveLength(7)
     expect(removed).toBe(true)
   })
 
@@ -177,7 +174,6 @@ describe("loadViewConfig", () => {
       async () => ({
         [keys.chipKinds.tag]: false,
         [keys.cleanOptions.deleteMergedBranches]: true,
-        [keys.collapseUnmarked]: false,
       }),
       async () => undefined,
       null,
@@ -186,7 +182,6 @@ describe("loadViewConfig", () => {
     expect(config.chipKinds.tag).toBe(false)
     expect(config.chipKinds.branch).toBe(true)
     expect(config.cleanOptions.deleteMergedBranches).toBe(true)
-    expect(config.collapseUnmarked).toBe(false)
   })
 
   test("ignores a per-setting value with the wrong type", async () => {
@@ -218,7 +213,7 @@ describe("loadViewConfig", () => {
       tag: true,
     })
     expect(saved.some(([key]) => key === keys.chipKinds.tag)).toBe(false)
-    expect(saved).toHaveLength(7)
+    expect(saved).toHaveLength(6)
   })
 
   test("replaces an invalid stored setting during migration", async () => {
@@ -234,7 +229,7 @@ describe("loadViewConfig", () => {
     )
     expect(config.chipKinds.tag).toBe(false)
     expect(saved).toContainEqual([keys.chipKinds.tag, false])
-    expect(saved).toHaveLength(8)
+    expect(saved).toHaveLength(7)
   })
 
   test("uses the legacy value when the settings store is unreachable", async () => {
@@ -270,7 +265,7 @@ describe("loadViewConfig", () => {
       async () => {
         throw new Error("unwritable")
       },
-      JSON.stringify({ collapseUnmarked: true }),
+      JSON.stringify({ chipKinds: { tag: false } }),
       "desktop",
       () => {
         removed = true
@@ -279,7 +274,7 @@ describe("loadViewConfig", () => {
         failures.push(error)
       },
     )
-    expect(failures).toHaveLength(8)
+    expect(failures).toHaveLength(7)
     expect(removed).toBe(false)
   })
 })
