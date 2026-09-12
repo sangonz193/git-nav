@@ -118,6 +118,40 @@ const PATCH_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "
 
 const NUMSTAT_ARGUMENTS: [&str; 6] = ["diff", "--no-ext-diff", "--find-renames", "--find-copies", "--numstat", "-z"];
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiffStatFile {
+    path: String,
+    old_path: Option<String>,
+    // A binary file has no line counts.
+    additions: Option<u32>,
+    deletions: Option<u32>,
+}
+
+fn parse_numstat(output: &[u8]) -> Vec<DiffStatFile> {
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| String::from_utf8_lossy(field).into_owned());
+    let mut files = Vec::new();
+    while let Some(record) = fields.next() {
+        let mut columns = record.splitn(3, '\t');
+        let additions = columns.next().and_then(|count| count.parse().ok());
+        let deletions = columns.next().and_then(|count| count.parse().ok());
+        // A rename carries its two paths in the fields following the counts.
+        let (old_path, path) = match columns.next() {
+            Some(path) if !path.is_empty() => (None, path.to_string()),
+            _ => {
+                let Some(old_path) = fields.next() else { break };
+                let Some(path) = fields.next() else { break };
+                (Some(old_path), path)
+            }
+        };
+        files.push(DiffStatFile { path, old_path, additions, deletions });
+    }
+    files
+}
+
 fn whitespace_arguments(ignore_whitespace: bool) -> &'static [&'static str] {
     if ignore_whitespace {
         &["--ignore-all-space"]
@@ -419,9 +453,30 @@ pub(crate) fn diff_file(
     file_diff(&repo_path, &base_sha, &head_sha, old_path, new_path, ignore_whitespace)
 }
 
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+pub(crate) fn diff_stat(repo_path: String, base: String, head: String) -> Result<Vec<DiffStatFile>, String> {
+    let base = crate::git::resolve_commit(&repo_path, &base)?;
+    let head = crate::git::resolve_commit(&repo_path, &head)?;
+    let output = git_output_bytes(&repo_path, &[&NUMSTAT_ARGUMENTS[..], &[base.as_str(), head.as_str()]].concat())
+        .ok_or_else(|| "git diff failed.".to_string())?;
+    Ok(parse_numstat(&output))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_counts_renames_and_binaries_from_numstat() {
+        let files = parse_numstat(b"3\t1\tsrc/a.rs\0-\t-\timage.png\00\t0\t\0old.txt\0new.txt\0");
+
+        assert_eq!(files.len(), 3);
+        assert_eq!((files[0].path.as_str(), files[0].additions, files[0].deletions), ("src/a.rs", Some(3), Some(1)));
+        assert_eq!((files[1].path.as_str(), files[1].additions, files[1].deletions), ("image.png", None, None));
+        assert_eq!(files[2].old_path.as_deref(), Some("old.txt"));
+        assert_eq!(files[2].path, "new.txt");
+    }
 
     #[test]
     fn counts_the_rows_each_file_of_a_patch_renders() {
