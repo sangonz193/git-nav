@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { commitSelection, displayRefs, refSelection } from "./commit-graph"
-import { canDiffSelection } from "./selection-diff"
+import { canDiffSelection, rangeBaseHash } from "./selection-diff"
 
 function commit(hash: string, parents: string[] = [], refs: string[] = []) {
   return {
@@ -21,6 +21,14 @@ function commit(hash: string, parents: string[] = [], refs: string[] = []) {
 
 const history = [commit("a", ["b"]), commit("b", ["c"]), commit("c")]
 
+describe("rangeBaseHash", () => {
+  test("prefers the loaded base and falls back to the oldest parent", () => {
+    expect(rangeBaseHash(commitSelection(history, 0, 1)!)).toBe("c")
+    expect(rangeBaseHash(commitSelection(history.slice(0, 2), 0, 1)!)).toBe("c")
+    expect(rangeBaseHash(commitSelection(history, 0, 2)!)).toBeNull()
+  })
+})
+
 describe("canDiffSelection", () => {
   test("allows a single commit with a parent", () => {
     expect(canDiffSelection(commitSelection(history, 0, 0)!, "main")).toBe(true)
@@ -36,10 +44,16 @@ describe("canDiffSelection", () => {
     expect(canDiffSelection(commitSelection(history, 0, 1)!, "main")).toBe(true)
   })
 
-  test("disallows a range without a loaded base", () => {
+  test("allows a range whose base sits outside the loaded graph", () => {
     expect(
       canDiffSelection(commitSelection(history.slice(0, 2), 0, 1)!, "main"),
-    ).toBe(false)
+    ).toBe(true)
+  })
+
+  test("disallows a range that reaches a root commit", () => {
+    expect(canDiffSelection(commitSelection(history, 0, 2)!, "main")).toBe(
+      false,
+    )
   })
 
   test("disallows a ref on the default branch", () => {

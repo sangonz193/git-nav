@@ -18,6 +18,7 @@ import {
   type Selection,
 } from "./commit-graph"
 import { OperationMenuItems } from "./commit-operation-menu"
+import { rangeBaseHash } from "./selection-diff"
 import type { RefMenuComponents } from "./commit-operations"
 import {
   DANGER_GROUPS,
@@ -282,7 +283,7 @@ function RangeBody({
 }) {
   const files = useDiffStat(
     repoPath,
-    selection.base?.hash ?? null,
+    rangeBaseHash(selection),
     selection.tip.hash,
   )
   return (
