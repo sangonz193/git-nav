@@ -61,6 +61,14 @@ type RefDivergence = {
   behindTotal: number
 }
 
+type TagDetails = {
+  tagger: string
+  taggerEmail: string
+  date: string
+  subject: string
+  body: string
+}
+
 const listComponents: RefMenuComponents = {
   Item: ({ children, className, disabled, onSelect, title }) => (
     <button
@@ -409,10 +417,7 @@ function RefBody({
   const { ref } = selection
   const pullRequest = ref.pullRequest
   const reference = refName(ref)
-  const against = divergenceTarget(
-    ref,
-    menus.repository?.defaultBranch,
-  )
+  const against = divergenceTarget(ref, menus.repository?.defaultBranch)
   const divergence = useQuery({
     enabled: against !== null,
     queryFn: () =>
@@ -431,6 +436,21 @@ function RefBody({
     ],
     retry: false,
   })
+  const tagDetails = useQuery({
+    enabled: ref.kind === "tag",
+    queryFn: () =>
+      invoke<TagDetails | null>("tag_details", { repoPath, tag: reference }),
+    queryKey: [
+      "tag-details",
+      repoPath,
+      ref.kind,
+      reference,
+      selection.sha,
+      refreshKey,
+    ],
+    retry: false,
+  })
+  const tagBody = tagDetails.data?.body.trim()
   return (
     <>
       <dl className="commit-graph-details-fields">
@@ -456,6 +476,15 @@ function RefBody({
             >
               {relativeDate(tipCommit.date)}
             </time>
+          </Field>
+        )}
+        {ref.kind === "tag" && tagDetails.data && (
+          <Field label="Tagger">
+            <Person
+              date={tagDetails.data.date}
+              email={tagDetails.data.taggerEmail}
+              name={tagDetails.data.tagger}
+            />
           </Field>
         )}
         {ref.sync && (
@@ -492,6 +521,21 @@ function RefBody({
           </Field>
         ))}
       </dl>
+      {ref.kind === "tag" && tagDetails.data && (
+        <section className="commit-graph-details-section">
+          <p className="font-medium wrap-break-word">
+            {tagDetails.data.subject || "(no subject)"}
+          </p>
+          {tagBody && (
+            <p className="commit-graph-details-message text-muted-foreground">
+              {tagBody}
+            </p>
+          )}
+        </section>
+      )}
+      {ref.kind === "tag" && tagDetails.error && (
+        <QueryError error={tagDetails.error} />
+      )}
       {divergence.data && against && (
         <>
           <DivergenceList

@@ -353,6 +353,45 @@ pub(crate) fn ref_divergence(repo_path: String, reference: String, against: Stri
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TagDetails {
+    tagger: String,
+    tagger_email: String,
+    date: String,
+    subject: String,
+    body: String,
+}
+
+fn parse_tag_details(output: &str) -> Option<TagDetails> {
+    let mut fields = output.splitn(6, '\0');
+    if fields.next()? != "tag" {
+        return None;
+    }
+    Some(TagDetails {
+        tagger: fields.next()?.to_string(),
+        tagger_email: fields.next()?.to_string(),
+        date: fields.next()?.to_string(),
+        subject: fields.next()?.to_string(),
+        body: fields.next()?.to_string(),
+    })
+}
+
+#[git_nav_macros::http_command]
+#[tauri::command(async)]
+pub(crate) fn tag_details(repo_path: String, tag: String) -> Result<Option<TagDetails>, String> {
+    let reference = format!("refs/tags/{tag}");
+    let output = git_output_allow_empty(
+        &repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(objecttype)%00%(taggername)%00%(taggeremail:trim)%00%(taggerdate:iso-strict)%00%(contents:subject)%00%(contents:body)",
+            &reference,
+        ],
+    )?;
+    Ok(parse_tag_details(&output))
+}
+
 #[tauri::command]
 pub(crate) fn stream_commit_graph(
     repo_path: String,
@@ -436,6 +475,24 @@ mod tests {
         assert_eq!((divergence.ahead_total, divergence.behind_total), (2, 1));
         assert_eq!(divergence.ahead.iter().map(|commit| commit.subject.as_str()).collect::<Vec<_>>(), ["feature ahead two", "feature ahead one"]);
         assert_eq!(divergence.behind[0].subject, "main ahead");
+    }
+
+    #[test]
+    fn reads_annotated_tag_details() {
+        let (path, run) = scratch_repository("tag-details");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["tag", "--annotate", "release", "--message", "release subject", "--message", "release body"]);
+        run(&["tag", "lightweight"]);
+
+        let details = tag_details(path.clone(), "release".to_string()).unwrap().unwrap();
+        let lightweight = tag_details(path.clone(), "lightweight".to_string()).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(details.tagger, "Tests");
+        assert_eq!(details.tagger_email, "tests@example.com");
+        assert_eq!(details.subject, "release subject");
+        assert_eq!(details.body, "release body\n\n");
+        assert!(lightweight.is_none());
     }
 
     #[test]
