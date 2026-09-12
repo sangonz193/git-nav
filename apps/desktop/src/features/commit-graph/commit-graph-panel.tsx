@@ -9,7 +9,6 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
 import { invoke } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
-import { createUserWinningRestore } from "@/lib/pending-restore"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 import {
   openPullRequest,
@@ -56,7 +55,6 @@ import {
   chipLabel,
   chipName,
   clampGraphWidth,
-  commitSelection,
   displayRefs,
   fitGraphWidth,
   GRAPH_HEADER_HEIGHT,
@@ -66,11 +64,8 @@ import {
   isCurrentCheckout,
   laneColor,
   persistedGraphPanelParams,
-  persistedSelectionHashes,
-  persistedSelectionRestore,
   REF_BUDGET_SHARE,
   refName,
-  refSelection,
   relativeDate,
   ROW_HEIGHT,
   unpushedHashes,
@@ -79,7 +74,6 @@ import {
   type RowWorktree,
   type Commit,
   type CommitSelection,
-  type DisplayRef,
   type Selection,
   type StashEntry,
 } from "./commit-graph"
@@ -118,6 +112,7 @@ import {
 import { useBranchCleanup } from "./use-branch-cleanup"
 import { useGraphData } from "./use-graph-data"
 import { useGraphSearch } from "./use-graph-search"
+import { useGraphSelection } from "./use-graph-selection"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 
 const EMPTY_COMMITS: Commit[] = []
@@ -127,9 +122,6 @@ const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TOAST_DURATION = 10_000
 type BranchSelection = { baseRef: string; headRef: string }
-type RangeDrag = { anchorIndex: number; focusIndex: number }
-type SelectedRef = { ref: DisplayRef; sha: string }
-type SelectionRange = { anchorHash: string; focusHash: string }
 const commitTableFeatures = tableFeatures({
   columnSizingFeature,
   columnResizingFeature,
@@ -197,11 +189,6 @@ function CommitGraphPanelContent({
   const [error, setError] = useState<string | null>(null)
   const cleanOptions = config.cleanOptions
   const [request, setRequest] = useState<OperationRequest | null>(null)
-  const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(
-    null,
-  )
-  const [selectedRef, setSelectedRef] = useState<SelectedRef | null>(null)
-  const [rangeDrag, setRangeDrag] = useState<RangeDrag | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
   const [rowHeight, setRowHeight] = useState(ROW_HEIGHT)
@@ -211,20 +198,6 @@ function CommitGraphPanelContent({
   const [collapseUnmarked, setCollapseUnmarked] = useState(
     params.userPreferences?.collapseUnmarked ?? true,
   )
-  const selectionRestore = useRef(
-    createUserWinningRestore(params.selectedCommitHashes !== undefined),
-  ).current
-  const [selectionRestored, setSelectionRestored] = useState(
-    !selectionRestore.pending,
-  )
-  const beginUserSelection = useCallback(() => {
-    selectionRestore.userAction(() => setSelectionRestored(true))
-  }, [selectionRestore])
-  const clearSelection = useCallback(() => {
-    beginUserSelection()
-    setSelectionRange(null)
-    setSelectedRef(null)
-  }, [beginUserSelection])
   // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
   const scrollElement = useRef<HTMLDivElement>(null)
@@ -270,6 +243,48 @@ function CommitGraphPanelContent({
     repoPath: params.path,
   })
   const commitsRef = useRef(commits)
+  const persistSelection = useCallback(
+    (selectedCommitHashes: string[]) =>
+      api.updateParameters(
+        persistedGraphPanelParams(
+          params.name,
+          params.path,
+          selectedCommitHashes,
+          columnSizing,
+          collapseUnmarked,
+        ),
+      ),
+    [api, collapseUnmarked, columnSizing, params.name, params.path],
+  )
+  const {
+    beginUserSelection,
+    canSelectRange,
+    clearSelection,
+    commitsSelection,
+    rangeDrag,
+    rowTarget,
+    selectCommit,
+    selectCommitFromKeyboard,
+    selectRangeTo,
+    selectRef,
+    selectedHashes,
+    selectedRef,
+    selection,
+    selectionEdges,
+    selectionRange,
+    setRangeDrag,
+    setSelectedRef,
+    setSelectionRange,
+  } = useGraphSelection({
+    branchSync,
+    commits,
+    isGraphWindowLoading,
+    persist: persistSelection,
+    persistedHashes: params.selectedCommitHashes,
+    pullRequests,
+    remotes,
+    worktreesByHead,
+  })
   const table = useTable({
     columnResizeMode: "onChange",
     onColumnSizingChange: setColumnSizing,
@@ -289,158 +304,7 @@ function CommitGraphPanelContent({
     () => commits.findIndex((commit) => isCurrentCheckout(commit.refs)),
     [commits],
   )
-  const commitsSelection = useMemo(() => {
-    if (rangeDrag) {
-      return commitSelection(
-        commits,
-        rangeDrag.anchorIndex,
-        rangeDrag.focusIndex,
-        remotes,
-      )
-    }
-    if (!selectionRange) {
-      return null
-    }
-    const anchorIndex = commits.findIndex(
-      (commit) => commit.hash === selectionRange.anchorHash,
-    )
-    const focusIndex = commits.findIndex(
-      (commit) => commit.hash === selectionRange.focusHash,
-    )
-    return anchorIndex === -1 || focusIndex === -1 ?
-        null
-      : commitSelection(commits, anchorIndex, focusIndex, remotes)
-  }, [commits, rangeDrag, remotes, selectionRange])
-  // A ref selection outlives the graph it was made on, so it is re-read from the commit it sits on after every
-  // refresh and falls back to what it was made from while the graph it belongs to is still streaming in.
-  const selection = useMemo<Selection | null>(() => {
-    if (!selectedRef) {
-      return commitsSelection
-    }
-    const commit = commits.find(
-      (candidate) => candidate.hash === selectedRef.sha,
-    )
-    const ref =
-      commit &&
-      displayRefs(commit.refs, {
-        branchSync,
-        pullRequests,
-        remotes,
-        worktrees: worktreesByHead.get(selectedRef.sha),
-      }).find((candidate) => refName(candidate) === refName(selectedRef.ref))
-    return refSelection(ref ?? selectedRef.ref, selectedRef.sha)
-  }, [
-    branchSync,
-    commits,
-    commitsSelection,
-    pullRequests,
-    remotes,
-    selectedRef,
-    worktreesByHead,
-  ])
-  const selectedHashes = useMemo(
-    () => new Set(commitsSelection?.commits.map((commit) => commit.hash)),
-    [commitsSelection],
-  )
-  const selectedCommitHashes = useMemo(
-    () => persistedSelectionHashes(selectionRange),
-    [selectionRange],
-  )
 
-  useEffect(() => {
-    if (
-      !selectionRestore.pending ||
-      params.selectedCommitHashes === undefined
-    ) {
-      return
-    }
-    const restored = persistedSelectionRestore(
-      commits,
-      params.selectedCommitHashes,
-      isGraphWindowLoading,
-    )
-    if (restored === undefined) {
-      return
-    }
-    selectionRestore.restore(() => {
-      api.updateParameters(
-        persistedGraphPanelParams(
-          params.name,
-          params.path,
-          restored.selectedCommitHashes,
-          columnSizing,
-          collapseUnmarked,
-        ),
-      )
-      setSelectionRange(restored.range)
-      setSelectionRestored(true)
-    })
-  }, [
-    api,
-    collapseUnmarked,
-    columnSizing,
-    commits,
-    isGraphWindowLoading,
-    params.name,
-    params.path,
-    params.selectedCommitHashes,
-    selectionRestore,
-  ])
-
-  useEffect(() => {
-    if (!selectionRestored) {
-      return
-    }
-    api.updateParameters(
-      persistedGraphPanelParams(
-        params.name,
-        params.path,
-        selectedCommitHashes,
-        columnSizing,
-        collapseUnmarked,
-      ),
-    )
-  }, [
-    api,
-    collapseUnmarked,
-    columnSizing,
-    params.name,
-    params.path,
-    selectedCommitHashes,
-    selectionRestored,
-  ])
-  const selectionEndpointIndexes = useMemo(
-    () =>
-      selectionRange ?
-        {
-          anchor: commits.findIndex(
-            (commit) => commit.hash === selectionRange.anchorHash,
-          ),
-          focus: commits.findIndex(
-            (commit) => commit.hash === selectionRange.focusHash,
-          ),
-        }
-      : null,
-    [commits, selectionRange],
-  )
-  // The dragged end can be either the newer or the older one, so the brackets follow the rows, not the anchor.
-  // A drag in flight is read from the drag itself, so the bracket stays under the pointer moving it.
-  const selectionEdges = useMemo(() => {
-    if (!commitsSelection) {
-      return null
-    }
-    const ends =
-      rangeDrag ?
-        { anchor: rangeDrag.anchorIndex, focus: rangeDrag.focusIndex }
-      : selectionEndpointIndexes
-    if (!ends || ends.anchor === -1 || ends.focus === -1) {
-      return null
-    }
-    return {
-      top: Math.min(ends.anchor, ends.focus),
-      bottom: Math.max(ends.anchor, ends.focus),
-    }
-  }, [commitsSelection, rangeDrag, selectionEndpointIndexes])
   const search = useGraphSearch({ commits, remotes, stashesByBase })
   const unpushed = useMemo(
     () => unpushedHashes(commits, remotes),
@@ -707,19 +571,6 @@ function CommitGraphPanelContent({
     element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
     refreshAnchor.current = null
   }, [commits, rowHeight, rowOfCommit])
-
-  useEffect(() => {
-    if (!selection) {
-      return
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        clearSelection()
-      }
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [clearSelection, selection])
 
   useEffect(() => {
     if (canvas.current) {
@@ -1001,16 +852,6 @@ function CommitGraphPanelContent({
       : `${SELECTION_LABELS[selection.kind]} · ${refName(selection.ref)}`
   }
 
-  function selectRef(ref: DisplayRef, sha: string) {
-    beginUserSelection()
-    setSelectionRange(null)
-    setSelectedRef((current) =>
-      current && refName(current.ref) === refName(ref) && current.sha === sha ?
-        null
-      : { ref, sha },
-    )
-  }
-
   function onOperationCompleted(result: CompletedOperation) {
     setRequest(null)
     toast(result.summary, {
@@ -1034,39 +875,6 @@ function CommitGraphPanelContent({
     clearConflictPredictions()
     refreshWorktreeStatus()
     refreshGraph()
-  }
-
-  // Right-clicking inside the selection keeps it whole, and right-clicking outside it acts on the row under the pointer.
-  function rowTarget(index: number) {
-    return selectedHashes.has(commits[index].hash) && commitsSelection ?
-        commitsSelection
-      : commitSelection(commits, index, index)!
-  }
-
-  function canSelectRange(index: number) {
-    return (
-      selectionEndpointIndexes !== null &&
-      selectionEndpointIndexes.anchor !== -1 &&
-      ancestryPath(commits, selectionEndpointIndexes.anchor, index).length > 0
-    )
-  }
-
-  function selectCommit(commit: Commit) {
-    beginUserSelection()
-    setSelectedRef(null)
-    setSelectionRange({ anchorHash: commit.hash, focusHash: commit.hash })
-  }
-
-  function selectRangeTo(commit: Commit) {
-    if (!selectionEndpointIndexes) {
-      return
-    }
-    beginUserSelection()
-    setSelectedRef(null)
-    setSelectionRange({
-      anchorHash: commits[selectionEndpointIndexes.anchor].hash,
-      focusHash: commit.hash,
-    })
   }
 
   function startRangeDrag(
@@ -1203,32 +1011,6 @@ function CommitGraphPanelContent({
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
     window.addEventListener("pointercancel", onPointerCancel)
-  }
-
-  function selectCommitFromKeyboard(
-    event: ReactKeyboardEvent<HTMLElement>,
-    index: number,
-  ) {
-    if (
-      event.target !== event.currentTarget ||
-      (event.key !== "Enter" && event.key !== " ")
-    ) {
-      return
-    }
-    event.preventDefault()
-    const anchorIndex =
-      event.shiftKey && selectionRange ?
-        commits.findIndex((commit) => commit.hash === selectionRange.anchorHash)
-      : index
-    const rangeAnchorIndex = anchorIndex === -1 ? index : anchorIndex
-    if (ancestryPath(commits, rangeAnchorIndex, index).length > 0) {
-      beginUserSelection()
-      setSelectedRef(null)
-      setSelectionRange({
-        anchorHash: commits[rangeAnchorIndex].hash,
-        focusHash: commits[index].hash,
-      })
-    }
   }
 
   const menus: ChipMenuContext = {
