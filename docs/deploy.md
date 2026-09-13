@@ -47,5 +47,8 @@ git push origin v0.0.2
 the workspace install runs from the repository root. `git-nav.dev` and `www.git-nav.dev` point at
 it.
 
+See [search discovery](site-discovery.md) for search-engine verification, page submission,
+public metadata and ongoing measurement.
+
 Screenshots under `apps/site/public/screenshots` are captured from the app itself, at a 1440 pixel
 wide viewport and a device pixel ratio of 2, against a repository with tags and open pull requests.

@@ -53,7 +53,7 @@ export function DownloadCta({ platforms }: { platforms: PlatformDownloads[] }) {
         ))}
         <a
           className="underline-offset-4 hover:text-foreground hover:underline"
-          href={RELEASES}
+          href="/download#installers"
         >
           {alternates.length > 0 ?
             "Other platforms"

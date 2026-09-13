@@ -1,7 +1,17 @@
 {
   "name": "git-nav",
   "version": "0.0.22",
-  "description": "Read Git history, worktrees and diffs",
+  "description": "A free, open-source Git GUI for macOS, Windows and Linux: commit graphs, diffs, worktrees, staging and branch cleanup.",
+  "keywords": [
+    "git",
+    "git-gui",
+    "git-client",
+    "git-worktree",
+    "git-diff",
+    "squash-merge",
+    "desktop"
+  ],
+  "license": "MIT",
   "type": "module",
   "bin": {
     "git-nav": "./bin/git-nav.js"
@@ -12,7 +22,7 @@
     "url": "git+https://github.com/sangonz193/git-nav.git",
     "directory": "packages/cli"
   },
-  "homepage": "https://github.com/sangonz193/git-nav",
+  "homepage": "https://git-nav.dev",
   "files": [
     "bin",
     "README.md"

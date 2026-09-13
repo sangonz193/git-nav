@@ -1,6 +1,8 @@
 # Git Nav
 
-Read Git history, worktrees and diffs. A desktop app for macOS, Windows and Linux.
+[Git Nav](https://git-nav.dev) is a free, open-source Git client for macOS, Windows and Linux.
+Explore a collapsible commit graph, compare branches, manage worktrees, stage and commit changes,
+and clean up squash-merged branches.
 
 ![Git Nav showing Git's own repository, with runs of unreferenced commits collapsed into single rows](apps/site/public/screenshots/graph-collapsed.png)
 
@@ -39,7 +41,14 @@ updates itself from signed releases.
 Pull request state reads through the [`gh` CLI](https://cli.github.com), so it uses the GitHub login
 you already have. Without it, everything else still works.
 
-More at [git-nav.dev](https://git-nav.dev).
+## Guides
+
+- [Delete squash-merged Git branches](https://git-nav.dev/guides/delete-squash-merged-branches)
+- [Use Git worktrees with a Git GUI](https://git-nav.dev/guides/git-worktrees)
+- [Compare Git branches: two dots vs. three dots](https://git-nav.dev/guides/compare-git-branches)
+- [Stage and commit changes](https://git-nav.dev/guides/stage-and-commit)
+
+See [downloads and requirements](https://git-nav.dev/download) for every supported platform.
 
 ## Browser access
 

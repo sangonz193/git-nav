@@ -5,6 +5,7 @@ export function Shot({
   caption,
   height,
   priority,
+  sizes = "(max-width: 1440px) calc(100vw - 48px), 1392px",
   src,
   width,
 }: {
@@ -12,6 +13,7 @@ export function Shot({
   caption?: string
   height: number
   priority?: boolean
+  sizes?: string
   src: string
   width: number
 }) {
@@ -22,6 +24,7 @@ export function Shot({
           alt={alt}
           height={height}
           priority={priority}
+          sizes={sizes}
           src={src}
           width={width}
         />

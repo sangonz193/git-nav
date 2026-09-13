@@ -40,6 +40,7 @@ test("offers the installer for each platform, newest architecture first", () => 
     "AppImage (x64)",
     "deb (x64)",
     "rpm (x64)",
+    "AppImage (arm64)",
   ])
 })
 
@@ -52,4 +53,23 @@ test("leaves a platform empty when its build is missing", () => {
   const assets = ASSETS.filter((asset) => !asset.name.startsWith("win32-"))
   expect(builds(assets, "windows")).toEqual([])
   expect(builds(assets, "mac")).toHaveLength(2)
+})
+
+test("offers Linux arm64 packages only when the release contains them", () => {
+  const packages = [
+    "linux-arm64-git-nav_0.0.6_arm64.deb",
+    "linux-arm64-git-nav-0.0.6-1.aarch64.rpm",
+  ].map((name) => ({
+    name,
+    browser_download_url: `https://example.test/${name}`,
+  }))
+
+  expect(builds([...ASSETS, ...packages], "linux").slice(-3)).toEqual([
+    {
+      label: "AppImage (arm64)",
+      url: "https://example.test/linux-arm64-git-nav_0.0.6_aarch64.AppImage",
+    },
+    { label: "deb (arm64)", url: packages[0].browser_download_url },
+    { label: "rpm (arm64)", url: packages[1].browser_download_url },
+  ])
 })
