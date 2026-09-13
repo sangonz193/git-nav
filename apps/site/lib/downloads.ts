@@ -13,9 +13,9 @@ const LATEST_RELEASE =
   "https://api.github.com/repos/sangonz193/git-nav/releases/latest"
 
 const NAMES: Record<PlatformKey, string> = {
-  linux: "Linux",
   mac: "macOS",
   windows: "Windows",
+  linux: "Linux",
 }
 
 // Release assets are named after the platform they were built on, which is what tells two builds of
@@ -57,6 +57,24 @@ const BUILDS: {
     label: "rpm (x64)",
     platform: "linux",
     prefix: "linux-x64",
+  },
+  {
+    extension: ".AppImage",
+    label: "AppImage (arm64)",
+    platform: "linux",
+    prefix: "linux-arm64",
+  },
+  {
+    extension: ".deb",
+    label: "deb (arm64)",
+    platform: "linux",
+    prefix: "linux-arm64",
+  },
+  {
+    extension: ".rpm",
+    label: "rpm (arm64)",
+    platform: "linux",
+    prefix: "linux-arm64",
   },
 ]
 

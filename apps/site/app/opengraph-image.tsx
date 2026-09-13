@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { ImageResponse } from "next/og"
+import { HOME_HEADLINE } from "@/lib/site"
 
 export const alt =
   "Git Nav: a Git client that hides the commits nobody points at"
@@ -54,7 +55,7 @@ export default async function Image() {
             lineHeight: 1.05,
           }}
         >
-          A Git client that hides the commits nobody points at.
+          {HOME_HEADLINE}
         </div>
         <div
           style={{
