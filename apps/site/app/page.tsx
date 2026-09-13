@@ -21,7 +21,7 @@ const features = [
   },
   {
     title: "Tabs that survive the day",
-    body: "Graphs and diffs open in tabs you can split and drag. The layout is saved per repository, and a closed tab reopens from the keyboard.",
+    body: "Graphs, diffs and working trees open in tabs you can split and drag. The layout is saved per repository, and a closed tab reopens from the keyboard.",
   },
   {
     title: "Search that reaches the whole graph",
@@ -65,8 +65,9 @@ export default async function Home() {
           <p className="mt-6 max-w-2xl text-lg text-pretty text-muted-foreground">
             Everything something points at keeps its row: branches, tags,
             worktrees, stashes and pull request state. Beside the graph, a diff
-            between any two references and seventeen operations that predict
-            their conflicts before they run.
+            between any two references, a working tree to stage and commit from,
+            and twenty-one operations that predict their conflicts before they
+            run.
           </p>
 
           <div className="mt-10 flex max-w-xl flex-col items-center space-y-5">
@@ -83,7 +84,7 @@ export default async function Home() {
 
         <Shot
           alt="Git Nav showing Git's own repository, with runs of unreferenced commits collapsed into single rows"
-          caption="Two thousand commits of Git's own history, in the ten rows something points at. Every run opens where it sits."
+          caption="Two thousand commits of Git's own history, in the eight rows something points at. Every run opens where it sits."
           height={1280}
           priority
           src="/screenshots/graph-collapsed.png"
@@ -134,6 +135,8 @@ export default async function Home() {
             <li>Read a comparison without its whitespace</li>
             <li>Fold a file away from its header</li>
             <li>Filter down to what you have not read</li>
+            <li>Images before and after, with their dimensions</li>
+            <li>A root commit against the empty tree</li>
           </ul>
           <div className="mt-10">
             <Shot
@@ -147,10 +150,34 @@ export default async function Home() {
 
         <section className="pt-24">
           <h2 className="max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+            Stage and commit beside the graph
+          </h2>
+          <p className="mt-5 max-w-2xl text-pretty text-muted-foreground">
+            A working tree tab lists what is staged and what is not, in the same
+            cards the diff uses. A file's checkbox is the index itself, so
+            staging done in a terminal or an editor shows up here and staging
+            done here shows up there, and a partially staged file reads against
+            HEAD and against the working tree separately. Write the message and
+            commit. The tab belongs to one worktree and moves between them from
+            its toolbar; a branch chip in the graph opens it on the worktree
+            that branch is checked out in.
+          </p>
+          <div className="mt-10">
+            <Shot
+              alt="The working tree tab, with two staged files, one unstaged file and a commit message"
+              height={1560}
+              src="/screenshots/working-tree.png"
+              width={2880}
+            />
+          </div>
+        </section>
+
+        <section className="pt-24">
+          <h2 className="max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
             Operations that say what they will do
           </h2>
           <p className="mt-5 max-w-2xl text-pretty text-muted-foreground">
-            Seventeen operations, from checkout and merge to rebase,
+            Twenty-one operations, from checkout and merge to rebase,
             cherry-pick, revert, reset and push, read off the two things you
             picked and offer only what applies to them. Each one predicts its
             conflicts before it runs and reports every reference it moved, with
@@ -161,6 +188,21 @@ export default async function Home() {
               alt="The commit menu, listing the operations available for the selected commit"
               height={1400}
               src="/screenshots/commit-menu.png"
+              width={2880}
+            />
+          </div>
+          <p className="mt-10 max-w-2xl text-pretty text-muted-foreground">
+            Select a branch or a tag and a sheet beside the graph reads out
+            where it stands: the tip, the upstream, the pull request raised from
+            it, and the commits it is ahead of and behind the default branch,
+            with the operations that apply to it underneath.
+          </p>
+          <div className="mt-10">
+            <Shot
+              alt="The selection sheet for a branch, listing its tip, upstream, pull request, the commits it is ahead and behind, and its actions"
+              caption="A branch four commits ahead of main and three behind, read without checking it out."
+              height={1400}
+              src="/screenshots/selection.png"
               width={2880}
             />
           </div>

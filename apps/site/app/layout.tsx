@@ -16,14 +16,12 @@ export const metadata: Metadata = {
     description,
     url: "https://git-nav.dev",
     siteName: "Git Nav",
-    images: ["/og.png"],
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
     title: "Git Nav",
     description,
-    images: ["/og.png"],
   },
 }
 

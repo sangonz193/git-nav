@@ -27,7 +27,9 @@ updates itself from signed releases.
   state, with a switch that folds every commit nothing points at into a run you can open in place.
 - A diff between any two references, directly or from the point they forked, split or unified, with
   the files you have read marked against the patch you read them at.
-- Seventeen operations, from checkout and merge to rebase, cherry-pick, revert and reset, each one
+- A working tree tab that stages and commits through the index itself, so what you stage in a
+  terminal shows up here and the other way round.
+- Twenty-one operations, from checkout and merge to rebase, cherry-pick, revert and reset, each one
   predicting its conflicts before it runs and reporting every reference it moved.
 - Branch cleanup that recognises a squash merge by content, not by ancestry, and previews what it
   would delete grouped by reason.
