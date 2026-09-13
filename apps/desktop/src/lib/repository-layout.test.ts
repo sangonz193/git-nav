@@ -18,7 +18,7 @@ const path = "/projects/git-nav"
 
 function serializedPanel(
   id: string,
-  contentComponent: "graph" | "diff",
+  contentComponent: "graph" | "diff" | "working-tree",
   params: Record<string, unknown>,
 ): GroupviewPanelState {
   return { id, contentComponent, params }
@@ -142,6 +142,67 @@ describe("usableRepositoryLayout", () => {
       }),
     ).toEqual([])
     expect(revisions).toEqual(["HEAD"])
+  })
+
+  test("accepts a working tree tab and rejects preferences it cannot read back", () => {
+    const value = storedLayout()
+    const withWorkingTree = (params: Record<string, unknown>) => ({
+      ...value,
+      layout: {
+        ...value.layout,
+        panels: {
+          ...value.layout.panels,
+          tree: serializedPanel("tree", "working-tree", {
+            name: "git-nav",
+            path: "/projects/git-nav-feature",
+            ...params,
+          }),
+        },
+      },
+    })
+    expect(
+      usableRepositoryLayout(
+        withWorkingTree({
+          selectedFilePath: "src/main.rs",
+          userPreferences: { fileTreeOpen: false, mode: "unified", wrap: true },
+        }),
+        path,
+      ),
+    ).not.toBeNull()
+    expect(
+      usableRepositoryLayout(
+        withWorkingTree({ userPreferences: { hideViewed: true } }),
+        path,
+      ),
+    ).toBeNull()
+  })
+
+  test("drops a working tree tab whose worktree is gone", async () => {
+    const value = storedLayout()
+    const layout = usableRepositoryLayout(
+      {
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            ...value.layout.panels,
+            tree: serializedPanel("tree", "working-tree", {
+              name: "git-nav",
+              path: "/projects/removed",
+            }),
+          },
+        },
+      },
+      path,
+    )
+    const revisions: [string, string][] = []
+    expect(
+      await unresolvablePanelIds(layout!, async (panelPath, revision) => {
+        revisions.push([panelPath, revision])
+        throw new Error("no such worktree")
+      }),
+    ).toEqual(["tree"])
+    expect(revisions).toEqual([["/projects/removed", ":worktree"]])
   })
 
   test("identifies only panels with unresolvable persisted revisions", async () => {

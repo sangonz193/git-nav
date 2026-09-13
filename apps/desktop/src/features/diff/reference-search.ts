@@ -40,7 +40,8 @@ export type ReferenceSources = {
 }
 
 export function isRevisionExpression(query: string) {
-  return REVISION_EXPRESSION.test(query.trim())
+  const revision = query.trim()
+  return revision !== WORKTREE_REF && REVISION_EXPRESSION.test(revision)
 }
 
 function worktreeHit(): ReferenceHit {

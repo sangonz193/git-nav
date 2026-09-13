@@ -1,4 +1,4 @@
-export function panelId(kind: "graph" | "diff") {
+export function panelId(kind: "graph" | "diff" | "working-tree") {
   const suffix =
     crypto.randomUUID?.() ??
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`

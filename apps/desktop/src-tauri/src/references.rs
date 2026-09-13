@@ -1,5 +1,5 @@
 use serde::Serialize;
-use crate::git::{git_output_allow_empty, resolve_commit};
+use crate::git::{WORKTREE_REF, git_output_allow_empty, resolve_commit, worktree_path};
 use crate::graph::{graph_revisions, parse_commit};
 
 const REFERENCE_FORMAT: &str = "%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(contents:subject)%00%(*contents:subject)%00%(creatordate:iso-strict)";
@@ -98,6 +98,10 @@ pub(crate) fn repository_references(repo_path: String) -> Result<Vec<Reference>,
 #[git_nav_macros::http_command]
 #[tauri::command(async)]
 pub(crate) fn resolve_revision(repo_path: String, revision: String) -> Result<ResolvedRevision, String> {
+    if revision == WORKTREE_REF {
+        worktree_path(&repo_path)?;
+        return Ok(ResolvedRevision { sha: String::new(), subject: String::new() });
+    }
     let sha = resolve_commit(&repo_path, &revision)?;
     let subject = git_output_allow_empty(&repo_path, &["log", "-1", "--format=%s", &sha])?;
     Ok(ResolvedRevision { sha, subject: subject.trim().to_string() })
@@ -106,6 +110,8 @@ pub(crate) fn resolve_revision(repo_path: String, revision: String) -> Result<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{remove_scratch_repository, scratch_repository};
+    use std::fs;
 
     #[test]
     fn reads_annotated_tags_through_their_dereference_and_drops_remote_heads() {
@@ -129,5 +135,21 @@ mod tests {
                 ("tag", "v1", "commit-sha", "Tagged commit"),
             ]
         );
+    }
+
+    #[test]
+    fn resolves_the_worktree_without_a_commit_only_for_a_repository() {
+        let (path, _run) = scratch_repository("resolve-worktree");
+        let non_repository = format!("{path}-not-repository");
+        let _ = fs::remove_dir_all(&non_repository);
+        fs::create_dir_all(&non_repository).unwrap();
+
+        let resolved = resolve_revision(path.clone(), WORKTREE_REF.to_string()).unwrap();
+
+        assert!(resolved.sha.is_empty());
+        assert!(resolved.subject.is_empty());
+        assert!(resolve_revision(non_repository.clone(), WORKTREE_REF.to_string()).is_err());
+        remove_scratch_repository(&non_repository);
+        remove_scratch_repository(&path);
     }
 }

@@ -19,6 +19,7 @@ mod sharing;
 mod stash;
 mod storage;
 mod window;
+mod working_tree;
 mod worktrees;
 #[cfg(test)]
 mod test_support;
@@ -120,6 +121,11 @@ commands![
     stash::stash_changes,
     stash::stash_action,
     operations::undo_ref_updates,
+    working_tree::working_tree,
+    working_tree::working_tree_fingerprint,
+    working_tree::stage_files,
+    working_tree::unstage_files,
+    working_tree::commit_changes,
     storage::settings,
     storage::set_setting,
     storage::repository_layout,

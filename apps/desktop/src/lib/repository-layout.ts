@@ -5,6 +5,8 @@ import type {
   DiffPanelUserPreferences,
   GraphPanelParams,
   GraphPanelUserPreferences,
+  WorkingTreePanelParams,
+  WorkingTreePanelUserPreferences,
 } from "./panel-params"
 
 import { createUserWinningRestore } from "./pending-restore"
@@ -72,22 +74,36 @@ const GRAPH_PARAM_MANDATORY = {
   name: true,
   path: true,
 } satisfies Mandatory<GraphPanelParams>
+const WORKING_TREE_PREFERENCE_MANDATORY =
+  {} satisfies Mandatory<WorkingTreePanelUserPreferences>
+const WORKING_TREE_PARAM_MANDATORY = {
+  name: true,
+  path: true,
+} satisfies Mandatory<WorkingTreePanelParams>
 
 // A guard may narrow to less than the field allows and still satisfy it, so the values of a field that is
 // a union are listed against the union itself rather than repeated inside a guard.
 const DIFF_MODES = { split: true, unified: true } satisfies Record<
-  NonNullable<DiffPanelUserPreferences["mode"]>,
+  | NonNullable<DiffPanelUserPreferences["mode"]>
+  | NonNullable<WorkingTreePanelUserPreferences["mode"]>,
   true
 >
+const isDiffMode = (value: unknown): value is keyof typeof DIFF_MODES =>
+  typeof value === "string" && Object.hasOwn(DIFF_MODES, value)
 
 const DIFF_PREFERENCE_CHECKS = {
   fileTreeOpen: isBoolean,
   hideViewed: isBoolean,
   ignoreWhitespace: isBoolean,
-  mode: (value): value is keyof typeof DIFF_MODES =>
-    typeof value === "string" && Object.hasOwn(DIFF_MODES, value),
+  mode: isDiffMode,
   wrap: isBoolean,
 } satisfies Checks<DiffPanelUserPreferences>
+
+const WORKING_TREE_PREFERENCE_CHECKS = {
+  fileTreeOpen: isBoolean,
+  mode: isDiffMode,
+  wrap: isBoolean,
+} satisfies Checks<WorkingTreePanelUserPreferences>
 
 const GRAPH_PREFERENCE_CHECKS = {
   collapseUnmarked: isBoolean,
@@ -123,6 +139,19 @@ const GRAPH_PARAM_CHECKS = {
     validFields(value, GRAPH_PREFERENCE_CHECKS, GRAPH_PREFERENCE_MANDATORY),
 } satisfies Checks<GraphPanelParams>
 
+const WORKING_TREE_PARAM_CHECKS = {
+  name: isString,
+  path: isString,
+  selectedFilePath: (value): value is string | null =>
+    value === null || isString(value),
+  userPreferences: (value): value is WorkingTreePanelUserPreferences =>
+    validFields(
+      value,
+      WORKING_TREE_PREFERENCE_CHECKS,
+      WORKING_TREE_PREFERENCE_MANDATORY,
+    ),
+} satisfies Checks<WorkingTreePanelParams>
+
 function validFields(
   value: unknown,
   checks: Record<string, Check<unknown>>,
@@ -150,6 +179,28 @@ function validDiffParams(params: PanelParams) {
   return validFields(params, DIFF_PARAM_CHECKS, DIFF_PARAM_MANDATORY)
 }
 
+function validWorkingTreeParams(params: PanelParams) {
+  return validFields(
+    params,
+    WORKING_TREE_PARAM_CHECKS,
+    WORKING_TREE_PARAM_MANDATORY,
+  )
+}
+
+const PANEL_PARAM_VALIDATORS = {
+  diff: validDiffParams,
+  graph: validGraphParams,
+  "working-tree": validWorkingTreeParams,
+}
+
+function isPanelComponent(
+  value: unknown,
+): value is keyof typeof PANEL_PARAM_VALIDATORS {
+  return (
+    typeof value === "string" && Object.hasOwn(PANEL_PARAM_VALIDATORS, value)
+  )
+}
+
 export function usableRepositoryLayout(
   value: unknown,
   path: string,
@@ -174,10 +225,7 @@ export function usableRepositoryLayout(
   }
   for (const panel of Object.values(layout.panels)) {
     const serialized = panel as SerializedPanel
-    if (
-      serialized.contentComponent !== "graph" &&
-      serialized.contentComponent !== "diff"
-    ) {
+    if (!isPanelComponent(serialized.contentComponent)) {
       return null
     }
     const params = serialized.params
@@ -188,11 +236,7 @@ export function usableRepositoryLayout(
     ) {
       return null
     }
-    if (
-      serialized.contentComponent === "graph" ?
-        !validGraphParams(params, path)
-      : !validDiffParams(params)
-    ) {
+    if (!PANEL_PARAM_VALIDATORS[serialized.contentComponent](params, path)) {
       return null
     }
   }
@@ -338,9 +382,16 @@ export function listenForRepositoryLayoutPageHide(
   return () => target.removeEventListener("pagehide", flush)
 }
 
+// A working tree tab is worth keeping for as long as its worktree exists.
 function panelRevisions(panel: SerializedPanel) {
   const params = panel.params
-  if (panel.contentComponent !== "diff" || typeof params?.path !== "string") {
+  if (typeof params?.path !== "string") {
+    return null
+  }
+  if (panel.contentComponent === "working-tree") {
+    return { path: params.path, revisions: [WORKTREE_REF] }
+  }
+  if (panel.contentComponent !== "diff") {
     return null
   }
   return {

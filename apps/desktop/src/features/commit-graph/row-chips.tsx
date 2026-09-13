@@ -74,6 +74,7 @@ export type ChipMenuContext = {
   openPullRequest: (url: string) => void
   openRefDiff: (reference: string) => void
   openStashDiff: (entry: StashEntry) => void
+  openWorkingTree: (worktree: RowWorktree) => void
   openWorktree: (path: string, target: WorktreeTarget) => void
   openWorktreeDiff: (worktree: RowWorktree) => void
   repository: RepositoryState | null
@@ -248,6 +249,17 @@ export function refMenuActions(
           </SubContent>
         </Sub>
       )}
+      {ref.worktrees.map((worktree) => (
+        <Item
+          key={`${worktree.path}-working-tree`}
+          onSelect={() => menus.openWorkingTree(worktree)}
+        >
+          <FilePen />
+          {ref.worktrees.length > 1 ?
+            `Stage and commit (${worktree.name})`
+          : "Stage and commit"}
+        </Item>
+      ))}
       <OperationMenuItems
         components={components}
         groups={DANGER_GROUPS}
@@ -450,6 +462,10 @@ function worktreeMenuItems(
           {`Show ${changes} uncommitted change${changes === 1 ? "" : "s"}`}
         </Item>
       )}
+      <Item onSelect={() => menus.openWorkingTree(worktree)}>
+        <FilePen />
+        Stage and commit
+      </Item>
       {worktreeOpenItems(menus, worktree, components)}
     </>
   )

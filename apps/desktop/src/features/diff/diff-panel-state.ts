@@ -126,9 +126,14 @@ export function changedFilesLabel(shown: number, changed: number) {
   return changed === 1 ? "1 file" : `${changed.toLocaleString()} files`
 }
 
+export type DiffLayoutPreferences = Pick<
+  DiffPanelUserPreferences,
+  "fileTreeOpen" | "mode" | "wrap"
+>
+
 export function initialDiffLayout(
   width: number,
-  preferences: DiffPanelUserPreferences,
+  preferences: DiffLayoutPreferences,
 ) {
   return {
     fileTreeOpen:
@@ -142,11 +147,11 @@ export function initialDiffLayout(
   }
 }
 
-export function toggledDiffFileTree(
+export function toggledDiffFileTree<Preferences extends DiffLayoutPreferences>(
   isOpen: boolean,
   isNarrow: boolean,
-  preferences: DiffPanelUserPreferences,
-) {
+  preferences: Preferences,
+): { fileTreeOpen: boolean; preferences: Preferences & DiffLayoutPreferences } {
   const fileTreeOpen = !isOpen
   return {
     fileTreeOpen,

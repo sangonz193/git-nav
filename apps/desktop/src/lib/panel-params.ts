@@ -31,3 +31,14 @@ export type GraphPanelParams = RepositoryPanelParams & {
   selectedCommitHashes?: string[]
   userPreferences?: GraphPanelUserPreferences
 }
+
+export type WorkingTreePanelUserPreferences = {
+  fileTreeOpen?: boolean
+  mode?: "split" | "unified"
+  wrap?: boolean
+}
+
+export type WorkingTreePanelParams = RepositoryPanelParams & {
+  selectedFilePath?: string | null
+  userPreferences?: WorkingTreePanelUserPreferences
+}
