@@ -22,7 +22,7 @@ const HUNK_ROW_HEIGHT = 30
 const FILE_HEADER_HEIGHT = 34
 const FILE_ROW_GAP = 12
 const COLLAPSED_BODY_HEIGHT = 40
-export const IMAGE_BODY_HEIGHT = 280
+export const IMAGE_BODY_HEIGHT = 386
 
 highlighter.setMaxLineToIgnoreSyntax(MAX_HIGHLIGHT_LINES)
 
@@ -73,7 +73,7 @@ export function isLargeDiff(file: ChangedFile) {
 }
 
 export function isSvgFile(file: ChangedFile) {
-  return isSvgPath(fileName(file))
+  return isSvgPath(file.oldPath) || isSvgPath(file.newPath)
 }
 
 export function estimatedBodyHeight(
@@ -85,7 +85,7 @@ export function estimatedBodyHeight(
     return 0
   }
   if (file.isBinary) {
-    return isImagePath(fileName(file)) ? IMAGE_BODY_HEIGHT : (
+    return isImagePath(file.oldPath) || isImagePath(file.newPath) ? IMAGE_BODY_HEIGHT : (
         COLLAPSED_BODY_HEIGHT
       )
   }
