@@ -85,9 +85,9 @@ export function estimatedBodyHeight(
     return 0
   }
   if (file.isBinary) {
-    return isImagePath(file.oldPath) || isImagePath(file.newPath) ? IMAGE_BODY_HEIGHT : (
-        COLLAPSED_BODY_HEIGHT
-      )
+    return isImagePath(file.oldPath) || isImagePath(file.newPath) ?
+        IMAGE_BODY_HEIGHT
+      : COLLAPSED_BODY_HEIGHT
   }
   if (isLargeDiff(file)) {
     return COLLAPSED_BODY_HEIGHT

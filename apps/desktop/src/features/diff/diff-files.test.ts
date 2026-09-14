@@ -28,7 +28,10 @@ describe("estimatedBodyHeight", () => {
         ["before.txt", "after.svg"],
       ]) {
         expect(
-          estimatedBodyHeight(file({ status: "renamed", oldPath, newPath }), mode),
+          estimatedBodyHeight(
+            file({ status: "renamed", oldPath, newPath }),
+            mode,
+          ),
         ).toBe(textHeight + IMAGE_BODY_HEIGHT)
       }
     }
