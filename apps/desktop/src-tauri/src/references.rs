@@ -26,7 +26,7 @@ fn picker_commits(repo_path: &str) -> Result<Vec<Vec<serde_json::Value>>, String
     let arguments: Vec<&str> = ["log"]
         .into_iter()
         .chain(revisions.iter().map(String::as_str))
-        .chain(["--topo-order", "--max-count=250", "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s"])
+        .chain(["--date-order", "--max-count=250", "--format=%H%x00%P%x00%an%x00%cI%x00%D%x00%s"])
         .collect();
     let output = git_output_allow_empty(repo_path, &arguments)?;
     let mut lanes = Vec::new();
