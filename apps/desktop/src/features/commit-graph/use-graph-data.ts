@@ -65,6 +65,7 @@ export function useGraphData({
   const [stashes, setStashes] = useState<StashEntry[]>([])
   const fingerprint = useRef<string | null>(null)
   const fingerprintGeneration = useRef(0)
+  const streamedRepoPath = useRef<string | null>(null)
   const squashMergeInferenceRequest = useRef<{
     graphVersion: number
     path: string
@@ -174,13 +175,19 @@ export function useGraphData({
 
   useEffect(() => {
     let disposed = false
+    let isReplaced = false
     let inferenceInterval: number | null = null
     let inferenceTimeout: number | null = null
-    // The reset belongs to the stream that replaces the window, so it lives where that stream starts.
+    // The reset belongs to the stream that replaces the window, so it lives where that stream starts. Only
+    // another repository is cleared outright: a refresh keeps the graph on screen until its replacement's first
+    // rows land, so the panel never blanks between the two.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCommits([])
     setHasOlderCommits(false)
     setIsGraphWindowLoading(true)
+    if (streamedRepoPath.current !== repoPath) {
+      streamedRepoPath.current = repoPath
+      setCommits([])
+    }
     function refreshSquashMergeInferences() {
       if (document.hidden) {
         return
@@ -253,7 +260,10 @@ export function useGraphData({
         },
       (batch) => {
         if (!disposed) {
-          setCommits((existing) => existing.concat(batch.map(commitFromTuple)))
+          const rows = batch.map(commitFromTuple)
+          const replaces = !isReplaced
+          isReplaced = true
+          setCommits((existing) => (replaces ? rows : existing.concat(rows)))
           if (graphOffset === 0) {
             scheduleSquashMergeInferences()
           }
@@ -274,6 +284,9 @@ export function useGraphData({
             "hasMore" in data
           ) {
             setHasOlderCommits((data as GraphWindowComplete).hasMore)
+          }
+          if (!isReplaced) {
+            setCommits([])
           }
           setIsGraphWindowLoading(false)
         }

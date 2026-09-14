@@ -199,7 +199,11 @@ function CommitGraphPanelContent({
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const savedScrollTop = useRef(0)
-  const refreshAnchor = useRef<{ hash: string; offset: number } | null>(null)
+  const refreshAnchor = useRef<{
+    commits: Commit[]
+    hash: string
+    offset: number
+  } | null>(null)
   const pendingScrollHash = useRef<string | null>(null)
   const rowsRef = useRef<GraphRow[] | null>(null)
   const isScrollElementVisible = useRef(false)
@@ -219,7 +223,13 @@ function CommitGraphPanelContent({
         rowsRef.current ? (rowsRef.current[row]?.index ?? -1) : row
       ]
     refreshAnchor.current =
-      commit ? { hash: commit.hash, offset: scrollTop - row * rowHeight } : null
+      commit ?
+        {
+          commits: commitsRef.current,
+          hash: commit.hash,
+          offset: scrollTop - row * rowHeight,
+        }
+      : null
   }, [rowHeight])
   const {
     branchSync,
@@ -609,7 +619,8 @@ function CommitGraphPanelContent({
   useEffect(() => {
     const anchor = refreshAnchor.current
     const element = scrollElement.current
-    if (!anchor || !element) {
+    // The graph it was captured on stays up until the refresh lands, and it is only restored on the replacement.
+    if (!anchor || !element || commits === anchor.commits) {
       return
     }
     const index = commits.findIndex((commit) => commit.hash === anchor.hash)
