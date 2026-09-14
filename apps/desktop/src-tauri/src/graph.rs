@@ -170,7 +170,7 @@ pub(crate) fn walk_commit_graph_page(
         external_command("git")
             .args(["--no-optional-locks", "-C", repo_path, "log"])
             .args(&revisions)
-            .args(["--topo-order", "--format=%H%x00%P%x00%an%x00%aI%x00%D%x00%s"])
+            .args(["--date-order", "--format=%H%x00%P%x00%an%x00%cI%x00%D%x00%s"])
             .stdout(Stdio::piped())
             .spawn()
             .map_err(|error| error.to_string())?,
@@ -325,7 +325,7 @@ fn divergence_commits(repo_path: &str, range: &str) -> Result<Vec<CommitSummary>
         repo_path,
         &[
             "log",
-            "--format=%H%x00%s%x00%an%x00%aI",
+            "--format=%H%x00%s%x00%an%x00%cI",
             "--max-count=100",
             range,
         ],
