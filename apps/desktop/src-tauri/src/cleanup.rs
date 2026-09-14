@@ -503,6 +503,17 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
     edges.into_iter().collect()
 }
 
+// git refuses to delete a branch that a worktree has checked out, so offering one would only end in a
+// failure toast.
+fn checked_out_branches(repo_path: &str) -> Result<HashSet<String>, String> {
+    let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
+    Ok(parse_worktree_records(&worktrees)
+        .into_iter()
+        .filter(|worktree| !worktree.is_detached)
+        .map(|worktree| worktree.branch)
+        .collect())
+}
+
 fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<Vec<String>, String> {
     let remote = git_output(repo_path, &["remote", "get-url", "origin"]).ok_or_else(|| "Could not identify the origin remote.".to_string())?;
     let (host, repository) = github_repository(&remote).ok_or_else(|| "Only GitHub remotes are supported.".to_string())?;
@@ -530,11 +541,12 @@ fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<V
         .into_iter()
         .chain(primary.as_deref())
         .collect::<HashSet<_>>();
+    let checked_out = checked_out_branches(repo_path)?;
 
     Ok(refs
         .split('\n')
         .filter_map(|line| line.split_once('\0'))
-        .filter(|(branch, hash)| !protected.contains(branch) && merged_heads.contains(*hash))
+        .filter(|(branch, hash)| !protected.contains(branch) && !checked_out.contains(*branch) && merged_heads.contains(*hash))
         .map(|(branch, _)| branch.to_string())
         .collect())
 }
@@ -557,12 +569,7 @@ fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String
             "refs/heads",
         ],
     )?;
-    let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
-    let checked_out = parse_worktree_records(&worktrees)
-        .into_iter()
-        .filter(|worktree| !worktree.is_detached)
-        .map(|worktree| worktree.branch)
-        .collect::<HashSet<_>>();
+    let checked_out = checked_out_branches(repo_path)?;
 
     Ok(refs
         .lines()
@@ -583,12 +590,7 @@ fn squash_merged_branch_candidates(repo_path: &str) -> Result<Vec<String>, Strin
     let protected = ["main", "master", primary_branch].into_iter().collect::<HashSet<_>>();
     let squashed = local_squash_merges(repo_path).into_iter().map(|(tip, _)| tip).collect::<HashSet<_>>();
     let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
-    let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
-    let checked_out = parse_worktree_records(&worktrees)
-        .into_iter()
-        .filter(|worktree| !worktree.is_detached)
-        .map(|worktree| worktree.branch)
-        .collect::<HashSet<_>>();
+    let checked_out = checked_out_branches(repo_path)?;
 
     Ok(refs
         .split('\n')
@@ -1143,6 +1145,52 @@ mod tests {
         assert!(!reasons.contains_key("open"));
         assert!(!reasons.contains_key("parked"), "a branch held by a worktree cannot be deleted");
         assert!(!reasons.contains_key("main"));
+    }
+
+    #[test]
+    fn skips_a_merged_pull_request_branch_held_by_a_worktree() {
+        let (path, run) = scratch_repository("pr-cleanup-worktree");
+        let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();
+        let sha = |reference: &str| git_output(&path, &["rev-parse", reference]).unwrap();
+        run(&["remote", "add", "origin", "https://github.com/example/repo.git"]);
+        write("shared.txt", "base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        for branch in ["merged", "parked"] {
+            run(&["checkout", "--quiet", "-b", branch, "main"]);
+            write(&format!("{branch}.txt"), "one\n");
+            run(&["add", "."]);
+            run(&["commit", "--quiet", "--message", branch]);
+        }
+        run(&["checkout", "--quiet", "main"]);
+        let worktree = env::temp_dir().join(format!("git-nav-pr-cleanup-parked-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&worktree);
+        run(&["worktree", "add", "--quiet", &worktree.to_string_lossy(), "parked"]);
+
+        let database_path = Path::new(&path).join("pull-requests.sqlite");
+        let connection = pull_request_database(database_path.clone()).unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        connection
+            .execute(
+                "INSERT INTO pull_request_syncs (host, repository, synchronized_at) VALUES ('github.com', 'example/repo', ?1)",
+                params![now],
+            )
+            .unwrap();
+        for (number, branch) in [(1, "merged"), (2, "parked")] {
+            connection
+                .execute(
+                    "INSERT INTO pull_requests (host, repository, number, head_sha, merged_at, updated_at) VALUES ('github.com', 'example/repo', ?1, ?2, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+                    params![number, sha(branch)],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        let candidates = merged_branch_candidates(&path, database_path).unwrap();
+        let _ = fs::remove_dir_all(&worktree);
+        remove_scratch_repository(&path);
+
+        assert_eq!(candidates, ["merged"]);
     }
 
     #[test]
