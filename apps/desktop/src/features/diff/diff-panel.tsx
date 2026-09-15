@@ -82,6 +82,7 @@ import {
   type SelectedRefs,
 } from "./diff-title"
 import {
+  carriedFolds,
   changedFilesLabel,
   fileIdentity,
   fileName,
@@ -494,7 +495,9 @@ export function DiffPanel({
         if (!cancelled) {
           setExpanded(new Set())
           setAllExpanded(new Set())
-          setHandFolds(new Map())
+          setHandFolds((current) =>
+            carriedFolds(current, nextComparison.files.map(fileKey)),
+          )
           setLoadedComparison({
             comparison: nextComparison,
             ignoreWhitespace,
@@ -611,6 +614,7 @@ export function DiffPanel({
           const range = selectedRefs(selection.baseRef, selection.headRef, true)
           clearFileSelection()
           setViewed(new Map())
+          setHandFolds(new Map())
           setRefs(range)
           api.setTitle(branchRangeTitle(range))
         })
@@ -765,10 +769,12 @@ export function DiffPanel({
 
   // Where the ends sit cannot say whether a tab still carries the name it opened with, since a
   // comparison can be pointed back at the ends it opened from. Moving an end is what retitles the tab.
-  // Moving either end of the comparison leaves behind marks that were made against a different one.
+  // Moving either end of the comparison leaves behind marks and folds that were made against a different
+  // one.
   function moveRefs(next: SelectedRefs) {
     clearFileSelection()
     setViewed(new Map())
+    setHandFolds(new Map())
     setRefs(next)
     api.setTitle(
       diffTitle(next, metadata.defaultBranch, metadata.remotes ?? []),

@@ -873,6 +873,26 @@ describe("branch pull requests", () => {
     expect(pullRequestDescription(refs[0])).toBe("#12 Draft · Add the thing")
   })
 
+  test("marks a branch through the differently named upstream it consumed", () => {
+    const refs = displayRefs(["local", "origin/feature"], {
+      branchSync: new Map([
+        [
+          "local",
+          {
+            branch: "local",
+            upstream: "origin/feature",
+            ahead: 0,
+            behind: 0,
+            isGone: false,
+          },
+        ],
+      ]),
+      pullRequests: pullRequests(pullRequest()),
+    })
+    expect(refs.map((ref) => ref.label)).toEqual(["local · origin"])
+    expect(pullRequestLabel(refs[0])).toBe("#12")
+  })
+
   test("leaves tags and unrelated branches unmarked", () => {
     const refs = displayRefs(["main", "tag: v1"], {
       pullRequests: pullRequests(pullRequest()),

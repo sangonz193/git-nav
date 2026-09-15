@@ -758,7 +758,8 @@ export function syncDescription({ sync }: DisplayRef) {
 }
 
 // A pull request is raised from a branch name, which a ref that only exists on a remote carries behind the
-// name of that remote.
+// name of that remote. A local branch paired with a differently named upstream shows that upstream's pull
+// request, since the chip stands in for the remote ref it consumed.
 function pullRequestOf(
   ref: string,
   remote: string | null,
@@ -829,7 +830,10 @@ export function displayRefs(
       label: tracking ? `${branch} · ${tracking.remote}` : branch,
       checkedOut: branch === checkedOut,
       kind: "branch",
-      pullRequest: pullRequests?.get(branch) ?? null,
+      pullRequest:
+        (tracking &&
+          pullRequestOf(tracking.ref, tracking.remote, pullRequests)) ||
+        (pullRequests?.get(branch) ?? null),
       remote: tracking?.remote ?? null,
       sync,
       worktrees: worktrees.filter((worktree) => worktree.branch === branch),

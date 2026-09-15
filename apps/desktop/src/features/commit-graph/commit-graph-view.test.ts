@@ -11,6 +11,7 @@ import {
   activeFilterCount,
   applyViewConfigSetting,
   appendGraphRows,
+  branchFilterMetadataKey,
   branchFiltersKey,
   commitChips,
   DEFAULT_BRANCH_FILTERS,
@@ -457,6 +458,32 @@ describe("commitChips", () => {
     expect(labels(chips)).toEqual(["local", "tracked · origin", "v1"])
   })
 
+  test("a branch tracking a differently named upstream carries that upstream's pull request", () => {
+    const renamed = commit("a", ["local", "origin/pr-branch"])
+    const renamedSync = new Map([
+      ["local", sync("local", { upstream: "origin/pr-branch" })],
+    ])
+    const renamedPullRequests = new Map([pullRequest("pr-branch", "open")])
+    const linked = commitChips(
+      renamed,
+      context({
+        branchSync: renamedSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" },
+        pullRequests: renamedPullRequests,
+      }),
+    )
+    expect(labels(linked)).toEqual(["local · origin"])
+    const none = commitChips(
+      renamed,
+      context({
+        branchSync: renamedSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" },
+        pullRequests: renamedPullRequests,
+      }),
+    )
+    expect(labels(none)).toEqual([])
+  })
+
   test("the checkout survives a filter it does not match", () => {
     const chips = commitChips(
       commit("a", ["HEAD -> local"]),
@@ -664,6 +691,160 @@ describe("appendGraphRows", () => {
       (hash) => hash === "b",
     )
     expect(continued.rows.map((row) => row.hidden)).toEqual([0, 0, 0, 0])
+  })
+
+  test("nothing revealed leaves the graph fully folded", () => {
+    const commits = [commit("a", ["main"]), commit("b")]
+    expect(
+      appendGraphRows(null, commits, marked, nothingRevealed).hasRevealedRuns,
+    ).toBe(false)
+  })
+
+  test("a revealed run is reported without another pass over the earlier batches", () => {
+    const commits = [
+      commit("a", ["main"]),
+      commit("b"),
+      commit("c", ["old"]),
+      commit("d"),
+      commit("e"),
+    ]
+    const revealed = (hash: string) => hash === "b"
+    const first = appendGraphRows(null, commits.slice(0, 4), marked, revealed)
+    expect(first.hasRevealedRuns).toBe(true)
+    const scanned: string[] = []
+    const continued = appendGraphRows(
+      first,
+      commits,
+      (commit) => {
+        scanned.push(commit.hash)
+        return marked(commit)
+      },
+      revealed,
+    )
+    expect(continued.hasRevealedRuns).toBe(true)
+    expect(scanned).toEqual(["d", "e"])
+  })
+
+  test("a reveal left on a commit that is now marked is not a revealed run", () => {
+    const commits = [commit("a", ["main"]), commit("b"), commit("c", ["old"])]
+    const revealed = (hash: string) => hash === "b"
+    expect(
+      appendGraphRows(null, commits, marked, revealed).hasRevealedRuns,
+    ).toBe(true)
+    expect(
+      appendGraphRows(null, commits, () => true, revealed).hasRevealedRuns,
+    ).toBe(false)
+  })
+
+  test("a reveal the loaded commits do not hold is not a revealed run", () => {
+    const commits = [commit("a", ["main"]), commit("b")]
+    expect(
+      appendGraphRows(null, commits, marked, (hash) => hash === "z")
+        .hasRevealedRuns,
+    ).toBe(false)
+  })
+})
+
+describe("collapsed graph state", () => {
+  test("invalidates cached rows when filtered branch metadata arrives", () => {
+    const filters = { ...DEFAULT_BRANCH_FILTERS, upstream: "gone" as const }
+    const before = branchFilterMetadataKey(filters, new Map(), new Map())
+    const after = branchFilterMetadataKey(
+      filters,
+      new Map([
+        [
+          "feature",
+          {
+            ahead: 0,
+            behind: 0,
+            branch: "feature",
+            isGone: true,
+            upstream: "origin/feature",
+          },
+        ],
+      ]),
+      new Map(),
+    )
+
+    expect(after).not.toBe(before)
+  })
+
+  test("invalidates cached rows when filtered pull-request metadata refreshes", () => {
+    const filters = {
+      ...DEFAULT_BRANCH_FILTERS,
+      pullRequest: "linked" as const,
+    }
+    const before = branchFilterMetadataKey(
+      filters,
+      new Map(),
+      new Map([
+        [
+          "feature",
+          {
+            branch: "feature",
+            number: 1,
+            state: "open" as const,
+            title: "Feature",
+            url: "https://example.com/pull/1",
+          },
+        ],
+      ]),
+    )
+    const after = branchFilterMetadataKey(
+      filters,
+      new Map(),
+      new Map([
+        [
+          "feature",
+          {
+            branch: "feature",
+            number: 1,
+            state: "closed" as const,
+            title: "Feature",
+            url: "https://example.com/pull/1",
+          },
+        ],
+      ]),
+    )
+
+    expect(after).not.toBe(before)
+  })
+
+  test("invalidates cached rows when branch sync lands after the pull requests it pairs", () => {
+    const filters = { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" as const }
+    const row = commit("a", ["local", "origin/feature"])
+    const pullRequests = new Map([
+      [
+        "feature",
+        {
+          branch: "feature",
+          number: 1,
+          state: "open" as const,
+          title: "Feature",
+          url: "https://example.com/pull/1",
+        },
+      ],
+    ])
+    const branchSync = new Map([
+      [
+        "local",
+        {
+          ahead: 0,
+          behind: 0,
+          branch: "local",
+          isGone: false,
+          upstream: "origin/feature",
+        },
+      ],
+    ])
+
+    expect(isMarkedCommit(row, context({ filters, pullRequests }))).toBe(true)
+    expect(
+      isMarkedCommit(row, context({ branchSync, filters, pullRequests })),
+    ).toBe(false)
+    expect(branchFilterMetadataKey(filters, branchSync, pullRequests)).not.toBe(
+      branchFilterMetadataKey(filters, new Map(), pullRequests),
+    )
   })
 })
 

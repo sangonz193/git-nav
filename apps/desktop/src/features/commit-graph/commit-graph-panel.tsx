@@ -76,6 +76,7 @@ import {
   appendGraphRows,
   CHIP_KINDS,
   activeFilterCount,
+  branchFilterMetadataKey,
   branchFiltersKey,
   commitChips,
   DEFAULT_BRANCH_FILTERS,
@@ -375,10 +376,19 @@ function CommitGraphPanelContent({
         remoteNames,
         CHIP_KINDS.filter((kind) => config.chipKinds[kind]).join(","),
         branchFiltersKey(filters),
+        branchFilterMetadataKey(filters, branchSync, pullRequests),
         [...stashesByBase.keys()].sort().join(","),
         [...worktreesByHead.keys()].sort().join(","),
       ].join("|"),
-    [config.chipKinds, filters, remoteNames, stashesByBase, worktreesByHead],
+    [
+      branchSync,
+      config.chipKinds,
+      filters,
+      pullRequests,
+      remoteNames,
+      stashesByBase,
+      worktreesByHead,
+    ],
   )
   // Rows exist only while runs are being collapsed. Without them a row is a commit, which is what the rest of
   // the panel already reads its indexes as.
@@ -388,7 +398,7 @@ function CommitGraphPanelContent({
     revealed: ReadonlySet<string>
     value: GraphRows
   } | null>(null)
-  const rows = useMemo(() => {
+  const graphRows = useMemo(() => {
     if (!collapseUnmarked) {
       rowsCache.current = null
       return null
@@ -410,8 +420,10 @@ function CommitGraphPanelContent({
       (hash) => revealed.has(hash),
     )
     rowsCache.current = { commits, marksKey, revealed, value }
-    return value.rows
+    return value
   }, [chipContext, collapseUnmarked, commits, marksKey, revealed])
+  const rows = graphRows?.rows ?? null
+  const hasRevealedRuns = graphRows?.hasRevealedRuns ?? false
   const rowCount = rows ? rows.length : commits.length
   const commitIndexAtRow = useCallback(
     (row: number) => (rows ? (rows[row]?.index ?? 0) : row),
@@ -1068,6 +1080,7 @@ function CommitGraphPanelContent({
         filters={filters}
         graphOffset={graphOffset}
         hasOlderCommits={hasOlderCommits}
+        hasRevealedRuns={hasRevealedRuns}
         isFetching={fetchMutation.isPending}
         isGraphWindowLoading={isGraphWindowLoading}
         menus={menus}

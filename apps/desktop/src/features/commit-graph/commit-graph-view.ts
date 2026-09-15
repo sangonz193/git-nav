@@ -103,6 +103,28 @@ export function branchFiltersKey(filters: BranchFilters) {
     PULL_REQUEST_STATES.filter((state) => filters.pullRequestStates[state]),
   ].join(":")
 }
+
+// A local branch carries the pull request of the upstream it is paired with, so the pairing is read by the
+// pull request filter as much as by the upstream one.
+export function branchFilterMetadataKey(
+  filters: BranchFilters,
+  branchSync: Map<string, BranchSync>,
+  pullRequests: Map<string, BranchPullRequest>,
+) {
+  const readsSync = filters.upstream !== "any" || filters.pullRequest !== "any"
+  return JSON.stringify([
+    readsSync ?
+      [...branchSync]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([branch, sync]) => [branch, sync.upstream, sync.isGone])
+    : [],
+    filters.pullRequest === "any" ?
+      []
+    : [...pullRequests]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([branch, pullRequest]) => [branch, pullRequest.state]),
+  ])
+}
 export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
   branch: "Local branches",
   remote: "Remote branches",
@@ -491,7 +513,11 @@ export function isMarkedCommit(commit: Commit, context: ChipContext) {
 }
 
 export type GraphRow = { hidden: number; index: number; lanes: number }
-export type GraphRows = { revealing: boolean; rows: GraphRow[] }
+export type GraphRows = {
+  hasRevealedRuns: boolean
+  revealing: boolean
+  rows: GraphRow[]
+}
 
 const ALL_LANES = -1
 
@@ -515,6 +541,9 @@ export function appendGraphRows(
   isRevealed: (hash: string) => boolean,
 ): GraphRows {
   const rows = previous ? previous.rows.slice() : []
+  // A reopened run holds no revealed commit, or it would not have been a run, so what the earlier batches
+  // found revealed stands.
+  let hasRevealedRuns = previous?.hasRevealedRuns ?? false
   let revealing = previous?.revealing ?? false
   let index = 0
   const last = rows[rows.length - 1]
@@ -533,7 +562,12 @@ export function appendGraphRows(
       rows.push({ hidden: 0, index, lanes: 0 })
       continue
     }
-    revealing ||= isRevealed(commit.hash)
+    // Only a commit that would otherwise be folded counts as revealed, so a reveal left on a commit that
+    // has since been marked is not one.
+    if (!revealing && isRevealed(commit.hash)) {
+      revealing = true
+      hasRevealedRuns = true
+    }
     if (revealing) {
       rows.push({ hidden: 0, index, lanes: 0 })
       continue
@@ -555,7 +589,7 @@ export function appendGraphRows(
     })
   }
 
-  return { revealing, rows }
+  return { hasRevealedRuns, revealing, rows }
 }
 
 // Rows are ordered by the commit they start at, so the row holding a commit is the last one starting at or

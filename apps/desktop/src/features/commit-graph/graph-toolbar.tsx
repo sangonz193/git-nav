@@ -73,6 +73,7 @@ export function GraphToolbar({
   cleanup,
   collapseUnmarked,
   config,
+  hasRevealedRuns,
   fetch,
   filters,
   graphOffset,
@@ -93,6 +94,7 @@ export function GraphToolbar({
   cleanup: ReturnType<typeof useBranchCleanup>
   collapseUnmarked: boolean
   config: ViewConfig
+  hasRevealedRuns: boolean
   fetch: () => void
   filters: BranchFilters
   graphOffset: number
@@ -166,7 +168,7 @@ export function GraphToolbar({
       </div>
       <div className="flex items-center gap-1">
         <FoldButtons
-          allCollapsed={collapseUnmarked}
+          allCollapsed={collapseUnmarked && !hasRevealedRuns}
           allExpanded={!collapseUnmarked}
           collapseHint="Collapse commits nothing points at"
           expandHint="Show every commit"
