@@ -1,4 +1,8 @@
-import { Channel, invoke as invokeTauri } from "@tauri-apps/api/core"
+import {
+  Channel,
+  convertFileSrc,
+  invoke as invokeTauri,
+} from "@tauri-apps/api/core"
 
 export const isDesktop =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
@@ -49,6 +53,13 @@ export function invoke<T>(
   return isDesktop ?
       invokeTauri<T>(command, args)
     : invokeHttp<T>(command, args, options)
+}
+
+/** Where an image token minted by `diff_file` can be fetched from on this transport. */
+export function imageUrl(token: string) {
+  return isDesktop ?
+      convertFileSrc(token, "git-nav-image")
+    : `/api/diff_image/${encodeURIComponent(token)}`
 }
 
 /**

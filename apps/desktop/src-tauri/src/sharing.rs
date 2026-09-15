@@ -224,7 +224,7 @@ fn stored_serve_port(settings: &BTreeMap<String, serde_json::Value>) -> Result<u
     })
 }
 
-fn generated_token() -> String {
+pub(crate) fn generated_token() -> String {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("could not generate a token");
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()

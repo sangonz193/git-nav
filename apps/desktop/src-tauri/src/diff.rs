@@ -1,10 +1,10 @@
-use base64::Engine;
 use serde::Serialize;
-use std::{collections::HashSet, fs, io::Read, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 use crate::git::{
     INDEX_REF, WORKTREE_REF, git_error_message, git_output, git_output_allow_empty, git_output_bytes, git_result,
     resolve_diff_base, worktree_path,
 };
+use crate::images::{IMAGE_PREVIEW_LIMIT, ImageSource};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,7 +49,7 @@ pub(crate) struct FileDiff {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BinaryContent {
     pub(crate) size: u64,
-    pub(crate) image: Option<String>,
+    pub(crate) image_token: Option<String>,
 }
 
 fn finish_patch_block(files: &mut [FileStat], deletions: &mut u32, additions: &mut u32) {
@@ -409,7 +409,7 @@ fn worktree_patch(repo_path: &str, base_sha: &str, path: &str, paths: &[&str], i
 }
 
 // The index is addressed as `:path` and a commit as `sha:path`; the working tree is read from disk.
-fn object_name(revision: &str, path: &str) -> String {
+pub(crate) fn object_name(revision: &str, path: &str) -> String {
     if revision == INDEX_REF { format!(":{path}") } else { format!("{revision}:{path}") }
 }
 
@@ -424,7 +424,7 @@ fn side_content(repo_path: &str, revision: &str, path: &str) -> Result<String, S
 fn side_binary_content(repo_path: &str, revision: &str, path: &str) -> Result<BinaryContent, String> {
     if revision == WORKTREE_REF {
         let root = worktree_path(repo_path)?;
-        return worktree_binary_content(&root, path);
+        return worktree_binary_content(repo_path, &root, path);
     }
     git_binary_content(repo_path, revision, path)
 }
@@ -472,7 +472,7 @@ fn file_diff(
                 let old_binary = old_path.as_ref().map(|path| side_binary_content(repo_path, base_sha, path)).transpose()?;
                 return Ok(FileDiff {
                     old_binary,
-                    new_binary: Some(worktree_binary_content(&root, new_worktree_path)?),
+                    new_binary: Some(worktree_binary_content(repo_path, &root, new_worktree_path)?),
                     old_file_name: old_path,
                     new_file_name: new_path,
                     old_content: None,
@@ -524,8 +524,6 @@ fn file_diff(
     })
 }
 
-pub(crate) const IMAGE_PREVIEW_LIMIT: usize = 8 * 1024 * 1024;
-
 fn image_mime_type(path: &str) -> Option<&'static str> {
     let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
     Some(match extension.as_str() {
@@ -541,48 +539,32 @@ fn image_mime_type(path: &str) -> Option<&'static str> {
     })
 }
 
-fn binary_content(path: &str, size: u64, bytes: Option<Vec<u8>>) -> BinaryContent {
-    let image = image_mime_type(path).and_then(|mime| {
-        bytes.map(|bytes| format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
-    });
-    BinaryContent { size, image }
+fn binary_content(repo_path: &str, revision: &str, path: &str, size: u64, readable: bool) -> BinaryContent {
+    let image_token = image_mime_type(path)
+        .filter(|_| readable && size <= IMAGE_PREVIEW_LIMIT as u64)
+        .map(|mime| {
+            crate::images::mint(ImageSource {
+                repo_path: repo_path.to_string(),
+                revision: revision.to_string(),
+                path: path.to_string(),
+                mime,
+            })
+        });
+    BinaryContent { size, image_token }
 }
 
-fn git_binary_content(repo_path: &str, sha: &str, path: &str) -> Result<BinaryContent, String> {
-    let object = object_name(sha, path);
+fn git_binary_content(repo_path: &str, revision: &str, path: &str) -> Result<BinaryContent, String> {
+    let object = object_name(revision, path);
     let size = git_output(repo_path, &["cat-file", "-s", &object])
-        .ok_or_else(|| format!("Could not read {path} at {sha}."))?
+        .ok_or_else(|| format!("Could not read {path} at {revision}."))?
         .parse()
         .map_err(|error: std::num::ParseIntError| error.to_string())?;
-    let bytes = image_mime_type(path)
-        .filter(|_| size <= IMAGE_PREVIEW_LIMIT as u64)
-        .map(|_| git_output_bytes(repo_path, &["show", &object]).ok_or_else(|| format!("Could not read {path} at {sha}.")))
-        .transpose()?;
-    Ok(binary_content(path, size, bytes))
+    Ok(binary_content(repo_path, revision, path, size, true))
 }
 
-fn worktree_binary_content(root: &str, path: &str) -> Result<BinaryContent, String> {
-    let file = Path::new(root).join(path);
-    let symlink_metadata = fs::symlink_metadata(&file).map_err(|error| error.to_string())?;
-    if symlink_metadata.file_type().is_symlink() {
-        return Ok(binary_content(path, symlink_metadata.len(), None));
-    }
-    let file = fs::File::open(file).map_err(|error| error.to_string())?;
-    let metadata = file.metadata().map_err(|error| error.to_string())?;
-    let size = metadata.len();
-    let bytes = metadata.file_type().is_file().then_some(())
-        .and(image_mime_type(path))
-        .filter(|_| size <= IMAGE_PREVIEW_LIMIT as u64)
-        .map(|_| {
-            let mut bytes = Vec::new();
-            file.take(IMAGE_PREVIEW_LIMIT as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| error.to_string())?;
-            Ok::<_, String>(bytes)
-        })
-        .transpose()?
-        .filter(|bytes| bytes.len() <= IMAGE_PREVIEW_LIMIT);
-    Ok(binary_content(path, size, bytes))
+fn worktree_binary_content(repo_path: &str, root: &str, path: &str) -> Result<BinaryContent, String> {
+    let metadata = fs::symlink_metadata(Path::new(root).join(path)).map_err(|error| error.to_string())?;
+    Ok(binary_content(repo_path, WORKTREE_REF, path, metadata.len(), metadata.file_type().is_file()))
 }
 
 #[git_nav_macros::http_command]

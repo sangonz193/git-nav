@@ -1504,7 +1504,6 @@ name = "git-nav"
 version = "0.0.25"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "dbus",
  "dirs",
  "fs2",

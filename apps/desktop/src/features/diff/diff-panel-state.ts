@@ -8,7 +8,7 @@ import type { SelectedRefs } from "./diff-title"
 
 export const NARROW_DIFF_PANEL_WIDTH = 620
 export const WIDE_DIFF_PANEL_WIDTH = 900
-export const IMAGE_PREVIEW_LIMIT = 8 * 1024 * 1024
+export const IMAGE_PREVIEW_LIMIT = 64 * 1024 * 1024
 
 const IMAGE_EXTENSIONS = new Set([
   "png",
