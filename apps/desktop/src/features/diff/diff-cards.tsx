@@ -189,16 +189,19 @@ function ImageSide({
   return (
     <figure className={`diff-binary-side is-${side}`}>
       {content.image && !previewFailed ?
-        <img
-          alt={side === "old" ? "Before" : "After"}
-          onError={() => setPreviewFailed(true)}
-          onLoad={(event) =>
-            setDimensions(
-              `${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`,
-            )
-          }
-          src={content.image}
-        />
+        <div className="diff-binary-image">
+          <img
+            alt={side === "old" ? "Before" : "After"}
+            className={cn(dimensions !== null && "is-loaded")}
+            onError={() => setPreviewFailed(true)}
+            onLoad={(event) =>
+              setDimensions(
+                `${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`,
+              )
+            }
+            src={content.image}
+          />
+        </div>
       : <p className="diff-file-card-notice">
           {!previewFailed && imageType && content.size > IMAGE_PREVIEW_LIMIT ?
             "Too large to preview"
