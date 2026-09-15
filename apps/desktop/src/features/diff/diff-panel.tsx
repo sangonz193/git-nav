@@ -682,6 +682,9 @@ export function DiffPanel({
   }
 
   function toggleCollapsed(file: ChangedFile) {
+    if (isComparisonStale) {
+      return
+    }
     const key = fileKey(file)
     const next = new Map(handFolds)
     next.set(key, !isFolded(file))
@@ -692,6 +695,9 @@ export function DiffPanel({
   // Reading a file is what folding it away means here, so the two move together. Only a file with a blob
   // behind it can be remembered, which leaves the working tree marked for as long as the tab is open.
   function toggleViewed(file: ChangedFile) {
+    if (isComparisonStale) {
+      return
+    }
     const path = fileName(file)
     const identity = fileIdentity(file, refs.head)
     const wasViewed = isViewedFile(file, refs.head, viewed)
