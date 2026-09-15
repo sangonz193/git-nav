@@ -185,6 +185,7 @@ function ImageSide({
   side: "old" | "new"
 }) {
   const [dimensions, setDimensions] = useState<string | null>(null)
+  const [decoded, setDecoded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   return (
     <figure className={`diff-binary-side is-${side}`}>
@@ -192,13 +193,19 @@ function ImageSide({
         <div className="diff-binary-image">
           <img
             alt={side === "old" ? "Before" : "After"}
-            className={cn(dimensions !== null && "is-loaded")}
+            className={cn(decoded && "is-loaded")}
+            decoding="async"
             onError={() => setPreviewFailed(true)}
-            onLoad={(event) =>
-              setDimensions(
-                `${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`,
+            onLoad={(event) => {
+              const image = event.currentTarget
+              setDimensions(`${image.naturalWidth}×${image.naturalHeight}`)
+              // load fires before a large photo is decoded, so revealing it here would paint nothing
+              // for a while and then pop; decode() resolves once there are pixels to fade in.
+              image.decode().then(
+                () => setDecoded(true),
+                () => setDecoded(true),
               )
-            }
+            }}
             src={content.image}
           />
         </div>

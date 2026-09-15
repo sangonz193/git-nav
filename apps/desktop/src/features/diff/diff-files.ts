@@ -309,7 +309,8 @@ export function useDiffCards({
       FILE_HEADER_HEIGHT +
       estimatedBodyHeight(files[index], mode, isFolded(files[index])),
     getItemKey: (index) => keyOf(files[index]),
-    overscan: 2,
+    // A fast scroll or a jump from the file tree outruns two rows and shows empty slots for a frame.
+    overscan: 4,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
 
