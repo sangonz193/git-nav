@@ -5,10 +5,8 @@ import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
 import {
@@ -16,11 +14,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@workspace/shadcn/components/popover"
+import { Switch } from "@workspace/shadcn/components/switch"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
+import { cn } from "@workspace/shadcn/lib/utils"
 import {
   Archive,
   Broom,
@@ -32,16 +32,28 @@ import {
   SlidersHorizontal,
   UnfoldVertical,
 } from "lucide-react"
+import type { ReactNode } from "react"
 
-import type { StashEntry } from "./commit-graph"
 import {
+  PULL_REQUEST_STATE_LABELS,
+  type PullRequestState,
+  type StashEntry,
+} from "./commit-graph"
+import {
+  activeFilterCount,
   CHIP_KIND_LABELS,
   CHIP_KINDS,
+  DEFAULT_BRANCH_FILTERS,
+  PULL_REQUEST_FILTERS,
+  PULL_REQUEST_STATES,
+  UPSTREAM_FILTERS,
+  type BranchFilters,
   type SearchHit,
   type ViewConfig,
   type ViewConfigChange,
 } from "./commit-graph-view"
 import { OperationMenuItems } from "./commit-operation-menu"
+import { CHIP_ICONS } from "./commit-operations"
 import {
   dropdownMenuComponents,
   stashMenuEntry,
@@ -56,6 +68,7 @@ export function GraphToolbar({
   collapseUnmarked,
   config,
   fetch,
+  filters,
   graphOffset,
   hasOlderCommits,
   isFetching,
@@ -63,16 +76,19 @@ export function GraphToolbar({
   menus,
   onActivateSearchHit,
   onCollapseUnmarked,
+  pullRequestCount,
   refreshGraph,
   search,
   showGraphWindow,
   stashes,
   updateConfig,
+  updateFilters,
 }: {
   cleanup: ReturnType<typeof useBranchCleanup>
   collapseUnmarked: boolean
   config: ViewConfig
   fetch: () => void
+  filters: BranchFilters
   graphOffset: number
   hasOlderCommits: boolean
   isFetching: boolean
@@ -80,12 +96,15 @@ export function GraphToolbar({
   menus: ChipMenuContext
   onActivateSearchHit: (hit: SearchHit) => void
   onCollapseUnmarked: (collapse: boolean) => void
+  pullRequestCount: number
   refreshGraph: () => void
   search: ReturnType<typeof useGraphSearch>
   showGraphWindow: (offset: number) => void
   stashes: StashEntry[]
   updateConfig: (change: ViewConfigChange) => void
+  updateFilters: (change: Partial<BranchFilters>) => void
 }) {
+  const filterCount = activeFilterCount(filters)
   return (
     <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
       <div className="flex items-center gap-1">
@@ -160,34 +179,33 @@ export function GraphToolbar({
             : <FoldVertical />}
           </Button>
         </Hinted>
-        <DropdownMenu>
+        <Popover>
           <Tooltip>
-            <DropdownMenuTrigger asChild>
+            <PopoverTrigger asChild>
               <TooltipTrigger asChild>
                 <Button size="sm" type="button" variant="outline">
                   <SlidersHorizontal />
                   View
+                  {filterCount > 0 && (
+                    <span className="rounded-full bg-primary px-1.5 text-[0.7rem] leading-4 text-primary-foreground tabular-nums">
+                      {filterCount}
+                    </span>
+                  )}
                 </Button>
               </TooltipTrigger>
-            </DropdownMenuTrigger>
+            </PopoverTrigger>
             <TooltipContent>Choose what the graph shows</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Show</DropdownMenuLabel>
-            {CHIP_KINDS.map((kind) => (
-              <DropdownMenuCheckboxItem
-                checked={config.chipKinds[kind]}
-                key={kind}
-                onCheckedChange={(checked) =>
-                  updateConfig({ chipKinds: { [kind]: checked === true } })
-                }
-                onSelect={(event) => event.preventDefault()}
-              >
-                {CHIP_KIND_LABELS[kind]}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+          <PopoverContent align="end" className="w-72 p-0">
+            <ViewPanel
+              config={config}
+              filters={filters}
+              pullRequestCount={pullRequestCount}
+              updateConfig={updateConfig}
+              updateFilters={updateFilters}
+            />
+          </PopoverContent>
+        </Popover>
         {!isDesktop && graphOffset > 0 && (
           <Hinted hint="Show newer commits">
             <Button
@@ -316,5 +334,187 @@ export function GraphToolbar({
         </ButtonGroup>
       </div>
     </div>
+  )
+}
+
+function ViewPanel({
+  config,
+  filters,
+  pullRequestCount,
+  updateConfig,
+  updateFilters,
+}: {
+  config: ViewConfig
+  filters: BranchFilters
+  pullRequestCount: number
+  updateConfig: (change: ViewConfigChange) => void
+  updateFilters: (change: Partial<BranchFilters>) => void
+}) {
+  const hasPullRequests = pullRequestCount > 0
+  return (
+    <div className="flex flex-col text-sm">
+      <section className="flex flex-col gap-1 p-2">
+        <PanelHeading>Show</PanelHeading>
+        {CHIP_KINDS.map((kind) => {
+          const Icon = CHIP_ICONS[kind]
+          const id = `graph-view-${kind}`
+          return (
+            <label
+              className="flex h-7 cursor-pointer items-center gap-2 rounded-md px-1.5 hover:bg-muted"
+              htmlFor={id}
+              key={kind}
+            >
+              <Icon className="size-3.5 text-muted-foreground" />
+              <span className="flex-1">{CHIP_KIND_LABELS[kind]}</span>
+              <Switch
+                checked={config.chipKinds[kind]}
+                id={id}
+                onCheckedChange={(checked) =>
+                  updateConfig({ chipKinds: { [kind]: checked } })
+                }
+              />
+            </label>
+          )
+        })}
+      </section>
+      <section className="flex flex-col gap-2 border-t p-2">
+        <div className="flex h-5 items-center justify-between">
+          <PanelHeading>Branches</PanelHeading>
+          {activeFilterCount(filters) > 0 && (
+            <Button
+              className="h-5 px-1.5 text-xs text-muted-foreground"
+              onClick={() => updateFilters(DEFAULT_BRANCH_FILTERS)}
+              size="xs"
+              type="button"
+              variant="ghost"
+            >
+              Reset
+            </Button>
+          )}
+        </div>
+        <FilterRow label="Upstream">
+          <Segmented
+            onChange={(upstream) => updateFilters({ upstream })}
+            options={UPSTREAM_FILTERS}
+            value={filters.upstream}
+          />
+        </FilterRow>
+        <FilterRow
+          hint={
+            hasPullRequests ? null : (
+              "No pull requests were found for this repository"
+            )
+          }
+          label="Pull request"
+        >
+          <Segmented
+            disabled={!hasPullRequests}
+            onChange={(pullRequest) => updateFilters({ pullRequest })}
+            options={PULL_REQUEST_FILTERS}
+            value={filters.pullRequest}
+          />
+        </FilterRow>
+        {filters.pullRequest === "linked" && (
+          <div className="flex flex-wrap justify-end gap-1 px-1.5">
+            {PULL_REQUEST_STATES.map((state) => (
+              <PullRequestStateChip
+                checked={filters.pullRequestStates[state]}
+                key={state}
+                onCheckedChange={(checked) =>
+                  updateFilters({
+                    pullRequestStates: {
+                      ...filters.pullRequestStates,
+                      [state]: checked,
+                    },
+                  })
+                }
+                state={state}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function PanelHeading({ children }: { children: string }) {
+  return (
+    <div className="px-1.5 text-xs font-medium text-muted-foreground">
+      {children}
+    </div>
+  )
+}
+
+function FilterRow({
+  children,
+  hint,
+  label,
+}: {
+  children: ReactNode
+  hint?: string | null
+  label: string
+}) {
+  const row = (
+    <div className="flex items-center justify-between gap-2 px-1.5">
+      <span className={cn(hint && "text-muted-foreground")}>{label}</span>
+      {children}
+    </div>
+  )
+  return hint ? <Hinted hint={hint}>{row}</Hinted> : row
+}
+
+function Segmented<T extends string>({
+  disabled = false,
+  onChange,
+  options,
+  value,
+}: {
+  disabled?: boolean
+  onChange: (value: T) => void
+  options: { label: string; value: T }[]
+  value: T
+}) {
+  return (
+    <ButtonGroup role="radiogroup">
+      {options.map((option) => (
+        <Button
+          aria-checked={option.value === value}
+          aria-pressed={option.value === value}
+          disabled={disabled}
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          role="radio"
+          size="xs"
+          type="button"
+          variant="outline"
+        >
+          {option.label}
+        </Button>
+      ))}
+    </ButtonGroup>
+  )
+}
+
+function PullRequestStateChip({
+  checked,
+  onCheckedChange,
+  state,
+}: {
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  state: PullRequestState
+}) {
+  return (
+    <Button
+      aria-pressed={checked}
+      className={cn(!checked && "text-muted-foreground")}
+      onClick={() => onCheckedChange(!checked)}
+      size="xs"
+      type="button"
+      variant="outline"
+    >
+      {PULL_REQUEST_STATE_LABELS[state]}
+    </Button>
   )
 }

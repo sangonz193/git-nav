@@ -704,7 +704,7 @@ function refPriority(ref: DisplayRef) {
   return CHIP_PRIORITY[ref.kind]
 }
 
-const PULL_REQUEST_STATE_LABELS: Record<PullRequestState, string> = {
+export const PULL_REQUEST_STATE_LABELS: Record<PullRequestState, string> = {
   open: "Open",
   draft: "Draft",
   merged: "Merged",

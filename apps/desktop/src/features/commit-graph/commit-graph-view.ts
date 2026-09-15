@@ -8,6 +8,8 @@ import {
   type BranchPullRequest,
   type BranchSync,
   type Commit,
+  type DisplayRef,
+  type PullRequestState,
   type RowChip,
   type RowWorktree,
   type StashEntry,
@@ -29,6 +31,55 @@ export type ViewConfigChange = {
 }
 
 export const CHIP_KINDS: ChipKind[] = ["branch", "remote", "tag", "stash"]
+
+export type UpstreamFilter = "any" | "tracked" | "gone" | "none"
+export type PullRequestFilter = "any" | "linked" | "none"
+export type BranchFilters = {
+  pullRequest: PullRequestFilter
+  pullRequestStates: Record<PullRequestState, boolean>
+  upstream: UpstreamFilter
+}
+
+export const UPSTREAM_FILTERS: { label: string; value: UpstreamFilter }[] = [
+  { label: "Any", value: "any" },
+  { label: "Tracked", value: "tracked" },
+  { label: "Gone", value: "gone" },
+  { label: "None", value: "none" },
+]
+export const PULL_REQUEST_FILTERS: {
+  label: string
+  value: PullRequestFilter
+}[] = [
+  { label: "Any", value: "any" },
+  { label: "Linked", value: "linked" },
+  { label: "None", value: "none" },
+]
+export const PULL_REQUEST_STATES: PullRequestState[] = [
+  "open",
+  "draft",
+  "merged",
+  "closed",
+]
+export const DEFAULT_BRANCH_FILTERS: BranchFilters = {
+  pullRequest: "any",
+  pullRequestStates: { open: true, draft: true, merged: true, closed: true },
+  upstream: "any",
+}
+
+export function activeFilterCount(filters: BranchFilters) {
+  return (
+    (filters.upstream === "any" ? 0 : 1) +
+    (filters.pullRequest === "any" ? 0 : 1)
+  )
+}
+
+export function branchFiltersKey(filters: BranchFilters) {
+  return [
+    filters.upstream,
+    filters.pullRequest,
+    PULL_REQUEST_STATES.filter((state) => filters.pullRequestStates[state]),
+  ].join(":")
+}
 export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
   branch: "Local branches",
   remote: "Remote branches",
@@ -308,6 +359,7 @@ export function useViewConfig() {
 export type ChipContext = {
   branchSync: Map<string, BranchSync>
   chipKinds: Record<ChipKind, boolean>
+  filters: BranchFilters
   pullRequests: Map<string, BranchPullRequest>
   remotes: string[] | undefined
   stashesByBase: Map<string, StashEntry[]>
@@ -325,11 +377,53 @@ function isPinnedChip(chip: RowChip) {
   )
 }
 
+// Only a local branch has an upstream to ask about, so a remote ref answers every upstream filter but "any"
+// by leaving.
+function matchesUpstream(ref: DisplayRef, filter: UpstreamFilter) {
+  if (filter === "any") {
+    return true
+  }
+  if (ref.kind !== "branch") {
+    return false
+  }
+  const upstream = ref.sync?.upstream ?? null
+  if (filter === "none") {
+    return upstream === null
+  }
+  if (filter === "gone") {
+    return ref.sync?.isGone === true
+  }
+  return upstream !== null && !ref.sync?.isGone
+}
+
+function matchesPullRequest(ref: DisplayRef, filters: BranchFilters) {
+  if (filters.pullRequest === "any") {
+    return true
+  }
+  if (filters.pullRequest === "none") {
+    return ref.pullRequest === null
+  }
+  return (
+    ref.pullRequest !== null && filters.pullRequestStates[ref.pullRequest.state]
+  )
+}
+
+function matchesFilters(chip: RowChip, filters: BranchFilters) {
+  if (chip.kind !== "branch" && chip.kind !== "remote") {
+    return true
+  }
+  return (
+    matchesUpstream(chip.ref, filters.upstream) &&
+    matchesPullRequest(chip.ref, filters)
+  )
+}
+
 export function commitChips(
   commit: Commit,
   {
     branchSync,
     chipKinds,
+    filters,
     pullRequests,
     remotes,
     stashesByBase,
@@ -350,7 +444,9 @@ export function commitChips(
   )
   return chips.filter(
     (chip) =>
-      chip.kind === "worktree" || isPinnedChip(chip) || chipKinds[chip.kind],
+      chip.kind === "worktree" ||
+      isPinnedChip(chip) ||
+      (chipKinds[chip.kind] && matchesFilters(chip, filters)),
   )
 }
 

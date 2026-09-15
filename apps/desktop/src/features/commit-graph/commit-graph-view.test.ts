@@ -1,10 +1,19 @@
 import { describe, expect, test } from "bun:test"
 
-import type { Commit, RowWorktree, StashEntry } from "./commit-graph"
+import type {
+  BranchPullRequest,
+  BranchSync,
+  Commit,
+  RowWorktree,
+  StashEntry,
+} from "./commit-graph"
 import {
+  activeFilterCount,
   applyViewConfigSetting,
   appendGraphRows,
+  branchFiltersKey,
   commitChips,
+  DEFAULT_BRANCH_FILTERS,
   DEFAULT_VIEW_CONFIG,
   isMarkedCommit,
   loadViewConfig,
@@ -38,6 +47,7 @@ function context(overrides: Partial<ChipContext> = {}): ChipContext {
   return {
     branchSync: new Map(),
     chipKinds: DEFAULT_VIEW_CONFIG.chipKinds,
+    filters: DEFAULT_BRANCH_FILTERS,
     pullRequests: new Map(),
     remotes: ["origin"],
     stashesByBase: new Map(),
@@ -336,6 +346,148 @@ describe("commitChips", () => {
       context({ stashesByBase: new Map([["c", [stash]]]) }),
     )
     expect(chips.map((chip) => chip.kind)).toEqual(["stash"])
+  })
+
+  function sync(branch: string, overrides: Partial<BranchSync> = {}) {
+    return {
+      ahead: 0,
+      behind: 0,
+      branch,
+      isGone: false,
+      upstream: `origin/${branch}`,
+      ...overrides,
+    }
+  }
+  const branchSync = new Map<string, BranchSync>([
+    ["gone", sync("gone", { isGone: true })],
+    ["local", sync("local", { upstream: null })],
+    ["tracked", sync("tracked")],
+  ])
+  const filtered = commit("a", [
+    "gone",
+    "local",
+    "tracked",
+    "origin/tracked",
+    "origin/other",
+    "tag: v1",
+  ])
+  const labels = (chips: ReturnType<typeof commitChips>) =>
+    chips.map((chip) =>
+      chip.kind === "stash" ? chip.entry.name
+      : chip.kind === "worktree" ? chip.worktree.name
+      : chip.ref.label,
+    )
+
+  test("keeps only the branches whose upstream is gone", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "gone" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["gone", "v1"])
+  })
+
+  test("keeps only the branches without an upstream", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "none" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["local", "v1"])
+  })
+
+  test("a tracked upstream drops the remote refs alongside the untracked branches", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "tracked" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["tracked · origin", "v1"])
+  })
+
+  const pullRequest = (
+    branch: string,
+    state: BranchPullRequest["state"],
+  ): [string, BranchPullRequest] => [
+    branch,
+    { branch, number: 1, state, title: branch, url: "" },
+  ]
+  const pullRequests = new Map([
+    pullRequest("gone", "merged"),
+    pullRequest("other", "open"),
+  ])
+
+  test("keeps only the refs with a linked pull request in a chosen state", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: {
+          ...DEFAULT_BRANCH_FILTERS,
+          pullRequest: "linked",
+          pullRequestStates: {
+            open: true,
+            draft: false,
+            merged: false,
+            closed: false,
+          },
+        },
+        pullRequests,
+      }),
+    )
+    expect(labels(chips)).toEqual(["origin/other", "v1"])
+  })
+
+  test("keeps only the refs without a pull request", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" },
+        pullRequests,
+      }),
+    )
+    expect(labels(chips)).toEqual(["local", "tracked · origin", "v1"])
+  })
+
+  test("the checkout survives a filter it does not match", () => {
+    const chips = commitChips(
+      commit("a", ["HEAD -> local"]),
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "gone" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["local"])
+  })
+})
+
+describe("branch filters", () => {
+  test("counts each narrowed axis once", () => {
+    expect(activeFilterCount(DEFAULT_BRANCH_FILTERS)).toBe(0)
+    expect(
+      activeFilterCount({
+        ...DEFAULT_BRANCH_FILTERS,
+        pullRequest: "linked",
+        upstream: "gone",
+      }),
+    ).toBe(2)
+  })
+
+  test("the key changes with the chosen pull request states", () => {
+    const linked = { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" as const }
+    expect(branchFiltersKey(linked)).not.toBe(
+      branchFiltersKey({
+        ...linked,
+        pullRequestStates: { ...linked.pullRequestStates, merged: false },
+      }),
+    )
   })
 })
 

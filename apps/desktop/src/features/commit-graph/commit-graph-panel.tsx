@@ -75,10 +75,14 @@ import {
 import {
   appendGraphRows,
   CHIP_KINDS,
+  activeFilterCount,
+  branchFiltersKey,
   commitChips,
+  DEFAULT_BRANCH_FILTERS,
   isMarkedCommit,
   rowIndexOfCommit,
   useViewConfig,
+  type BranchFilters,
   type ChipContext,
   type GraphRow,
   type GraphRows,
@@ -191,6 +195,8 @@ function CommitGraphPanelContent({
   const [collapseUnmarked, setCollapseUnmarked] = useState(
     params.userPreferences?.collapseUnmarked ?? true,
   )
+  // A filter is a task rather than a preference, so it starts clear on every open.
+  const [filters, setFilters] = useState<BranchFilters>(DEFAULT_BRANCH_FILTERS)
   const [detailsExpanded, setDetailsExpanded] = useState(
     params.userPreferences?.detailsExpanded ?? false,
   )
@@ -344,6 +350,7 @@ function CommitGraphPanelContent({
     () => ({
       branchSync,
       chipKinds: config.chipKinds,
+      filters,
       pullRequests,
       remotes,
       stashesByBase,
@@ -352,6 +359,7 @@ function CommitGraphPanelContent({
     [
       branchSync,
       config.chipKinds,
+      filters,
       pullRequests,
       remotes,
       stashesByBase,
@@ -366,10 +374,11 @@ function CommitGraphPanelContent({
       [
         remoteNames,
         CHIP_KINDS.filter((kind) => config.chipKinds[kind]).join(","),
+        branchFiltersKey(filters),
         [...stashesByBase.keys()].sort().join(","),
         [...worktreesByHead.keys()].sort().join(","),
       ].join("|"),
-    [config.chipKinds, remoteNames, stashesByBase, worktreesByHead],
+    [config.chipKinds, filters, remoteNames, stashesByBase, worktreesByHead],
   )
   // Rows exist only while runs are being collapsed. Without them a row is a commit, which is what the rest of
   // the panel already reads its indexes as.
@@ -736,6 +745,20 @@ function CommitGraphPanelContent({
     setCollapseUnmarked(collapse)
   }
 
+  // A filter that hides labels without folding the rows between them reads as labels going missing, so
+  // narrowing the graph brings the collapse with it.
+  function updateFilters(change: Partial<BranchFilters>) {
+    const next = { ...filters, ...change }
+    if (
+      !collapseUnmarked &&
+      activeFilterCount(next) > 0 &&
+      activeFilterCount(filters) === 0
+    ) {
+      collapseUnmarkedCommits(true)
+    }
+    setFilters(next)
+  }
+
   function revealRun(startHash: string) {
     setRevealed((current) => new Set(current).add(startHash))
   }
@@ -1042,6 +1065,7 @@ function CommitGraphPanelContent({
         collapseUnmarked={collapseUnmarked}
         config={config}
         fetch={() => fetchMutation.mutate()}
+        filters={filters}
         graphOffset={graphOffset}
         hasOlderCommits={hasOlderCommits}
         isFetching={fetchMutation.isPending}
@@ -1049,11 +1073,13 @@ function CommitGraphPanelContent({
         menus={menus}
         onActivateSearchHit={activateSearchHit}
         onCollapseUnmarked={collapseUnmarkedCommits}
+        pullRequestCount={pullRequests.size}
         refreshGraph={refreshGraph}
         search={search}
         showGraphWindow={showGraphWindow}
         stashes={stashes}
         updateConfig={updateConfig}
+        updateFilters={updateFilters}
       />
       <div
         aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."
@@ -1379,6 +1405,7 @@ function CommitGraphPanelContent({
         cleanOptions={cleanOptions}
         cleanup={cleanup}
         updateConfig={updateConfig}
+        updateFilters={updateFilters}
       />
       {request && (
         <OperationDialog
