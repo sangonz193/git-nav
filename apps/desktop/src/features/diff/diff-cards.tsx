@@ -33,6 +33,7 @@ import {
   DIFF_FONT_SIZE,
   estimatedBodyHeight,
   isLargeDiff,
+  isSvgFile,
   statusLetter,
   type BinaryContent,
   type DiffEntry,
@@ -142,7 +143,7 @@ function BinaryDiff({
   oldBinary: BinaryContent | null
   oldPath: string | null
 }) {
-  if (!oldBinary?.image && !newBinary?.image) {
+  if (!oldBinary?.image && !newBinary?.image && !oldImage && !newImage) {
     const sizes = [oldBinary, newBinary]
       .filter((content) => content !== null)
       .map((content) => formatBytes(content.size))
@@ -208,6 +209,38 @@ function ImageSide({
         {formatBytes(content.size)}
         {dimensions && ` · ${dimensions}`}
       </figcaption>
+    </figure>
+  )
+}
+
+function ImageErrorPreview({
+  message,
+  newImage,
+  oldImage,
+}: {
+  message: string
+  newImage: boolean
+  oldImage: boolean
+}) {
+  return (
+    <div className="diff-binary-preview">
+      {oldImage && <ImageErrorSide message={message} side="old" />}
+      {newImage && <ImageErrorSide message={message} side="new" />}
+    </div>
+  )
+}
+
+function ImageErrorSide({
+  message,
+  side,
+}: {
+  message: string
+  side: "old" | "new"
+}) {
+  return (
+    <figure className={`diff-binary-side is-${side}`}>
+      <p className="diff-file-card-notice text-destructive">{message}</p>
+      <figcaption>&nbsp;</figcaption>
     </figure>
   )
 }
@@ -293,6 +326,21 @@ export function FileDiffCard({
       )
     }
     if (entry?.state === "error") {
+      const oldImage = isImagePath(file.oldPath)
+      const newImage = isImagePath(file.newPath)
+      if (
+        file.isBinary ?
+          oldImage || newImage
+        : isSvgFile(file) && !isLargeDiff(file)
+      ) {
+        return (
+          <ImageErrorPreview
+            message={entry.message}
+            newImage={newImage}
+            oldImage={oldImage}
+          />
+        )
+      }
       return (
         <p className="diff-file-card-notice text-destructive">
           {entry.message}

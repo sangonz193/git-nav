@@ -1317,27 +1317,38 @@ button.commit-ref-selected:hover {
 }
 
 .diff-binary-side img {
-  background-color: #fff;
+  background-color: #16181d;
   background-image:
-    linear-gradient(45deg, #ccc 25%, transparent 25%),
-    linear-gradient(-45deg, #ccc 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #ccc 75%),
-    linear-gradient(-45deg, transparent 75%, #ccc 75%);
+    linear-gradient(45deg, #282c34 25%, transparent 25%),
+    linear-gradient(-45deg, #282c34 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #282c34 75%),
+    linear-gradient(-45deg, transparent 75%, #282c34 75%);
   background-position:
     0 0,
     0 8px,
     8px -8px,
     -8px 0;
   background-size: 16px 16px;
-  max-height: 320px;
-  max-width: 100%;
-  object-fit: contain;
+  height: 320px;
+  object-fit: scale-down;
+  width: 100%;
+}
+
+.diff-binary-side .diff-file-card-notice {
+  align-self: stretch;
+  height: 320px;
+  justify-content: center;
 }
 
 .diff-binary-side figcaption {
   color: var(--muted-foreground);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .diff-empty {
