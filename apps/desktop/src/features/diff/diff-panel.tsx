@@ -5,8 +5,6 @@ import type { IDockviewPanelProps } from "dockview-react"
 import {
   Archive,
   ChevronDown,
-  ChevronsDownUp,
-  ChevronsUpDown,
   Cloud,
   Columns2,
   FilePen,
@@ -33,15 +31,6 @@ import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import { Checkbox } from "@workspace/shadcn/components/checkbox"
 import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@workspace/shadcn/components/dropdown-menu"
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -58,6 +47,14 @@ import {
 } from "@workspace/shadcn/components/tooltip"
 import { toast } from "@workspace/shadcn/components/sonner"
 import { Hinted } from "@/components/hinted"
+import {
+  FoldButtons,
+  LabeledRow,
+  PanelHeading,
+  PanelSection,
+  Segmented,
+  SwitchRow,
+} from "@/components/view-panel"
 import { SearchMenu, type SearchMenuItem } from "@/components/search-menu"
 import { useTheme } from "@/components/theme-provider"
 import {
@@ -113,6 +110,14 @@ import type {
 } from "@/lib/panel-params"
 
 const SEARCH_DEBOUNCE = 120
+const LAYOUT_OPTIONS: {
+  icon: typeof Columns2
+  label: string
+  value: "split" | "unified"
+}[] = [
+  { icon: Columns2, label: "Split", value: "split" },
+  { icon: Rows3, label: "Unified", value: "unified" },
+]
 const PICKER_MENU_WIDTH = 320
 
 const HIT_ICONS: Record<HitKind, ComponentType<{ className?: string }>> = {
@@ -349,6 +354,18 @@ export function DiffPanel({
       isFoldedFile(file, refs.head, viewed, handFolds, fileKey(file)),
     [handFolds, refs.head, viewed],
   )
+  const folds = useMemo(() => {
+    let folded = 0
+    for (const file of files) {
+      if (isFolded(file)) {
+        folded += 1
+      }
+    }
+    return {
+      allCollapsed: files.length > 0 && folded === files.length,
+      allExpanded: files.length > 0 && folded === 0,
+    }
+  }, [files, isFolded])
 
   function toggleFileTree() {
     const next = toggledDiffFileTree(
@@ -768,6 +785,20 @@ export function DiffPanel({
   }
 
   const isSplit = (mode & DiffModeEnum.Split) !== 0
+  // The pair only fits the toolbar once the panel is wide; until then it sits with the other view options.
+  const inlineFolds = panelWidth >= WIDE_DIFF_PANEL_WIDTH
+  const foldButtons = (
+    <FoldButtons
+      allCollapsed={folds.allCollapsed}
+      allExpanded={folds.allExpanded}
+      collapseHint="Collapse all files"
+      disabled={files.length === 0}
+      expandHint="Expand all files"
+      onCollapse={() => collapseAll(true)}
+      onExpand={() => collapseAll(false)}
+      size={inlineFolds ? "icon-sm" : "icon-xs"}
+    />
+  )
 
   const emptyNotice =
     comparison &&
@@ -1002,9 +1033,10 @@ export function DiffPanel({
               </Hinted>
             </ButtonGroup>
           )}
-          <DropdownMenu>
+          {inlineFolds && foldButtons}
+          <Popover>
             <Tooltip>
-              <DropdownMenuTrigger asChild>
+              <PopoverTrigger asChild>
                 <TooltipTrigger asChild>
                   <Button
                     aria-label="View options"
@@ -1016,76 +1048,48 @@ export function DiffPanel({
                     {!isNarrow && "View"}
                   </Button>
                 </TooltipTrigger>
-              </DropdownMenuTrigger>
+              </PopoverTrigger>
               <TooltipContent>Choose how the diff is laid out</TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end">
-              {isNarrow && (
-                <>
-                  <DropdownMenuLabel>Layout</DropdownMenuLabel>
-                  <DropdownMenuCheckboxItem
-                    checked={isSplit}
-                    onCheckedChange={() => setPreferredMode("split")}
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <Columns2 />
-                    Split
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={!isSplit}
-                    onCheckedChange={() => setPreferredMode("unified")}
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <Rows3 />
-                    Unified
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                </>
-              )}
-              <DropdownMenuCheckboxItem
-                checked={wrap}
-                onCheckedChange={(checked) =>
-                  setPreferredWrap(checked === true)
-                }
-                onSelect={(event) => event.preventDefault()}
-              >
-                Wrap long lines
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={hideViewed}
-                onCheckedChange={(checked) =>
-                  setPreferredHideViewed(checked === true)
-                }
-                onSelect={(event) => event.preventDefault()}
-              >
-                Hide viewed files
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={ignoreWhitespace}
-                onCheckedChange={(checked) =>
-                  setPreferredIgnoreWhitespace(checked === true)
-                }
-                onSelect={(event) => event.preventDefault()}
-              >
-                Ignore whitespace
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={files.length === 0}
-                onSelect={() => collapseAll(true)}
-              >
-                <ChevronsDownUp />
-                Collapse all files
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={files.length === 0}
-                onSelect={() => collapseAll(false)}
-              >
-                <ChevronsUpDown />
-                Expand all files
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            <PopoverContent align="end" className="w-64 p-0">
+              <PanelSection>
+                <PanelHeading>Layout</PanelHeading>
+                {isNarrow && (
+                  <LabeledRow label="Columns">
+                    <Segmented
+                      onChange={setPreferredMode}
+                      options={LAYOUT_OPTIONS}
+                      value={isSplit ? "split" : "unified"}
+                    />
+                  </LabeledRow>
+                )}
+                <SwitchRow
+                  checked={wrap}
+                  id="diff-view-wrap"
+                  label="Wrap long lines"
+                  onCheckedChange={setPreferredWrap}
+                />
+                <SwitchRow
+                  checked={ignoreWhitespace}
+                  id="diff-view-ignore-whitespace"
+                  label="Ignore whitespace"
+                  onCheckedChange={setPreferredIgnoreWhitespace}
+                />
+              </PanelSection>
+              <PanelSection>
+                <PanelHeading>Files</PanelHeading>
+                <SwitchRow
+                  checked={hideViewed}
+                  id="diff-view-hide-viewed"
+                  label="Hide viewed files"
+                  onCheckedChange={setPreferredHideViewed}
+                />
+                {!inlineFolds && (
+                  <LabeledRow label="Fold">{foldButtons}</LabeledRow>
+                )}
+              </PanelSection>
+            </PopoverContent>
+          </Popover>
           <Hinted hint="Reread this comparison">
             <Button
               aria-label="Refresh the comparison"
