@@ -2,7 +2,7 @@
 
 use axum::{
     body::Body,
-    extract::{Query, Request, State},
+    extract::{Path, Query, Request, State},
     http::{header, HeaderValue, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -286,7 +286,10 @@ fn bind(options: Options, open_worktrees: OpenWorktrees) -> Result<BoundServer, 
     });
 
     // Only the browser needs a folder picker; the desktop app uses the native dialog.
-    let mut api = Router::new().route("/list_directory", post(list_directory));
+    let mut api = Router::new()
+        .route("/list_directory", post(list_directory))
+        // The desktop app reaches the same images through its own URI scheme.
+        .route("/diff_image/{token}", get(diff_image));
     for command in IpcCommand::ALL {
         if let Exposure::Api(route) = exposure(command) {
             api = api.route(&format!("/{}", command.name()), route);
@@ -676,6 +679,13 @@ async fn list_directory(Json(args): Json<PathArg>) -> CommandResult {
     ok(blocking(move || directory_listing(args.path.as_deref())).await?)
 }
 
+async fn diff_image(Path(token): Path<String>) -> Response {
+    match tokio::task::spawn_blocking(move || crate::images::response(&token)).await {
+        Ok(response) => response.map(Body::from),
+        Err(error) => CommandError(error.to_string()).into_response(),
+    }
+}
+
 
 
 
@@ -869,6 +879,42 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         assert!(server.stop());
+    }
+
+    fn http_get(port: u16, path: &str) -> (String, Vec<u8>) {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).unwrap();
+        let split = raw.windows(4).position(|window| window == b"\r\n\r\n").unwrap();
+        (String::from_utf8_lossy(&raw[..split]).into_owned(), raw[split + 4..].to_vec())
+    }
+
+    #[test]
+    fn serves_diff_images_by_token() {
+        let (path, run) = crate::test_support::scratch_repository("served-image");
+        std::fs::write(std::path::Path::new(&path).join("shot.png"), b"\x89PNG\0served").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "image"]);
+        let token = crate::images::mint(crate::images::ImageSource {
+            repo_path: path.clone(),
+            revision: "HEAD".to_string(),
+            path: "shot.png".to_string(),
+            mime: "image/png",
+        });
+        let server = start(local_options(0), OpenWorktrees::default()).unwrap();
+        let port = server.state().port.unwrap();
+
+        let (head, body) = http_get(port, &format!("/api/diff_image/{token}"));
+        let (missing, _) = http_get(port, "/api/diff_image/unknown");
+        assert!(server.stop());
+        crate::test_support::remove_scratch_repository(&path);
+
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert!(head.to_ascii_lowercase().contains("content-type: image/png"), "{head}");
+        assert_eq!(body, b"\x89PNG\0served");
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
     }
 
     #[test]

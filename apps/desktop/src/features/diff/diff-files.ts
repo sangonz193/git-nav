@@ -3,6 +3,7 @@ import { DiffModeEnum } from "@git-diff-view/react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
+import { imageUrl } from "@/lib/ipc"
 import {
   fileName,
   isImagePath,
@@ -29,6 +30,14 @@ highlighter.setMaxLineToIgnoreSyntax(MAX_HIGHLIGHT_LINES)
 export type BinaryContent = {
   size: number
   image: string | null
+  dimensions: string | null
+}
+
+type ServedBinary = {
+  size: number
+  imageToken: string | null
+  width: number | null
+  height: number | null
 }
 
 export type FileDiff = {
@@ -38,8 +47,21 @@ export type FileDiff = {
   newContent: string | null
   hunks: string[]
   isBinary: boolean
-  oldBinary: BinaryContent | null
-  newBinary: BinaryContent | null
+  oldBinary: ServedBinary | null
+  newBinary: ServedBinary | null
+}
+
+function binaryContent(served: ServedBinary | null): BinaryContent | null {
+  return (
+    served && {
+      size: served.size,
+      image: served.imageToken === null ? null : imageUrl(served.imageToken),
+      dimensions:
+        served.width === null || served.height === null ?
+          null
+        : `${served.width}×${served.height}`,
+    }
+  )
 }
 
 type DiffData = {
@@ -155,8 +177,6 @@ type LoaderState = {
   load: Loader | null
   queued: ChangedFile[]
   started: Set<string>
-  requested: Set<string>
-  binary: Set<string>
   inFlight: number
 }
 
@@ -165,8 +185,6 @@ function freshLoader(load: Loader | null): LoaderState {
     load,
     queued: [],
     started: new Set(),
-    requested: new Set(),
-    binary: new Set(),
     inFlight: 0,
   }
 }
@@ -195,32 +213,6 @@ export function useDiffLoader(
         loader.current = freshLoader(load)
       }
       const state = loader.current
-      // An image is held as a data URL, which is too much to keep for every card that has scrolled past.
-      const requested = new Set(files.map(keyOf))
-      state.requested = requested
-      let evicted = false
-      for (const key of state.binary) {
-        if (!requested.has(key)) {
-          state.binary.delete(key)
-          state.started.delete(key)
-          evicted = true
-        }
-      }
-      if (evicted) {
-        setLoaded((current) =>
-          current.load === load ?
-            {
-              load,
-              entries: Object.fromEntries(
-                Object.entries(current.entries).filter(
-                  ([key, entry]) =>
-                    entry.state !== "binary" || requested.has(key),
-                ),
-              ),
-            }
-          : current,
-        )
-      }
       state.queued = files.filter((file) => !state.started.has(keyOf(file)))
       const drain = async () => {
         for (
@@ -235,8 +227,8 @@ export function useDiffLoader(
               diff.isBinary ?
                 {
                   state: "binary",
-                  oldBinary: diff.oldBinary,
-                  newBinary: diff.newBinary,
+                  oldBinary: binaryContent(diff.oldBinary),
+                  newBinary: binaryContent(diff.newBinary),
                 }
               : {
                   state: "loaded",
@@ -259,14 +251,6 @@ export function useDiffLoader(
             }))
           if (loader.current !== state) {
             return
-          }
-          if (entry.state === "binary") {
-            state.binary.add(key)
-            if (!state.requested.has(key)) {
-              state.binary.delete(key)
-              state.started.delete(key)
-              continue
-            }
           }
           setLoaded((current) => ({
             load,
@@ -332,7 +316,8 @@ export function useDiffCards({
       FILE_HEADER_HEIGHT +
       estimatedBodyHeight(files[index], mode, isFolded(files[index])),
     getItemKey: (index) => keyOf(files[index]),
-    overscan: 2,
+    // A fast scroll or a jump from the file tree outruns two rows and shows empty slots for a frame.
+    overscan: 4,
   })
   const virtualRows = rowVirtualizer.getVirtualItems()
 

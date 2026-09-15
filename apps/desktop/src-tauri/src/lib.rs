@@ -9,6 +9,8 @@ mod desktop;
 mod diff;
 mod git;
 mod graph;
+mod images;
+mod previews;
 mod operations;
 mod process;
 mod projects;
@@ -207,7 +209,14 @@ pub fn run() {
     let repository_path = repository_path_from_args(&args, &cwd);
     let startup_readiness = serve_request.as_ref().map(|(path, _)| path.clone());
 
-    let mut builder = tauri::Builder::default();
+    let mut builder = tauri::Builder::default().register_asynchronous_uri_scheme_protocol(
+        images::URI_SCHEME,
+        |_context, request, responder| {
+            let token = request.uri().path().trim_start_matches('/').to_string();
+            // The handler runs on the UI thread on macOS, and reading a blob shells out to git.
+            tauri::async_runtime::spawn_blocking(move || responder.respond(images::response(&token)));
+        },
+    );
 
     #[cfg(desktop)]
     {

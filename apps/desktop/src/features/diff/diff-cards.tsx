@@ -184,21 +184,37 @@ function ImageSide({
   imageType: boolean
   side: "old" | "new"
 }) {
-  const [dimensions, setDimensions] = useState<string | null>(null)
+  // A downscaled preview is served for a large photograph, so its own size is only a fallback.
+  const [naturalDimensions, setNaturalDimensions] = useState<string | null>(
+    null,
+  )
+  const dimensions = content.dimensions ?? naturalDimensions
+  const [decoded, setDecoded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   return (
     <figure className={`diff-binary-side is-${side}`}>
       {content.image && !previewFailed ?
-        <img
-          alt={side === "old" ? "Before" : "After"}
-          onError={() => setPreviewFailed(true)}
-          onLoad={(event) =>
-            setDimensions(
-              `${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`,
-            )
-          }
-          src={content.image}
-        />
+        <div className="diff-binary-image">
+          <img
+            alt={side === "old" ? "Before" : "After"}
+            className={cn(decoded && "is-loaded")}
+            decoding="async"
+            onError={() => setPreviewFailed(true)}
+            onLoad={(event) => {
+              const image = event.currentTarget
+              setNaturalDimensions(
+                `${image.naturalWidth}×${image.naturalHeight}`,
+              )
+              // load fires before a large photo is decoded, so revealing it here would paint nothing
+              // for a while and then pop; decode() resolves once there are pixels to fade in.
+              image.decode().then(
+                () => setDecoded(true),
+                () => setDecoded(true),
+              )
+            }}
+            src={content.image}
+          />
+        </div>
       : <p className="diff-file-card-notice">
           {!previewFailed && imageType && content.size > IMAGE_PREVIEW_LIMIT ?
             "Too large to preview"
@@ -209,6 +225,32 @@ function ImageSide({
         {formatBytes(content.size)}
         {dimensions && ` · ${dimensions}`}
       </figcaption>
+    </figure>
+  )
+}
+
+// A card whose diff is still loading already knows it will show images, so the frame is painted at
+// once and only the pixels arrive later.
+function ImagePlaceholderPreview({
+  newImage,
+  oldImage,
+}: {
+  newImage: boolean
+  oldImage: boolean
+}) {
+  return (
+    <div className="diff-binary-preview">
+      {oldImage && <ImagePlaceholderSide side="old" />}
+      {newImage && <ImagePlaceholderSide side="new" />}
+    </div>
+  )
+}
+
+function ImagePlaceholderSide({ side }: { side: "old" | "new" }) {
+  return (
+    <figure className={`diff-binary-side is-${side}`}>
+      <div className="diff-binary-image" />
+      <figcaption>&nbsp;</figcaption>
     </figure>
   )
 }
@@ -382,6 +424,15 @@ export function FileDiffCard({
           </Button>
         </p>
       )
+    }
+    if (file.isBinary) {
+      const oldImage = isImagePath(file.oldPath)
+      const newImage = isImagePath(file.newPath)
+      if (oldImage || newImage) {
+        return (
+          <ImagePlaceholderPreview newImage={newImage} oldImage={oldImage} />
+        )
+      }
     }
     return <div style={{ height: estimatedBodyHeight(file, mode) }} />
   }

@@ -7,7 +7,7 @@ use std::{
 use std::hash::{Hash, Hasher};
 use crate::diff::{ChangedFile, conflicted_paths, staged_changed_files, unstaged_changed_files};
 use crate::git::{
-    OperationResult, completed_operation, failed_operation, git_error_message, git_output,
+    INDEX_REF, WORKTREE_REF, OperationResult, completed_operation, failed_operation, git_error_message, git_output,
     git_output_allow_empty, git_output_bytes, git_result_with_stdin, git_version, ref_shas,
     resolve_commit, worktree_path,
 };
@@ -32,6 +32,13 @@ fn read_working_tree(repo_path: &str) -> Result<WorkingTree, String> {
     let index_fingerprint = index_fingerprint(&worktree)?;
     let staged = staged_changed_files(&worktree, &conflicted)?;
     let unstaged = unstaged_changed_files(&worktree, &conflicted)?;
+    crate::previews::warm(
+        [
+            crate::compare::image_sources(repo_path, "HEAD", INDEX_REF, &staged),
+            crate::compare::image_sources(repo_path, INDEX_REF, WORKTREE_REF, &unstaged),
+        ]
+        .concat(),
+    );
     Ok(WorkingTree {
         branch: git_output(&worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]),
         head_sha: resolve_commit(&worktree, "HEAD").ok(),

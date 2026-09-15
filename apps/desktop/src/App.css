@@ -1316,7 +1316,8 @@ button.commit-ref-selected:hover {
   border-color: color-mix(in oklab, var(--color-emerald-400) 50%, transparent);
 }
 
-.diff-binary-side img {
+/* The checkerboard sits on a wrapper so it is painted before the image arrives. */
+.diff-binary-image {
   background-color: #16181d;
   background-image:
     linear-gradient(45deg, #282c34 25%, transparent 25%),
@@ -1330,8 +1331,19 @@ button.commit-ref-selected:hover {
     -8px 0;
   background-size: 16px 16px;
   height: 320px;
-  object-fit: scale-down;
   width: 100%;
+}
+
+.diff-binary-image img {
+  height: 100%;
+  object-fit: scale-down;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  width: 100%;
+}
+
+.diff-binary-image img.is-loaded {
+  opacity: 1;
 }
 
 .diff-binary-side .diff-file-card-notice {

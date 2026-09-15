@@ -6,7 +6,8 @@ use crate::git::{
     EMPTY_TREE_REF, WORKTREE_REF, git_output, git_result, primary_reference, project_id, resolve_commit,
     resolve_diff_base,
 };
-use crate::diff::{ChangedFile, changed_files, worktree_changed_files};
+use crate::diff::{ChangedFile, changed_files, image_source, worktree_changed_files};
+use crate::images::ImageSource;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +25,24 @@ pub(crate) struct BranchSelection {
 }
 
 fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool, ignore_whitespace: bool) -> Result<Comparison, String> {
+    let comparison = resolved_comparison(repo_path, base_ref, head_ref, merge_base, ignore_whitespace)?;
+    crate::previews::warm(image_sources(repo_path, &comparison.base_sha, &comparison.head_sha, &comparison.files));
+    Ok(comparison)
+}
+
+pub(crate) fn image_sources(repo_path: &str, base_sha: &str, head_sha: &str, files: &[ChangedFile]) -> Vec<ImageSource> {
+    files
+        .iter()
+        .filter(|file| file.is_binary)
+        .flat_map(|file| {
+            [(base_sha, file.old_path.as_deref()), (head_sha, file.new_path.as_deref())]
+                .into_iter()
+                .filter_map(|(revision, path)| image_source(repo_path, revision, path?))
+        })
+        .collect()
+}
+
+fn resolved_comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool, ignore_whitespace: bool) -> Result<Comparison, String> {
     let is_worktree = head_ref == WORKTREE_REF;
     // The working tree has no commit of its own, so the checkout it sits on stands in for it as the
     // side the fork point is measured from.
@@ -281,7 +300,8 @@ pub(crate) fn merge_base(repo_path: String, left: String, right: String) -> Resu
 mod tests {
     use super::*;
     use std::{env, fs, path::Path};
-    use crate::diff::{IMAGE_PREVIEW_LIMIT, diff_file};
+    use crate::diff::diff_file;
+    use crate::images::{IMAGE_PREVIEW_LIMIT, response};
     use crate::test_support::{remove_scratch_repository, scratch_repository};
 
     #[test]
@@ -616,6 +636,12 @@ mod tests {
         let image = diff_file(path.clone(), base.clone(), head.clone(), Some("shot.png".to_string()), Some("shot.png".to_string()), false).unwrap();
         let other = diff_file(path.clone(), base.clone(), head.clone(), Some("blob.bin".to_string()), Some("blob.bin".to_string()), false).unwrap();
         let untracked = diff_file(path.clone(), base, head, None, Some("fresh.png".to_string()), false).unwrap();
+        let served = |content: &Option<crate::diff::BinaryContent>| {
+            content.as_ref().and_then(|content| content.image_token.as_deref()).map(|token| response(token).into_body())
+        };
+        let old_bytes = served(&image.old_binary);
+        let new_bytes = served(&image.new_binary);
+        let untracked_bytes = served(&untracked.new_binary);
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "modified"]);
         let mut large = vec![0; IMAGE_PREVIEW_LIMIT + 1];
@@ -647,29 +673,29 @@ mod tests {
         let old = image.old_binary.unwrap();
         let new = image.new_binary.unwrap();
         assert_eq!((old.size, new.size), (8, 9));
-        assert_eq!(old.image.as_deref(), Some("data:image/png;base64,iVBORwBvbGQ="));
-        assert_eq!(new.image.as_deref(), Some("data:image/png;base64,iVBORwBuZXch"));
+        assert_eq!(old_bytes.as_deref(), Some(&b"\x89PNG\0old"[..]));
+        assert_eq!(new_bytes.as_deref(), Some(&b"\x89PNG\0new!"[..]));
 
         assert!(other.is_binary);
-        assert_eq!(other.old_binary.as_ref().map(|content| (content.size, content.image.is_none())), Some((4, true)));
-        assert_eq!(other.new_binary.as_ref().map(|content| (content.size, content.image.is_none())), Some((5, true)));
+        assert_eq!(other.old_binary.as_ref().map(|content| (content.size, content.image_token.is_none())), Some((4, true)));
+        assert_eq!(other.new_binary.as_ref().map(|content| (content.size, content.image_token.is_none())), Some((5, true)));
 
         assert!(untracked.is_binary);
         assert!(untracked.old_binary.is_none());
-        assert_eq!(untracked.new_binary.unwrap().image.as_deref(), Some("data:image/png;base64,iVBORwBmcmVzaA=="));
+        assert_eq!(untracked_bytes.as_deref(), Some(&b"\x89PNG\0fresh"[..]));
 
-        assert!(committed_image.old_binary.unwrap().image.as_deref().is_some_and(|image| image.starts_with("data:image/png;base64,")));
-        assert!(committed_image.new_binary.unwrap().image.as_deref().is_some_and(|image| image.starts_with("data:image/png;base64,")));
+        assert!(committed_image.old_binary.unwrap().image_token.is_some());
+        assert!(committed_image.new_binary.unwrap().image_token.is_some());
 
         let large = large_image.new_binary.unwrap();
         assert_eq!(large.size, (IMAGE_PREVIEW_LIMIT + 1) as u64);
-        assert!(large.image.is_none());
+        assert!(large.image_token.is_none());
 
         #[cfg(unix)]
         {
             let symlinked = symlinked_image.new_binary.unwrap();
             assert_eq!(symlinked.size, outside.len() as u64);
-            assert!(symlinked.image.is_none());
+            assert!(symlinked.image_token.is_none());
         }
     }
 }
