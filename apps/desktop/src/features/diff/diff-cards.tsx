@@ -216,6 +216,32 @@ function ImageSide({
   )
 }
 
+// A card whose diff is still loading already knows it will show images, so the frame is painted at
+// once and only the pixels arrive later.
+function ImagePlaceholderPreview({
+  newImage,
+  oldImage,
+}: {
+  newImage: boolean
+  oldImage: boolean
+}) {
+  return (
+    <div className="diff-binary-preview">
+      {oldImage && <ImagePlaceholderSide side="old" />}
+      {newImage && <ImagePlaceholderSide side="new" />}
+    </div>
+  )
+}
+
+function ImagePlaceholderSide({ side }: { side: "old" | "new" }) {
+  return (
+    <figure className={`diff-binary-side is-${side}`}>
+      <div className="diff-binary-image" />
+      <figcaption>&nbsp;</figcaption>
+    </figure>
+  )
+}
+
 function ImageErrorPreview({
   message,
   newImage,
@@ -385,6 +411,15 @@ export function FileDiffCard({
           </Button>
         </p>
       )
+    }
+    if (file.isBinary) {
+      const oldImage = isImagePath(file.oldPath)
+      const newImage = isImagePath(file.newPath)
+      if (oldImage || newImage) {
+        return (
+          <ImagePlaceholderPreview newImage={newImage} oldImage={oldImage} />
+        )
+      }
     }
     return <div style={{ height: estimatedBodyHeight(file, mode) }} />
   }

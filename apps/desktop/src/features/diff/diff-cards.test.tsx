@@ -48,3 +48,46 @@ describe("FileDiffCard load errors", () => {
     },
   )
 })
+
+describe("FileDiffCard loading images", () => {
+  test.each([
+    { oldPath: "image.png", newPath: "image.png", isBinary: true, sides: 2 },
+    { oldPath: null, newPath: "image.png", isBinary: true, sides: 1 },
+    { oldPath: "blob.bin", newPath: "blob.bin", isBinary: true, sides: 0 },
+    { oldPath: "image.svg", newPath: "image.svg", isBinary: false, sides: 0 },
+  ])(
+    "paints the frame for $oldPath → $newPath while the diff loads",
+    ({ oldPath, newPath, isBinary, sides }) => {
+      const file = {
+        status: oldPath ? "modified" : "added",
+        oldPath,
+        newPath,
+        oldOid: oldPath && "a".repeat(40),
+        newOid: "b".repeat(40),
+        additions: 0,
+        deletions: 0,
+        isBinary,
+        splitRows: 0,
+        unifiedRows: 0,
+        hunkRows: 0,
+      } satisfies ChangedFile
+      const markup = renderToStaticMarkup(
+        <FileDiffCard
+          allExpanded={false}
+          collapsed={false}
+          entry={undefined}
+          expanded={false}
+          file={file}
+          mode={DiffModeEnum.Split}
+          onExpand={() => {}}
+          onToggleAllExpanded={() => {}}
+          onToggleCollapsed={() => {}}
+          theme="light"
+          wrap={false}
+        />,
+      )
+
+      expect(markup.split('class="diff-binary-image"').length - 1).toBe(sides)
+    },
+  )
+})
