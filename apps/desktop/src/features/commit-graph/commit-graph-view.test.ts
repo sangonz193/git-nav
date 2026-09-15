@@ -14,6 +14,7 @@ import {
   branchFiltersKey,
   commitChips,
   DEFAULT_BRANCH_FILTERS,
+  describeBranchFilters,
   DEFAULT_VIEW_CONFIG,
   isMarkedCommit,
   loadViewConfig,
@@ -478,6 +479,35 @@ describe("branch filters", () => {
         upstream: "gone",
       }),
     ).toBe(2)
+  })
+
+  test("names each narrowed axis, and the states when not all are chosen", () => {
+    expect(describeBranchFilters(DEFAULT_BRANCH_FILTERS)).toBe("")
+    expect(
+      describeBranchFilters({ ...DEFAULT_BRANCH_FILTERS, upstream: "gone" }),
+    ).toBe("Upstream gone")
+    expect(
+      describeBranchFilters({
+        ...DEFAULT_BRANCH_FILTERS,
+        pullRequest: "linked",
+        upstream: "none",
+      }),
+    ).toBe("Upstream none · Pull request linked")
+    expect(
+      describeBranchFilters({
+        ...DEFAULT_BRANCH_FILTERS,
+        pullRequest: "linked",
+        pullRequestStates: {
+          open: true,
+          draft: false,
+          merged: true,
+          closed: false,
+        },
+      }),
+    ).toBe("Pull request open, merged")
+    expect(
+      describeBranchFilters({ ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" }),
+    ).toBe("No pull request")
   })
 
   test("the key changes with the chosen pull request states", () => {

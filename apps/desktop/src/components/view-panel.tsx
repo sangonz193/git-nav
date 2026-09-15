@@ -85,6 +85,8 @@ export function LabeledRow({
   return hint ? <Hinted hint={hint}>{row}</Hinted> : row
 }
 
+// One choice among a few, drawn as a track with the chosen option raised, so it never reads as the pair of
+// independent buttons the fold controls are.
 export function Segmented<T extends string>({
   disabled = false,
   onChange,
@@ -97,24 +99,33 @@ export function Segmented<T extends string>({
   value: T
 }) {
   return (
-    <ButtonGroup role="radiogroup">
+    <div
+      className={cn(
+        "flex h-6 items-center gap-0.5 rounded-md bg-muted p-0.5",
+        disabled && "opacity-50",
+      )}
+      role="radiogroup"
+    >
       {options.map(({ icon: Icon, label, value: option }) => (
-        <Button
+        <button
           aria-checked={option === value}
-          aria-pressed={option === value}
+          className={cn(
+            "flex h-5 items-center gap-1 rounded-[5px] px-2 text-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none [&_svg]:size-3",
+            option === value ?
+              "bg-background text-foreground shadow-xs"
+            : "text-muted-foreground hover:text-foreground",
+          )}
           disabled={disabled}
           key={option}
           onClick={() => onChange(option)}
           role="radio"
-          size="xs"
           type="button"
-          variant="outline"
         >
           {Icon && <Icon />}
           {label}
-        </Button>
+        </button>
       ))}
-    </ButtonGroup>
+    </div>
   )
 }
 

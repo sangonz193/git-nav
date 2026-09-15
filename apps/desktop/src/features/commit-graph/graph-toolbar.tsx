@@ -32,6 +32,7 @@ import {
   Archive,
   Broom,
   ChevronDown,
+  ListFilter,
   LoaderCircle,
   RefreshCw,
   Search,
@@ -48,6 +49,7 @@ import {
   CHIP_KIND_LABELS,
   CHIP_KINDS,
   DEFAULT_BRANCH_FILTERS,
+  describeBranchFilters,
   PULL_REQUEST_FILTERS,
   PULL_REQUEST_STATES,
   UPSTREAM_FILTERS,
@@ -444,5 +446,38 @@ function PullRequestStateChip({
     >
       {PULL_REQUEST_STATE_LABELS[state]}
     </Button>
+  )
+}
+
+// A narrowed graph can pass for a small repository, so the filter is named where the rows would have been.
+export function GraphFilterStrip({
+  filters,
+  onReset,
+}: {
+  filters: BranchFilters
+  onReset: () => void
+}) {
+  if (activeFilterCount(filters) === 0) {
+    return null
+  }
+  return (
+    <div
+      className="flex h-7 shrink-0 items-center gap-2 border-b bg-muted/40 px-3 text-xs text-muted-foreground"
+      role="status"
+    >
+      <ListFilter className="size-3.5" />
+      <span className="min-w-0 truncate">
+        {`Showing branches: ${describeBranchFilters(filters)}`}
+      </span>
+      <Button
+        className="h-5 px-1.5 text-xs"
+        onClick={onReset}
+        size="xs"
+        type="button"
+        variant="ghost"
+      >
+        Clear
+      </Button>
+    </div>
   )
 }

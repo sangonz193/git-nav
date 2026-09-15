@@ -100,7 +100,7 @@ import {
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
 import { diffTabs } from "./diff-tabs"
-import { GraphToolbar } from "./graph-toolbar"
+import { GraphFilterStrip, GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
 import { NARROW_SHEET_PANEL_WIDTH, SelectionSheet } from "./selection-sheet"
 import {
@@ -1081,6 +1081,10 @@ function CommitGraphPanelContent({
         updateConfig={updateConfig}
         updateFilters={updateFilters}
       />
+      <GraphFilterStrip
+        filters={filters}
+        onReset={() => updateFilters(DEFAULT_BRANCH_FILTERS)}
+      />
       <div
         aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."
         aria-multiselectable
@@ -1405,7 +1409,6 @@ function CommitGraphPanelContent({
         cleanOptions={cleanOptions}
         cleanup={cleanup}
         updateConfig={updateConfig}
-        updateFilters={updateFilters}
       />
       {request && (
         <OperationDialog

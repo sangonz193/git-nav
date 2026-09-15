@@ -73,6 +73,29 @@ export function activeFilterCount(filters: BranchFilters) {
   )
 }
 
+export function describeBranchFilters(filters: BranchFilters) {
+  const parts: string[] = []
+  if (filters.upstream !== "any") {
+    const label = UPSTREAM_FILTERS.find(
+      (option) => option.value === filters.upstream,
+    )!.label
+    parts.push(`Upstream ${label.toLowerCase()}`)
+  }
+  if (filters.pullRequest === "none") {
+    parts.push("No pull request")
+  } else if (filters.pullRequest === "linked") {
+    const states = PULL_REQUEST_STATES.filter(
+      (state) => filters.pullRequestStates[state],
+    )
+    parts.push(
+      states.length === PULL_REQUEST_STATES.length ?
+        "Pull request linked"
+      : `Pull request ${states.join(", ") || "in no state"}`,
+    )
+  }
+  return parts.join(" · ")
+}
+
 export function branchFiltersKey(filters: BranchFilters) {
   return [
     filters.upstream,
