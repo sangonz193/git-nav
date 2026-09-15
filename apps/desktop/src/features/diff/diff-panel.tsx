@@ -145,6 +145,7 @@ type Comparison = {
 type LoadedComparison = {
   comparison: Comparison
   ignoreWhitespace: boolean
+  refs: SelectedRefs
 }
 
 type BranchSelection = {
@@ -367,6 +368,10 @@ export function DiffPanel({
       allExpanded: files.length > 0 && folded === 0,
     }
   }, [files, isFolded])
+  // Until the comparison for the current ends lands, the files on screen belong to the previous one, and
+  // a fold set across all of them would be carried onto whichever files the next one happens to share.
+  const isComparisonStale =
+    loadedComparison !== null && loadedComparison.refs !== refs
 
   function toggleFileTree() {
     const next = toggledDiffFileTree(
@@ -501,6 +506,7 @@ export function DiffPanel({
           setLoadedComparison({
             comparison: nextComparison,
             ignoreWhitespace,
+            refs,
           })
           setError(null)
         }
@@ -798,7 +804,7 @@ export function DiffPanel({
       allCollapsed={folds.allCollapsed}
       allExpanded={folds.allExpanded}
       collapseHint="Collapse all files"
-      disabled={files.length === 0}
+      disabled={files.length === 0 || isComparisonStale}
       expandHint="Expand all files"
       onCollapse={() => collapseAll(true)}
       onExpand={() => collapseAll(false)}

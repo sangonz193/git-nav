@@ -757,16 +757,35 @@ export function syncDescription({ sync }: DisplayRef) {
     : `In sync with ${sync.upstream}`
 }
 
-// A pull request is raised from a branch name, which a ref that only exists on a remote carries behind the
-// name of that remote. A local branch paired with a differently named upstream shows that upstream's pull
-// request, since the chip stands in for the remote ref it consumed.
+// Pull requests are read from the repository behind the origin remote and keyed by the branch they were
+// raised from, so a ref on any other remote has none of them whatever it is called.
+const PULL_REQUEST_REMOTE = "origin"
+
 function pullRequestOf(
+  remote: string,
   ref: string,
-  remote: string | null,
   pullRequests: Map<string, BranchPullRequest> | undefined,
 ) {
-  const branch = remote ? ref.slice(remote.length + 1) : ref
-  return pullRequests?.get(branch) ?? null
+  if (remote !== PULL_REQUEST_REMOTE) {
+    return null
+  }
+  return pullRequests?.get(ref.slice(remote.length + 1)) ?? null
+}
+
+// The upstream a branch tracks is the remote branch it was raised from, whether or not the two sit on the
+// same commit right now, so that is where its pull request is read from. A branch tracking nothing is taken
+// to be the remote branch of its own name.
+function branchPullRequest(
+  branch: string,
+  upstream: string | null,
+  remotes: string[],
+  pullRequests: Map<string, BranchPullRequest> | undefined,
+) {
+  if (!upstream) {
+    return pullRequests?.get(branch) ?? null
+  }
+  const remote = remoteOf(upstream, remotes)
+  return remote ? pullRequestOf(remote, upstream, pullRequests) : null
 }
 
 // Which remote a ref belongs to can only be read from the remotes the repository actually has, since a remote
@@ -777,6 +796,7 @@ function remoteOf(ref: string, remotes: string[]) {
 
 // The upstream a branch tracks is the pairing its ahead and behind counts are measured against, so a chip
 // that reports those counts has to name that remote and not merely the first one carrying the same name.
+// Only a branch that tracks nothing is paired by name.
 function trackedRemote(
   branch: string,
   branchRefs: string[],
@@ -784,9 +804,11 @@ function trackedRemote(
   sync: BranchSync | null,
 ) {
   const upstream = sync?.upstream
-  const tracked = upstream ? remoteOf(upstream, remotes) : null
-  if (upstream && tracked && branchRefs.includes(upstream)) {
-    return { remote: tracked, ref: upstream }
+  if (upstream) {
+    const tracked = remoteOf(upstream, remotes)
+    return tracked && branchRefs.includes(upstream) ?
+        { remote: tracked, ref: upstream }
+      : null
   }
   const remote = remotes.find((candidate) =>
     branchRefs.includes(`${candidate}/${branch}`),
@@ -830,10 +852,12 @@ export function displayRefs(
       label: tracking ? `${branch} · ${tracking.remote}` : branch,
       checkedOut: branch === checkedOut,
       kind: "branch",
-      pullRequest:
-        (tracking &&
-          pullRequestOf(tracking.ref, tracking.remote, pullRequests)) ||
-        (pullRequests?.get(branch) ?? null),
+      pullRequest: branchPullRequest(
+        branch,
+        sync?.upstream ?? tracking?.ref ?? null,
+        remotes,
+        pullRequests,
+      ),
       remote: tracking?.remote ?? null,
       sync,
       worktrees: worktrees.filter((worktree) => worktree.branch === branch),
@@ -848,7 +872,7 @@ export function displayRefs(
         label: ref,
         checkedOut: ref === checkedOut,
         kind: remote ? "remote" : "branch",
-        pullRequest: pullRequestOf(ref, remote, pullRequests),
+        pullRequest: remote ? pullRequestOf(remote, ref, pullRequests) : null,
         remote,
         sync: null,
         worktrees: [],
@@ -878,7 +902,7 @@ export function displayRefs(
       label: checkedOut,
       checkedOut: true,
       kind: "remote",
-      pullRequest: pullRequestOf(checkedOut, checkedOutRemote, pullRequests),
+      pullRequest: pullRequestOf(checkedOutRemote, checkedOut, pullRequests),
       remote: checkedOutRemote,
       sync: null,
       worktrees: [],

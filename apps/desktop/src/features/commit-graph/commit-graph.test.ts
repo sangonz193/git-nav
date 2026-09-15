@@ -313,6 +313,24 @@ describe("displayRefs with other remotes", () => {
       "branch",
     )
   })
+
+  test("reads a pull request only for a ref on the remote they were raised on", () => {
+    const pullRequests = new Map<string, BranchPullRequest>([
+      [
+        "main",
+        { branch: "main", number: 1, state: "open", title: "", url: "" },
+      ],
+    ])
+    expect(
+      displayRefs(["origin/main", "upstream/main"], {
+        pullRequests,
+        remotes,
+      }).map((ref) => [ref.label, ref.pullRequest?.number ?? null]),
+    ).toEqual([
+      ["origin/main", 1],
+      ["upstream/main", null],
+    ])
+  })
 })
 
 describe("pairing a branch with its upstream", () => {
@@ -353,6 +371,62 @@ describe("pairing a branch with its upstream", () => {
       remotes,
     })
     expect(refs[0].label).toBe("main · upstream")
+  })
+
+  const pullRequest = (
+    branch: string,
+    number: number,
+  ): [string, BranchPullRequest] => [
+    branch,
+    { branch, number, state: "open", title: "", url: "" },
+  ]
+  const pullRequests = new Map([
+    pullRequest("main", 1),
+    pullRequest("trunk", 2),
+  ])
+
+  test("reads the pull request from the upstream while ahead of it", () => {
+    const [ref] = displayRefs(["main"], {
+      branchSync: tracking("origin/trunk"),
+      pullRequests,
+      remotes,
+    })
+    expect(ref.label).toBe("main")
+    expect(ref.pullRequest?.number).toBe(2)
+  })
+
+  test("does not attach another remote's pull request of the same name", () => {
+    const refs = displayRefs(["main", "upstream/main"], {
+      branchSync: tracking("upstream/main"),
+      pullRequests,
+      remotes,
+    })
+    expect(
+      refs.map((ref) => [ref.label, ref.pullRequest?.number ?? null]),
+    ).toEqual([["main · upstream", null]])
+  })
+
+  test("leaves a same-named ref on another remote its own chip and pull request", () => {
+    const refs = displayRefs(["main", "origin/main"], {
+      branchSync: tracking("upstream/main"),
+      pullRequests,
+      remotes,
+    })
+    expect(
+      refs.map((ref) => [ref.label, ref.pullRequest?.number ?? null]),
+    ).toEqual([
+      ["main", null],
+      ["origin/main", 1],
+    ])
+  })
+
+  test("takes an untracked branch to be the remote branch of its own name", () => {
+    const [ref] = displayRefs(["main"], {
+      branchSync: tracking(null),
+      pullRequests,
+      remotes,
+    })
+    expect(ref.pullRequest?.number).toBe(1)
   })
 })
 

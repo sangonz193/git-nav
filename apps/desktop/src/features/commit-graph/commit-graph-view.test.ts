@@ -484,6 +484,39 @@ describe("commitChips", () => {
     expect(labels(none)).toEqual([])
   })
 
+  test("a branch ahead of its upstream still carries that upstream's pull request", () => {
+    const ahead = commit("a", ["local"])
+    const aheadSync = new Map([
+      ["local", sync("local", { ahead: 1, upstream: "origin/pr-branch" })],
+    ])
+    const chips = commitChips(
+      ahead,
+      context({
+        branchSync: aheadSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" },
+        pullRequests: new Map([pullRequest("pr-branch", "open")]),
+      }),
+    )
+    expect(labels(chips)).toEqual(["local"])
+  })
+
+  test("a branch tracking another remote does not carry the pull request of its own name", () => {
+    const tracked = commit("a", ["local", "upstream/local"])
+    const trackedSync = new Map([
+      ["local", sync("local", { upstream: "upstream/local" })],
+    ])
+    const chips = commitChips(
+      tracked,
+      context({
+        branchSync: trackedSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" },
+        pullRequests: new Map([pullRequest("local", "open")]),
+        remotes: ["origin", "upstream"],
+      }),
+    )
+    expect(labels(chips)).toEqual([])
+  })
+
   test("the checkout survives a filter it does not match", () => {
     const chips = commitChips(
       commit("a", ["HEAD -> local"]),

@@ -745,7 +745,7 @@ function CommitGraphPanelContent({
     [commits, detailsExpanded, rowOfCommit, rows, rowVirtualizer],
   )
 
-  function collapseUnmarkedCommits(collapse: boolean) {
+  function foldGraph(collapse: boolean) {
     const top =
       commits[
         commitIndexAtRow(
@@ -757,16 +757,26 @@ function CommitGraphPanelContent({
     setCollapseUnmarked(collapse)
   }
 
+  // A side of the fold pair that already reads as pressed has nothing left to do, and folding again would
+  // rebuild the rows and move the scroll under them.
+  function collapseUnmarkedCommits(collapse: boolean) {
+    if (collapse ? collapseUnmarked && !hasRevealedRuns : !collapseUnmarked) {
+      return
+    }
+    foldGraph(collapse)
+  }
+
   // A filter that hides labels without folding the rows between them reads as labels going missing, so
-  // narrowing the graph brings the collapse with it.
+  // narrowing the graph brings the collapse with it. A run revealed before the filter would run on past the
+  // label that ended it once that label is hidden, so the graph is folded afresh even when already collapsed.
   function updateFilters(change: Partial<BranchFilters>) {
     const next = { ...filters, ...change }
     if (
-      !collapseUnmarked &&
       activeFilterCount(next) > 0 &&
-      activeFilterCount(filters) === 0
+      activeFilterCount(filters) === 0 &&
+      (!collapseUnmarked || revealed.size > 0)
     ) {
-      collapseUnmarkedCommits(true)
+      foldGraph(true)
     }
     setFilters(next)
   }
