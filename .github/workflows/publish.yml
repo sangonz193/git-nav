@@ -137,8 +137,16 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - run: npm publish --access public
+      # A re-run of a partially failed release skips the packages it already published.
+      - run: |
+          package="$(node -p "p = require('./package.json'); p.name + '@' + p.version")"
+          if npm view "$package" version >/dev/null 2>&1; then
+            echo "$package is already published"
+          else
+            npm publish --access public
+          fi
         working-directory: packages/cli/dist/packages/${{ matrix.platform }}
+        shell: bash
 
   publish-cli:
     needs: publish-platform
@@ -157,7 +165,13 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - run: npm publish --access public
+      - run: |
+          package="$(node -p "p = require('./package.json'); p.name + '@' + p.version")"
+          if npm view "$package" version >/dev/null 2>&1; then
+            echo "$package is already published"
+          else
+            npm publish --access public
+          fi
         working-directory: packages/cli
 
   publish-release:
