@@ -1,6 +1,5 @@
 import { cp, mkdir, rm, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
-import { $ } from "bun"
 
 const cliRoot = resolve(import.meta.dir, "..")
 const repositoryRoot = resolve(cliRoot, "..", "..")
@@ -12,9 +11,6 @@ const source = artifactFor(platformKey)
 const packageRoot = resolve(cliRoot, "dist", "packages", platformKey)
 
 await stat(source)
-if (process.platform === "linux") {
-  await $`bun ${resolve(desktopRoot, "scripts", "repack-appimage.ts")} ${source}`
-}
 await rm(packageRoot, { recursive: true, force: true })
 await mkdir(packageRoot, { recursive: true })
 await cp(source, resolve(packageRoot, artifactName(platformKey)), {
