@@ -42,7 +42,7 @@
     "@git-nav/win32-x64": "0.0.25"
   },
   "scripts": {
-    "build:package": "bun run --cwd ../../apps/desktop tauri build && bun scripts/package-platform.ts",
+    "build:package": "bun run --cwd ../../apps/desktop build:app && bun scripts/package-platform.ts",
     "bootstrap:platform-packages": "bun scripts/bootstrap-platform-packages.ts",
     "lint": "eslint bin",
     "test": "bun test",

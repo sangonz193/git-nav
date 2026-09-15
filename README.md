@@ -104,6 +104,9 @@ Build the app and package the current platform binary with:
 bun run build:package
 ```
 
+To build the desktop app alone, run `bun --filter=desktop run build:app`. On Linux that also
+repacks the AppImage so it starts on current Mesa; a bare `tauri build` does not.
+
 See [the deployment guide](docs/deploy.md) for CI releases.
 
 `apps/site` holds [git-nav.dev](https://git-nav.dev). Run it with `bun --filter=site run dev`.

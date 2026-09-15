@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:web": "bun run scripts/dev-web.ts",
     "build": "tsc -b && vite build",
+    "build:app": "bun scripts/build-app.ts",
     "tauri": "tauri",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
