@@ -1085,10 +1085,10 @@ export function DiffPanel({
               <PanelSection>
                 <PanelHeading>Files</PanelHeading>
                 <SwitchRow
-                  checked={hideViewed}
-                  id="diff-view-hide-viewed"
-                  label="Hide viewed files"
-                  onCheckedChange={setPreferredHideViewed}
+                  checked={!hideViewed}
+                  id="diff-view-viewed-files"
+                  label="Viewed files"
+                  onCheckedChange={(shown) => setPreferredHideViewed(!shown)}
                 />
                 {!inlineFolds && (
                   <LabeledRow label="Fold">{foldButtons}</LabeledRow>
