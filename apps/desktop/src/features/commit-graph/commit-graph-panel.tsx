@@ -75,10 +75,15 @@ import {
 import {
   appendGraphRows,
   CHIP_KINDS,
+  activeFilterCount,
+  branchFilterMetadataKey,
+  branchFiltersKey,
   commitChips,
+  DEFAULT_BRANCH_FILTERS,
   isMarkedCommit,
   rowIndexOfCommit,
   useViewConfig,
+  type BranchFilters,
   type ChipContext,
   type GraphRow,
   type GraphRows,
@@ -96,7 +101,7 @@ import {
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
 import { diffTabs } from "./diff-tabs"
-import { GraphToolbar } from "./graph-toolbar"
+import { GraphFilterStrip, GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
 import { NARROW_SHEET_PANEL_WIDTH, SelectionSheet } from "./selection-sheet"
 import {
@@ -191,6 +196,8 @@ function CommitGraphPanelContent({
   const [collapseUnmarked, setCollapseUnmarked] = useState(
     params.userPreferences?.collapseUnmarked ?? true,
   )
+  // A filter is a task rather than a preference, so it starts clear on every open.
+  const [filters, setFilters] = useState<BranchFilters>(DEFAULT_BRANCH_FILTERS)
   const [detailsExpanded, setDetailsExpanded] = useState(
     params.userPreferences?.detailsExpanded ?? false,
   )
@@ -344,6 +351,7 @@ function CommitGraphPanelContent({
     () => ({
       branchSync,
       chipKinds: config.chipKinds,
+      filters,
       pullRequests,
       remotes,
       stashesByBase,
@@ -352,6 +360,7 @@ function CommitGraphPanelContent({
     [
       branchSync,
       config.chipKinds,
+      filters,
       pullRequests,
       remotes,
       stashesByBase,
@@ -366,10 +375,20 @@ function CommitGraphPanelContent({
       [
         remoteNames,
         CHIP_KINDS.filter((kind) => config.chipKinds[kind]).join(","),
+        branchFiltersKey(filters),
+        branchFilterMetadataKey(filters, branchSync, pullRequests),
         [...stashesByBase.keys()].sort().join(","),
         [...worktreesByHead.keys()].sort().join(","),
       ].join("|"),
-    [config.chipKinds, remoteNames, stashesByBase, worktreesByHead],
+    [
+      branchSync,
+      config.chipKinds,
+      filters,
+      pullRequests,
+      remoteNames,
+      stashesByBase,
+      worktreesByHead,
+    ],
   )
   // Rows exist only while runs are being collapsed. Without them a row is a commit, which is what the rest of
   // the panel already reads its indexes as.
@@ -379,7 +398,7 @@ function CommitGraphPanelContent({
     revealed: ReadonlySet<string>
     value: GraphRows
   } | null>(null)
-  const rows = useMemo(() => {
+  const graphRows = useMemo(() => {
     if (!collapseUnmarked) {
       rowsCache.current = null
       return null
@@ -401,8 +420,10 @@ function CommitGraphPanelContent({
       (hash) => revealed.has(hash),
     )
     rowsCache.current = { commits, marksKey, revealed, value }
-    return value.rows
+    return value
   }, [chipContext, collapseUnmarked, commits, marksKey, revealed])
+  const rows = graphRows?.rows ?? null
+  const hasRevealedRuns = graphRows?.hasRevealedRuns ?? false
   const rowCount = rows ? rows.length : commits.length
   const commitIndexAtRow = useCallback(
     (row: number) => (rows ? (rows[row]?.index ?? 0) : row),
@@ -724,7 +745,7 @@ function CommitGraphPanelContent({
     [commits, detailsExpanded, rowOfCommit, rows, rowVirtualizer],
   )
 
-  function collapseUnmarkedCommits(collapse: boolean) {
+  function foldGraph(collapse: boolean) {
     const top =
       commits[
         commitIndexAtRow(
@@ -734,6 +755,30 @@ function CommitGraphPanelContent({
     pendingScrollHash.current = top?.hash ?? null
     setRevealed(new Set())
     setCollapseUnmarked(collapse)
+  }
+
+  // A side of the fold pair that already reads as pressed has nothing left to do, and folding again would
+  // rebuild the rows and move the scroll under them.
+  function collapseUnmarkedCommits(collapse: boolean) {
+    if (collapse ? collapseUnmarked && !hasRevealedRuns : !collapseUnmarked) {
+      return
+    }
+    foldGraph(collapse)
+  }
+
+  // A filter that hides labels without folding the rows between them reads as labels going missing, so
+  // narrowing the graph brings the collapse with it. A run revealed before the filter would run on past the
+  // label that ended it once that label is hidden, so the graph is folded afresh even when already collapsed.
+  function updateFilters(change: Partial<BranchFilters>) {
+    const next = { ...filters, ...change }
+    if (
+      activeFilterCount(next) > 0 &&
+      activeFilterCount(filters) === 0 &&
+      (!collapseUnmarked || revealed.size > 0)
+    ) {
+      foldGraph(true)
+    }
+    setFilters(next)
   }
 
   function revealRun(startHash: string) {
@@ -1042,18 +1087,26 @@ function CommitGraphPanelContent({
         collapseUnmarked={collapseUnmarked}
         config={config}
         fetch={() => fetchMutation.mutate()}
+        filters={filters}
         graphOffset={graphOffset}
         hasOlderCommits={hasOlderCommits}
+        hasRevealedRuns={hasRevealedRuns}
         isFetching={fetchMutation.isPending}
         isGraphWindowLoading={isGraphWindowLoading}
         menus={menus}
         onActivateSearchHit={activateSearchHit}
         onCollapseUnmarked={collapseUnmarkedCommits}
+        pullRequestCount={pullRequests.size}
         refreshGraph={refreshGraph}
         search={search}
         showGraphWindow={showGraphWindow}
         stashes={stashes}
         updateConfig={updateConfig}
+        updateFilters={updateFilters}
+      />
+      <GraphFilterStrip
+        filters={filters}
+        onReset={() => updateFilters(DEFAULT_BRANCH_FILTERS)}
       />
       <div
         aria-label="Commit history. Click a commit to select it. Shift-click, or press Shift+Enter or Shift+Space, to extend the selection through related commits."

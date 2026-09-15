@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { WORKTREE_REF } from "@/lib/repository-constants"
 import {
+  carriedFolds,
   changedFilesLabel,
   fileIdentity,
   formatBytes,
@@ -254,6 +255,27 @@ describe("isFoldedFile", () => {
     const folded = new Map([["key", true]])
     expect(isFoldedFile(file(), "feature", new Map(), folded, "key")).toBe(true)
     expect(isFoldedFile(file(), "feature", read, folded, "key")).toBe(true)
+  })
+
+  test("holds a fold set by hand across the comparison being read again", () => {
+    const reread = carriedFolds(new Map([["key", true]]), ["key"])
+    expect(isFoldedFile(file(), "feature", new Map(), reread, "key")).toBe(true)
+  })
+})
+
+describe("carriedFolds", () => {
+  test("a comparison read again keeps the folds of the files it still lists", () => {
+    const folds = new Map([
+      ["folded", true],
+      ["opened", false],
+      ["gone", true],
+    ])
+    expect(carriedFolds(folds, ["folded", "opened", "added"])).toEqual(
+      new Map([
+        ["folded", true],
+        ["opened", false],
+      ]),
+    )
   })
 })
 

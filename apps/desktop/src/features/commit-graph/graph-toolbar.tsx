@@ -1,14 +1,20 @@
 import { Hinted } from "@/components/hinted"
 import { SearchMenu } from "@/components/search-menu"
+import {
+  FoldButtons,
+  LabeledRow,
+  PanelHeading,
+  PanelSection,
+  Segmented,
+  SwitchRow,
+} from "@/components/view-panel"
 import { isDesktop } from "@/lib/ipc"
 import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
 import {
@@ -21,27 +27,39 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
+import { cn } from "@workspace/shadcn/lib/utils"
 import {
   Archive,
   Broom,
   ChevronDown,
-  FoldVertical,
+  ListFilter,
   LoaderCircle,
   RefreshCw,
   Search,
   SlidersHorizontal,
-  UnfoldVertical,
 } from "lucide-react"
 
-import type { StashEntry } from "./commit-graph"
 import {
+  PULL_REQUEST_STATE_LABELS,
+  type PullRequestState,
+  type StashEntry,
+} from "./commit-graph"
+import {
+  activeFilterCount,
   CHIP_KIND_LABELS,
   CHIP_KINDS,
+  DEFAULT_BRANCH_FILTERS,
+  describeBranchFilters,
+  PULL_REQUEST_FILTERS,
+  PULL_REQUEST_STATES,
+  UPSTREAM_FILTERS,
+  type BranchFilters,
   type SearchHit,
   type ViewConfig,
   type ViewConfigChange,
 } from "./commit-graph-view"
 import { OperationMenuItems } from "./commit-operation-menu"
+import { CHIP_ICONS } from "./commit-operations"
 import {
   dropdownMenuComponents,
   stashMenuEntry,
@@ -55,7 +73,9 @@ export function GraphToolbar({
   cleanup,
   collapseUnmarked,
   config,
+  hasRevealedRuns,
   fetch,
+  filters,
   graphOffset,
   hasOlderCommits,
   isFetching,
@@ -63,16 +83,20 @@ export function GraphToolbar({
   menus,
   onActivateSearchHit,
   onCollapseUnmarked,
+  pullRequestCount,
   refreshGraph,
   search,
   showGraphWindow,
   stashes,
   updateConfig,
+  updateFilters,
 }: {
   cleanup: ReturnType<typeof useBranchCleanup>
   collapseUnmarked: boolean
   config: ViewConfig
+  hasRevealedRuns: boolean
   fetch: () => void
+  filters: BranchFilters
   graphOffset: number
   hasOlderCommits: boolean
   isFetching: boolean
@@ -80,12 +104,15 @@ export function GraphToolbar({
   menus: ChipMenuContext
   onActivateSearchHit: (hit: SearchHit) => void
   onCollapseUnmarked: (collapse: boolean) => void
+  pullRequestCount: number
   refreshGraph: () => void
   search: ReturnType<typeof useGraphSearch>
   showGraphWindow: (offset: number) => void
   stashes: StashEntry[]
   updateConfig: (change: ViewConfigChange) => void
+  updateFilters: (change: Partial<BranchFilters>) => void
 }) {
+  const filterCount = activeFilterCount(filters)
   return (
     <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
       <div className="flex items-center gap-1">
@@ -140,54 +167,41 @@ export function GraphToolbar({
         </Popover>
       </div>
       <div className="flex items-center gap-1">
-        <Hinted
-          hint={
-            collapseUnmarked ? "Show every commit" : (
-              "Collapse commits nothing points at"
-            )
-          }
-        >
-          <Button
-            aria-label="Collapse commits nothing points at"
-            aria-pressed={collapseUnmarked}
-            onClick={() => onCollapseUnmarked(!collapseUnmarked)}
-            size="icon-sm"
-            type="button"
-            variant="outline"
-          >
-            {collapseUnmarked ?
-              <UnfoldVertical />
-            : <FoldVertical />}
-          </Button>
-        </Hinted>
-        <DropdownMenu>
+        <FoldButtons
+          allCollapsed={collapseUnmarked && !hasRevealedRuns}
+          allExpanded={!collapseUnmarked}
+          collapseHint="Collapse commits nothing points at"
+          expandHint="Show every commit"
+          onCollapse={() => onCollapseUnmarked(true)}
+          onExpand={() => onCollapseUnmarked(false)}
+        />
+        <Popover>
           <Tooltip>
-            <DropdownMenuTrigger asChild>
+            <PopoverTrigger asChild>
               <TooltipTrigger asChild>
                 <Button size="sm" type="button" variant="outline">
                   <SlidersHorizontal />
                   View
+                  {filterCount > 0 && (
+                    <span className="rounded-full bg-primary px-1.5 text-[0.7rem] leading-4 text-primary-foreground tabular-nums">
+                      {filterCount}
+                    </span>
+                  )}
                 </Button>
               </TooltipTrigger>
-            </DropdownMenuTrigger>
+            </PopoverTrigger>
             <TooltipContent>Choose what the graph shows</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Show</DropdownMenuLabel>
-            {CHIP_KINDS.map((kind) => (
-              <DropdownMenuCheckboxItem
-                checked={config.chipKinds[kind]}
-                key={kind}
-                onCheckedChange={(checked) =>
-                  updateConfig({ chipKinds: { [kind]: checked === true } })
-                }
-                onSelect={(event) => event.preventDefault()}
-              >
-                {CHIP_KIND_LABELS[kind]}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+          <PopoverContent align="end" className="w-72 p-0">
+            <ViewPanel
+              config={config}
+              filters={filters}
+              pullRequestCount={pullRequestCount}
+              updateConfig={updateConfig}
+              updateFilters={updateFilters}
+            />
+          </PopoverContent>
+        </Popover>
         {!isDesktop && graphOffset > 0 && (
           <Hinted hint="Show newer commits">
             <Button
@@ -315,6 +329,157 @@ export function GraphToolbar({
           </DropdownMenu>
         </ButtonGroup>
       </div>
+    </div>
+  )
+}
+
+function ViewPanel({
+  config,
+  filters,
+  pullRequestCount,
+  updateConfig,
+  updateFilters,
+}: {
+  config: ViewConfig
+  filters: BranchFilters
+  pullRequestCount: number
+  updateConfig: (change: ViewConfigChange) => void
+  updateFilters: (change: Partial<BranchFilters>) => void
+}) {
+  const hasPullRequests = pullRequestCount > 0
+  return (
+    <div className="flex flex-col">
+      <PanelSection>
+        <PanelHeading>Show</PanelHeading>
+        {CHIP_KINDS.map((kind) => (
+          <SwitchRow
+            checked={config.chipKinds[kind]}
+            icon={CHIP_ICONS[kind]}
+            id={`graph-view-${kind}`}
+            key={kind}
+            label={CHIP_KIND_LABELS[kind]}
+            onCheckedChange={(checked) =>
+              updateConfig({ chipKinds: { [kind]: checked } })
+            }
+          />
+        ))}
+      </PanelSection>
+      <PanelSection>
+        <PanelHeading
+          action={
+            activeFilterCount(filters) > 0 && (
+              <Button
+                className="h-5 px-1.5 text-xs text-muted-foreground"
+                onClick={() => updateFilters(DEFAULT_BRANCH_FILTERS)}
+                size="xs"
+                type="button"
+                variant="ghost"
+              >
+                Reset
+              </Button>
+            )
+          }
+        >
+          Branches
+        </PanelHeading>
+        <LabeledRow label="Upstream">
+          <Segmented
+            onChange={(upstream) => updateFilters({ upstream })}
+            options={UPSTREAM_FILTERS}
+            value={filters.upstream}
+          />
+        </LabeledRow>
+        <LabeledRow
+          hint={
+            hasPullRequests ? null : (
+              "No pull requests were found for this repository"
+            )
+          }
+          label="Pull request"
+        >
+          <Segmented
+            disabled={!hasPullRequests}
+            onChange={(pullRequest) => updateFilters({ pullRequest })}
+            options={PULL_REQUEST_FILTERS}
+            value={filters.pullRequest}
+          />
+        </LabeledRow>
+        {filters.pullRequest === "linked" && (
+          <div className="flex flex-wrap justify-end gap-1 px-1.5">
+            {PULL_REQUEST_STATES.map((state) => (
+              <PullRequestStateChip
+                checked={filters.pullRequestStates[state]}
+                key={state}
+                onCheckedChange={(checked) =>
+                  updateFilters({
+                    pullRequestStates: {
+                      ...filters.pullRequestStates,
+                      [state]: checked,
+                    },
+                  })
+                }
+                state={state}
+              />
+            ))}
+          </div>
+        )}
+      </PanelSection>
+    </div>
+  )
+}
+
+function PullRequestStateChip({
+  checked,
+  onCheckedChange,
+  state,
+}: {
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  state: PullRequestState
+}) {
+  return (
+    <Button
+      aria-pressed={checked}
+      className={cn(!checked && "text-muted-foreground")}
+      onClick={() => onCheckedChange(!checked)}
+      size="xs"
+      type="button"
+      variant="outline"
+    >
+      {PULL_REQUEST_STATE_LABELS[state]}
+    </Button>
+  )
+}
+
+// A narrowed graph can pass for a small repository, so the filter is named where the rows would have been.
+export function GraphFilterStrip({
+  filters,
+  onReset,
+}: {
+  filters: BranchFilters
+  onReset: () => void
+}) {
+  if (activeFilterCount(filters) === 0) {
+    return null
+  }
+  return (
+    <div
+      className="flex h-7 shrink-0 items-center gap-2 border-b bg-muted/40 px-3 text-xs text-muted-foreground"
+      role="status"
+    >
+      <ListFilter className="size-3.5" />
+      <span className="min-w-0 truncate">
+        {`Showing branches: ${describeBranchFilters(filters)}`}
+      </span>
+      <Button
+        className="h-5 px-1.5 text-xs"
+        onClick={onReset}
+        size="xs"
+        type="button"
+        variant="ghost"
+      >
+        Clear
+      </Button>
     </div>
   )
 }

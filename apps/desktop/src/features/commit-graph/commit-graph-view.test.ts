@@ -1,10 +1,21 @@
 import { describe, expect, test } from "bun:test"
 
-import type { Commit, RowWorktree, StashEntry } from "./commit-graph"
+import type {
+  BranchPullRequest,
+  BranchSync,
+  Commit,
+  RowWorktree,
+  StashEntry,
+} from "./commit-graph"
 import {
+  activeFilterCount,
   applyViewConfigSetting,
   appendGraphRows,
+  branchFilterMetadataKey,
+  branchFiltersKey,
   commitChips,
+  DEFAULT_BRANCH_FILTERS,
+  describeBranchFilters,
   DEFAULT_VIEW_CONFIG,
   isMarkedCommit,
   loadViewConfig,
@@ -38,6 +49,7 @@ function context(overrides: Partial<ChipContext> = {}): ChipContext {
   return {
     branchSync: new Map(),
     chipKinds: DEFAULT_VIEW_CONFIG.chipKinds,
+    filters: DEFAULT_BRANCH_FILTERS,
     pullRequests: new Map(),
     remotes: ["origin"],
     stashesByBase: new Map(),
@@ -337,6 +349,236 @@ describe("commitChips", () => {
     )
     expect(chips.map((chip) => chip.kind)).toEqual(["stash"])
   })
+
+  function sync(branch: string, overrides: Partial<BranchSync> = {}) {
+    return {
+      ahead: 0,
+      behind: 0,
+      branch,
+      isGone: false,
+      upstream: `origin/${branch}`,
+      ...overrides,
+    }
+  }
+  const branchSync = new Map<string, BranchSync>([
+    ["gone", sync("gone", { isGone: true })],
+    ["local", sync("local", { upstream: null })],
+    ["tracked", sync("tracked")],
+  ])
+  const filtered = commit("a", [
+    "gone",
+    "local",
+    "tracked",
+    "origin/tracked",
+    "origin/other",
+    "tag: v1",
+  ])
+  const labels = (chips: ReturnType<typeof commitChips>) =>
+    chips.map((chip) =>
+      chip.kind === "stash" ? chip.entry.name
+      : chip.kind === "worktree" ? chip.worktree.name
+      : chip.ref.label,
+    )
+
+  test("keeps only the branches whose upstream is gone", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "gone" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["gone", "v1"])
+  })
+
+  test("keeps only the branches without an upstream", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "none" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["local", "v1"])
+  })
+
+  test("a tracked upstream drops the remote refs alongside the untracked branches", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "tracked" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["tracked · origin", "v1"])
+  })
+
+  const pullRequest = (
+    branch: string,
+    state: BranchPullRequest["state"],
+  ): [string, BranchPullRequest] => [
+    branch,
+    { branch, number: 1, state, title: branch, url: "" },
+  ]
+  const pullRequests = new Map([
+    pullRequest("gone", "merged"),
+    pullRequest("other", "open"),
+  ])
+
+  test("keeps only the refs with a linked pull request in a chosen state", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: {
+          ...DEFAULT_BRANCH_FILTERS,
+          pullRequest: "linked",
+          pullRequestStates: {
+            open: true,
+            draft: false,
+            merged: false,
+            closed: false,
+          },
+        },
+        pullRequests,
+      }),
+    )
+    expect(labels(chips)).toEqual(["origin/other", "v1"])
+  })
+
+  test("keeps only the refs without a pull request", () => {
+    const chips = commitChips(
+      filtered,
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" },
+        pullRequests,
+      }),
+    )
+    expect(labels(chips)).toEqual(["local", "tracked · origin", "v1"])
+  })
+
+  test("a branch tracking a differently named upstream carries that upstream's pull request", () => {
+    const renamed = commit("a", ["local", "origin/pr-branch"])
+    const renamedSync = new Map([
+      ["local", sync("local", { upstream: "origin/pr-branch" })],
+    ])
+    const renamedPullRequests = new Map([pullRequest("pr-branch", "open")])
+    const linked = commitChips(
+      renamed,
+      context({
+        branchSync: renamedSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" },
+        pullRequests: renamedPullRequests,
+      }),
+    )
+    expect(labels(linked)).toEqual(["local · origin"])
+    const none = commitChips(
+      renamed,
+      context({
+        branchSync: renamedSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" },
+        pullRequests: renamedPullRequests,
+      }),
+    )
+    expect(labels(none)).toEqual([])
+  })
+
+  test("a branch ahead of its upstream still carries that upstream's pull request", () => {
+    const ahead = commit("a", ["local"])
+    const aheadSync = new Map([
+      ["local", sync("local", { ahead: 1, upstream: "origin/pr-branch" })],
+    ])
+    const chips = commitChips(
+      ahead,
+      context({
+        branchSync: aheadSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" },
+        pullRequests: new Map([pullRequest("pr-branch", "open")]),
+      }),
+    )
+    expect(labels(chips)).toEqual(["local"])
+  })
+
+  test("a branch tracking another remote does not carry the pull request of its own name", () => {
+    const tracked = commit("a", ["local", "upstream/local"])
+    const trackedSync = new Map([
+      ["local", sync("local", { upstream: "upstream/local" })],
+    ])
+    const chips = commitChips(
+      tracked,
+      context({
+        branchSync: trackedSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" },
+        pullRequests: new Map([pullRequest("local", "open")]),
+        remotes: ["origin", "upstream"],
+      }),
+    )
+    expect(labels(chips)).toEqual([])
+  })
+
+  test("the checkout survives a filter it does not match", () => {
+    const chips = commitChips(
+      commit("a", ["HEAD -> local"]),
+      context({
+        branchSync,
+        filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "gone" },
+      }),
+    )
+    expect(labels(chips)).toEqual(["local"])
+  })
+})
+
+describe("branch filters", () => {
+  test("counts each narrowed axis once", () => {
+    expect(activeFilterCount(DEFAULT_BRANCH_FILTERS)).toBe(0)
+    expect(
+      activeFilterCount({
+        ...DEFAULT_BRANCH_FILTERS,
+        pullRequest: "linked",
+        upstream: "gone",
+      }),
+    ).toBe(2)
+  })
+
+  test("names each narrowed axis, and the states when not all are chosen", () => {
+    expect(describeBranchFilters(DEFAULT_BRANCH_FILTERS)).toBe("")
+    expect(
+      describeBranchFilters({ ...DEFAULT_BRANCH_FILTERS, upstream: "gone" }),
+    ).toBe("Upstream gone")
+    expect(
+      describeBranchFilters({
+        ...DEFAULT_BRANCH_FILTERS,
+        pullRequest: "linked",
+        upstream: "none",
+      }),
+    ).toBe("Upstream none · Pull request linked")
+    expect(
+      describeBranchFilters({
+        ...DEFAULT_BRANCH_FILTERS,
+        pullRequest: "linked",
+        pullRequestStates: {
+          open: true,
+          draft: false,
+          merged: true,
+          closed: false,
+        },
+      }),
+    ).toBe("Pull request open, merged")
+    expect(
+      describeBranchFilters({ ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" }),
+    ).toBe("No pull request")
+  })
+
+  test("the key changes with the chosen pull request states", () => {
+    const linked = { ...DEFAULT_BRANCH_FILTERS, pullRequest: "linked" as const }
+    expect(branchFiltersKey(linked)).not.toBe(
+      branchFiltersKey({
+        ...linked,
+        pullRequestStates: { ...linked.pullRequestStates, merged: false },
+      }),
+    )
+  })
 })
 
 describe("isMarkedCommit", () => {
@@ -482,6 +724,160 @@ describe("appendGraphRows", () => {
       (hash) => hash === "b",
     )
     expect(continued.rows.map((row) => row.hidden)).toEqual([0, 0, 0, 0])
+  })
+
+  test("nothing revealed leaves the graph fully folded", () => {
+    const commits = [commit("a", ["main"]), commit("b")]
+    expect(
+      appendGraphRows(null, commits, marked, nothingRevealed).hasRevealedRuns,
+    ).toBe(false)
+  })
+
+  test("a revealed run is reported without another pass over the earlier batches", () => {
+    const commits = [
+      commit("a", ["main"]),
+      commit("b"),
+      commit("c", ["old"]),
+      commit("d"),
+      commit("e"),
+    ]
+    const revealed = (hash: string) => hash === "b"
+    const first = appendGraphRows(null, commits.slice(0, 4), marked, revealed)
+    expect(first.hasRevealedRuns).toBe(true)
+    const scanned: string[] = []
+    const continued = appendGraphRows(
+      first,
+      commits,
+      (commit) => {
+        scanned.push(commit.hash)
+        return marked(commit)
+      },
+      revealed,
+    )
+    expect(continued.hasRevealedRuns).toBe(true)
+    expect(scanned).toEqual(["d", "e"])
+  })
+
+  test("a reveal left on a commit that is now marked is not a revealed run", () => {
+    const commits = [commit("a", ["main"]), commit("b"), commit("c", ["old"])]
+    const revealed = (hash: string) => hash === "b"
+    expect(
+      appendGraphRows(null, commits, marked, revealed).hasRevealedRuns,
+    ).toBe(true)
+    expect(
+      appendGraphRows(null, commits, () => true, revealed).hasRevealedRuns,
+    ).toBe(false)
+  })
+
+  test("a reveal the loaded commits do not hold is not a revealed run", () => {
+    const commits = [commit("a", ["main"]), commit("b")]
+    expect(
+      appendGraphRows(null, commits, marked, (hash) => hash === "z")
+        .hasRevealedRuns,
+    ).toBe(false)
+  })
+})
+
+describe("collapsed graph state", () => {
+  test("invalidates cached rows when filtered branch metadata arrives", () => {
+    const filters = { ...DEFAULT_BRANCH_FILTERS, upstream: "gone" as const }
+    const before = branchFilterMetadataKey(filters, new Map(), new Map())
+    const after = branchFilterMetadataKey(
+      filters,
+      new Map([
+        [
+          "feature",
+          {
+            ahead: 0,
+            behind: 0,
+            branch: "feature",
+            isGone: true,
+            upstream: "origin/feature",
+          },
+        ],
+      ]),
+      new Map(),
+    )
+
+    expect(after).not.toBe(before)
+  })
+
+  test("invalidates cached rows when filtered pull-request metadata refreshes", () => {
+    const filters = {
+      ...DEFAULT_BRANCH_FILTERS,
+      pullRequest: "linked" as const,
+    }
+    const before = branchFilterMetadataKey(
+      filters,
+      new Map(),
+      new Map([
+        [
+          "feature",
+          {
+            branch: "feature",
+            number: 1,
+            state: "open" as const,
+            title: "Feature",
+            url: "https://example.com/pull/1",
+          },
+        ],
+      ]),
+    )
+    const after = branchFilterMetadataKey(
+      filters,
+      new Map(),
+      new Map([
+        [
+          "feature",
+          {
+            branch: "feature",
+            number: 1,
+            state: "closed" as const,
+            title: "Feature",
+            url: "https://example.com/pull/1",
+          },
+        ],
+      ]),
+    )
+
+    expect(after).not.toBe(before)
+  })
+
+  test("invalidates cached rows when branch sync lands after the pull requests it pairs", () => {
+    const filters = { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" as const }
+    const row = commit("a", ["local", "origin/feature"])
+    const pullRequests = new Map([
+      [
+        "feature",
+        {
+          branch: "feature",
+          number: 1,
+          state: "open" as const,
+          title: "Feature",
+          url: "https://example.com/pull/1",
+        },
+      ],
+    ])
+    const branchSync = new Map([
+      [
+        "local",
+        {
+          ahead: 0,
+          behind: 0,
+          branch: "local",
+          isGone: false,
+          upstream: "origin/feature",
+        },
+      ],
+    ])
+
+    expect(isMarkedCommit(row, context({ filters, pullRequests }))).toBe(true)
+    expect(
+      isMarkedCommit(row, context({ branchSync, filters, pullRequests })),
+    ).toBe(false)
+    expect(branchFilterMetadataKey(filters, branchSync, pullRequests)).not.toBe(
+      branchFilterMetadataKey(filters, new Map(), pullRequests),
+    )
   })
 })
 

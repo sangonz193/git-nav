@@ -118,6 +118,22 @@ export function isFoldedFile(
   return folds.get(key) ?? isViewedFile(file, headRef, viewed)
 }
 
+// A comparison read again still lists the files that were folded by hand, and rereading is no reason to
+// open them, so their folds are carried over. A file that left the list takes its fold with it.
+export function carriedFolds(
+  folds: ReadonlyMap<string, boolean>,
+  keys: Iterable<string>,
+) {
+  const next = new Map<string, boolean>()
+  for (const key of keys) {
+    const fold = folds.get(key)
+    if (fold !== undefined) {
+      next.set(key, fold)
+    }
+  }
+  return next
+}
+
 // The counts describe the comparison, whatever the filter is showing of it, so two numbers beside each
 // other never read as a contradiction.
 export function changedFilesLabel(shown: number, changed: number) {
