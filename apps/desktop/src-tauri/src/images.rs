@@ -60,7 +60,7 @@ fn lookup(token: &str) -> Option<ImageSource> {
     with_tokens(|tokens| tokens.sources.get(token).cloned())
 }
 
-fn read(source: &ImageSource) -> Result<Vec<u8>, String> {
+pub(crate) fn read(source: &ImageSource) -> Result<Vec<u8>, String> {
     if source.revision != WORKTREE_REF {
         let object = crate::diff::object_name(&source.revision, &source.path);
         return git_output_bytes(&source.repo_path, &["show", &object])
@@ -94,13 +94,13 @@ pub(crate) fn response(token: &str) -> Response<Vec<u8>> {
     let Some(source) = lookup(token) else {
         return plain(StatusCode::NOT_FOUND, "Unknown image.".to_string());
     };
-    match read(&source) {
+    match crate::previews::serve(&source) {
         // A token is minted per read, so the URL changes whenever the bytes could have.
-        Ok(bytes) => Response::builder()
+        Ok(served) => Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, source.mime)
+            .header(header::CONTENT_TYPE, served.mime)
             .header(header::CACHE_CONTROL, "private, max-age=31536000, immutable")
-            .body(bytes)
+            .body(served.bytes)
             .expect("an image response is always valid"),
         Err(message) => plain(StatusCode::INTERNAL_SERVER_ERROR, message),
     }

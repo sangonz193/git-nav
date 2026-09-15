@@ -10,6 +10,7 @@ mod diff;
 mod git;
 mod graph;
 mod images;
+mod previews;
 mod operations;
 mod process;
 mod projects;

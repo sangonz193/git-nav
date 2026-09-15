@@ -33,9 +33,23 @@ dirs = "6"
 futures-util = "0.3"
 fs2 = "0.4"
 mime_guess = "2"
+image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "webp"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip"] }
+
+# Previews of photographs are decoded during development too, which unoptimised codecs take
+# seconds over.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.image-webp]
+opt-level = 3
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

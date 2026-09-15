@@ -50,6 +50,8 @@ pub(crate) struct FileDiff {
 pub(crate) struct BinaryContent {
     pub(crate) size: u64,
     pub(crate) image_token: Option<String>,
+    pub(crate) width: Option<u32>,
+    pub(crate) height: Option<u32>,
 }
 
 fn finish_patch_block(files: &mut [FileStat], deletions: &mut u32, additions: &mut u32) {
@@ -539,18 +541,26 @@ fn image_mime_type(path: &str) -> Option<&'static str> {
     })
 }
 
-fn binary_content(repo_path: &str, revision: &str, path: &str, size: u64, readable: bool) -> BinaryContent {
-    let image_token = image_mime_type(path)
-        .filter(|_| readable && size <= IMAGE_PREVIEW_LIMIT as u64)
-        .map(|mime| {
-            crate::images::mint(ImageSource {
-                repo_path: repo_path.to_string(),
-                revision: revision.to_string(),
-                path: path.to_string(),
-                mime,
-            })
-        });
-    BinaryContent { size, image_token }
+pub(crate) fn image_source(repo_path: &str, revision: &str, path: &str) -> Option<ImageSource> {
+    image_mime_type(path).map(|mime| ImageSource {
+        repo_path: repo_path.to_string(),
+        revision: revision.to_string(),
+        path: path.to_string(),
+        mime,
+    })
+}
+
+fn binary_content(repo_path: &str, revision: &str, path: &str, size: u64, readable: bool) -> Result<BinaryContent, String> {
+    let Some(source) = image_source(repo_path, revision, path).filter(|_| readable && size <= IMAGE_PREVIEW_LIMIT as u64) else {
+        return Ok(BinaryContent { size, image_token: None, width: None, height: None });
+    };
+    let dimensions = crate::previews::prepare(&source)?;
+    Ok(BinaryContent {
+        size,
+        image_token: Some(crate::images::mint(source)),
+        width: dimensions.map(|dimensions| dimensions.width),
+        height: dimensions.map(|dimensions| dimensions.height),
+    })
 }
 
 fn git_binary_content(repo_path: &str, revision: &str, path: &str) -> Result<BinaryContent, String> {
@@ -559,12 +569,12 @@ fn git_binary_content(repo_path: &str, revision: &str, path: &str) -> Result<Bin
         .ok_or_else(|| format!("Could not read {path} at {revision}."))?
         .parse()
         .map_err(|error: std::num::ParseIntError| error.to_string())?;
-    Ok(binary_content(repo_path, revision, path, size, true))
+    binary_content(repo_path, revision, path, size, true)
 }
 
 fn worktree_binary_content(repo_path: &str, root: &str, path: &str) -> Result<BinaryContent, String> {
     let metadata = fs::symlink_metadata(Path::new(root).join(path)).map_err(|error| error.to_string())?;
-    Ok(binary_content(repo_path, WORKTREE_REF, path, metadata.len(), metadata.file_type().is_file()))
+    binary_content(repo_path, WORKTREE_REF, path, metadata.len(), metadata.file_type().is_file())
 }
 
 #[git_nav_macros::http_command]

@@ -184,7 +184,11 @@ function ImageSide({
   imageType: boolean
   side: "old" | "new"
 }) {
-  const [dimensions, setDimensions] = useState<string | null>(null)
+  // A downscaled preview is served for a large photograph, so its own size is only a fallback.
+  const [naturalDimensions, setNaturalDimensions] = useState<string | null>(
+    null,
+  )
+  const dimensions = content.dimensions ?? naturalDimensions
   const [decoded, setDecoded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   return (
@@ -198,7 +202,9 @@ function ImageSide({
             onError={() => setPreviewFailed(true)}
             onLoad={(event) => {
               const image = event.currentTarget
-              setDimensions(`${image.naturalWidth}×${image.naturalHeight}`)
+              setNaturalDimensions(
+                `${image.naturalWidth}×${image.naturalHeight}`,
+              )
               // load fires before a large photo is decoded, so revealing it here would paint nothing
               // for a while and then pop; decode() resolves once there are pixels to fade in.
               image.decode().then(

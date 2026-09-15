@@ -71,6 +71,7 @@ export function svgContent(source: string | null) {
       size <= IMAGE_PREVIEW_LIMIT ?
         `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`
       : null,
+    dimensions: null,
   }
 }
 

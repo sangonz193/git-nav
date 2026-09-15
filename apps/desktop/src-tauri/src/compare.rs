@@ -6,7 +6,8 @@ use crate::git::{
     EMPTY_TREE_REF, WORKTREE_REF, git_output, git_result, primary_reference, project_id, resolve_commit,
     resolve_diff_base,
 };
-use crate::diff::{ChangedFile, changed_files, worktree_changed_files};
+use crate::diff::{ChangedFile, changed_files, image_source, worktree_changed_files};
+use crate::images::ImageSource;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +25,24 @@ pub(crate) struct BranchSelection {
 }
 
 fn comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool, ignore_whitespace: bool) -> Result<Comparison, String> {
+    let comparison = resolved_comparison(repo_path, base_ref, head_ref, merge_base, ignore_whitespace)?;
+    crate::previews::warm(image_sources(repo_path, &comparison.base_sha, &comparison.head_sha, &comparison.files));
+    Ok(comparison)
+}
+
+pub(crate) fn image_sources(repo_path: &str, base_sha: &str, head_sha: &str, files: &[ChangedFile]) -> Vec<ImageSource> {
+    files
+        .iter()
+        .filter(|file| file.is_binary)
+        .flat_map(|file| {
+            [(base_sha, file.old_path.as_deref()), (head_sha, file.new_path.as_deref())]
+                .into_iter()
+                .filter_map(|(revision, path)| image_source(repo_path, revision, path?))
+        })
+        .collect()
+}
+
+fn resolved_comparison(repo_path: &str, base_ref: &str, head_ref: &str, merge_base: bool, ignore_whitespace: bool) -> Result<Comparison, String> {
     let is_worktree = head_ref == WORKTREE_REF;
     // The working tree has no commit of its own, so the checkout it sits on stands in for it as the
     // side the fork point is measured from.

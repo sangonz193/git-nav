@@ -54,6 +54,7 @@ describe("svgContent", () => {
     expect(svgContent(source)).toEqual({
       size: new TextEncoder().encode(source).length,
       image: "data:image/svg+xml;charset=utf-8,%3Csvg%3E%C3%A9%3C%2Fsvg%3E",
+      dimensions: null,
     })
   })
 
@@ -63,6 +64,7 @@ describe("svgContent", () => {
     expect(svgContent(source)).toEqual({
       size: IMAGE_PREVIEW_LIMIT + 1,
       image: null,
+      dimensions: null,
     })
   })
 })

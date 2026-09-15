@@ -30,11 +30,14 @@ highlighter.setMaxLineToIgnoreSyntax(MAX_HIGHLIGHT_LINES)
 export type BinaryContent = {
   size: number
   image: string | null
+  dimensions: string | null
 }
 
 type ServedBinary = {
   size: number
   imageToken: string | null
+  width: number | null
+  height: number | null
 }
 
 export type FileDiff = {
@@ -53,6 +56,10 @@ function binaryContent(served: ServedBinary | null): BinaryContent | null {
     served && {
       size: served.size,
       image: served.imageToken === null ? null : imageUrl(served.imageToken),
+      dimensions:
+        served.width === null || served.height === null ?
+          null
+        : `${served.width}×${served.height}`,
     }
   )
 }
