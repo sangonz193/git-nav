@@ -100,6 +100,7 @@ import {
   type RefUpdate,
 } from "./commit-operations"
 import type { GraphPanelParams } from "@/lib/panel-params"
+import { observeAttachedElementRect, useTabScrollTop } from "@/lib/tab-scroll"
 import { diffTabs } from "./diff-tabs"
 import { GraphFilterStrip, GraphToolbar } from "./graph-toolbar"
 import { RowContextMenuBody } from "./row-context-menu"
@@ -205,7 +206,6 @@ function CommitGraphPanelContent({
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
-  const savedScrollTop = useRef(0)
   const refreshAnchor = useRef<{
     commits: Commit[]
     hash: string
@@ -213,7 +213,6 @@ function CommitGraphPanelContent({
   } | null>(null)
   const pendingScrollHash = useRef<string | null>(null)
   const rowsRef = useRef<GraphRow[] | null>(null)
-  const isScrollElementVisible = useRef(false)
   const [scroll, setScroll] = useState({
     top: 0,
     height: 0,
@@ -222,8 +221,11 @@ function CommitGraphPanelContent({
   })
   const [sheetPeekHeight, setSheetPeekHeight] = useState(0)
   const scrollFrame = useRef<number | null>(null)
+  const savedScrollTop = useTabScrollTop(api, scrollElement)
   const captureScrollAnchor = useCallback(() => {
-    const scrollTop = scrollElement.current?.scrollTop ?? savedScrollTop.current
+    const element = scrollElement.current
+    const scrollTop =
+      element?.isConnected ? element.scrollTop : savedScrollTop.current
     const row = Math.floor(scrollTop / rowHeight)
     const commit =
       commitsRef.current[
@@ -237,7 +239,7 @@ function CommitGraphPanelContent({
           offset: scrollTop - row * rowHeight,
         }
       : null
-  }, [rowHeight])
+  }, [rowHeight, savedScrollTop])
   const {
     branchSync,
     commits,
@@ -439,6 +441,7 @@ function CommitGraphPanelContent({
     count: rowCount,
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
+    observeElementRect: observeAttachedElementRect,
     overscan: 12,
     // Room past the last row reserves the expanded sheet, otherwise half the viewport, so rows can clear it.
     paddingEnd: Math.max(
@@ -559,7 +562,7 @@ function CommitGraphPanelContent({
 
   const updateScroll = useCallback(() => {
     const element = scrollElement.current
-    if (!element) {
+    if (!element?.isConnected) {
       return
     }
     setScroll({
@@ -580,25 +583,6 @@ function CommitGraphPanelContent({
     updateScroll()
     return () => observer.disconnect()
   }, [updateScroll])
-
-  useEffect(() => {
-    const element = scrollElement.current
-    if (!element) {
-      return
-    }
-    const observer = new IntersectionObserver(([entry]) => {
-      isScrollElementVisible.current = entry.isIntersecting
-      if (!entry.isIntersecting) {
-        return
-      }
-      element.scrollTop = savedScrollTop.current
-      rowVirtualizer.measure()
-      element.dispatchEvent(new Event("scroll"))
-      updateScroll()
-    })
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [rowVirtualizer, updateScroll])
 
   useEffect(() => {
     const query = window.matchMedia("(pointer: coarse)")
@@ -720,9 +704,6 @@ function CommitGraphPanelContent({
     }
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = null
-      if (isScrollElementVisible.current && scrollElement.current) {
-        savedScrollTop.current = scrollElement.current.scrollTop
-      }
       updateScroll()
     })
   }

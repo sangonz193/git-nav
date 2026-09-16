@@ -1,6 +1,7 @@
 import { DiffModeEnum } from "@git-diff-view/react"
 import { invoke } from "@/lib/ipc"
 import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
+import { useTabScrollTop } from "@/lib/tab-scroll"
 import type { IDockviewPanelProps } from "dockview-react"
 import {
   Archive,
@@ -307,6 +308,7 @@ export function DiffPanel({
   const [panelWidth, setPanelWidth] = useState(0)
   const [panel, setPanel] = useState<HTMLElement | null>(null)
   const scrollElement = useRef<HTMLDivElement>(null)
+  useTabScrollTop(api, scrollElement)
   const marksDuringLoad = useRef<Map<string, string | null> | null>(null)
   const userPreferencesRef = useRef(userPreferences)
   const pendingRestoredFilePath = useRef(params.selectedFilePath ?? null)

@@ -1,6 +1,7 @@
 import { DiffModeEnum } from "@git-diff-view/react"
 import { invoke } from "@/lib/ipc"
 import { INDEX_REF, WORKTREE_REF } from "@/lib/repository-constants"
+import { useTabScrollTop } from "@/lib/tab-scroll"
 import type { IDockviewPanelProps } from "dockview-react"
 import {
   AppWindow,
@@ -319,6 +320,7 @@ export function WorkingTreePanel({
   const [isNarrow, setIsNarrow] = useState(false)
   const [panel, setPanel] = useState<HTMLElement | null>(null)
   const scrollElement = useRef<HTMLDivElement>(null)
+  useTabScrollTop(api, scrollElement)
   const userPreferencesRef = useRef(userPreferences)
   const pendingRestoredFilePath = useRef(params.selectedFilePath ?? null)
   const worktrees = useWorktrees(params.path, pickerOpen)
