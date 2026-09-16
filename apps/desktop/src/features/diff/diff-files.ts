@@ -4,6 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
 import { imageUrl } from "@/lib/ipc"
+import { observeAttachedElementRect } from "@/lib/tab-scroll"
 import {
   fileName,
   isImagePath,
@@ -316,6 +317,7 @@ export function useDiffCards({
       FILE_HEADER_HEIGHT +
       estimatedBodyHeight(files[index], mode, isFolded(files[index])),
     getItemKey: (index) => keyOf(files[index]),
+    observeElementRect: observeAttachedElementRect,
     // A fast scroll or a jump from the file tree outruns two rows and shows empty slots for a frame.
     overscan: 4,
   })
