@@ -7,6 +7,7 @@ mod compare;
 mod conflicts;
 mod desktop;
 mod diff;
+mod fast_forward;
 mod git;
 mod graph;
 mod images;
@@ -88,6 +89,8 @@ commands![
     cleanup::squashed_branch_candidates,
     cleanup::preview_cleanup_candidates,
     cleanup::delete_squashed_branches,
+    fast_forward::preview_fast_forward_candidates,
+    fast_forward::fast_forward_merged_branches,
     operations::delete_branch,
     compare::compare_refs,
     compare::viewed_files,

@@ -136,6 +136,8 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::squashed_branch_candidates => Exposure::Api(post(crate::cleanup::__http_squashed_branch_candidates)),
         IpcCommand::preview_cleanup_candidates => Exposure::Api(post(crate::cleanup::__http_preview_cleanup_candidates)),
         IpcCommand::delete_squashed_branches => Exposure::Api(post(crate::cleanup::__http_delete_squashed_branches)),
+        IpcCommand::preview_fast_forward_candidates => Exposure::Api(post(crate::fast_forward::__http_preview_fast_forward_candidates)),
+        IpcCommand::fast_forward_merged_branches => Exposure::Api(post(crate::fast_forward::__http_fast_forward_merged_branches)),
         IpcCommand::delete_branch => Exposure::Api(post(crate::operations::__http_delete_branch)),
         IpcCommand::compare_refs => Exposure::Api(post(crate::compare::__http_compare_refs)),
         IpcCommand::viewed_files => Exposure::Api(post(crate::compare::__http_viewed_files)),
