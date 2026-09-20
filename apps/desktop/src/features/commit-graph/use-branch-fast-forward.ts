@@ -21,12 +21,14 @@ type BranchFastForward = {
 export function useBranchFastForward({
   cleanOptions,
   graphVersion,
+  pullRequestVersion,
   onCompleted,
   onError,
   repoPath,
 }: {
   cleanOptions: CleanOptions
   graphVersion: number
+  pullRequestVersion: number
   onCompleted: (result: CompletedOperation) => void
   onError: (message: string | null) => void
   repoPath: string
@@ -80,7 +82,7 @@ export function useBranchFastForward({
   // Cleanup candidates are excluded, so the set depends on the cleanup options in force.
   useEffect(() => {
     previewCandidates(cleanOptions)
-  }, [cleanOptions, graphVersion, previewCandidates])
+  }, [cleanOptions, graphVersion, pullRequestVersion, previewCandidates])
   return {
     candidateCount:
       preview?.filter((candidate) => !candidate.blocker).length ?? 0,
