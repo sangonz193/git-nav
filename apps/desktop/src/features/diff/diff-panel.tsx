@@ -305,8 +305,13 @@ export function DiffPanel({
     params.selectedFilePath ?? null,
   )
   const [isNarrow, setIsNarrow] = useState(false)
+  const [isDrawerLayout, setIsDrawerLayout] = useState(false)
   const [panelWidth, setPanelWidth] = useState(0)
   const [panel, setPanel] = useState<HTMLElement | null>(null)
+  const [toolbarElement, setToolbarElement] = useState<HTMLDivElement | null>(
+    null,
+  )
+  const initializedLayout = useRef(false)
   const scrollElement = useRef<HTMLDivElement>(null)
   useTabScrollTop(api, scrollElement)
   const marksDuringLoad = useRef<Map<string, string | null> | null>(null)
@@ -378,7 +383,7 @@ export function DiffPanel({
   function toggleFileTree() {
     const next = toggledDiffFileTree(
       isSidebarOpen,
-      isNarrow,
+      isDrawerLayout,
       userPreferencesRef.current,
     )
     if (next.preferences !== userPreferencesRef.current) {
@@ -526,43 +531,47 @@ export function DiffPanel({
   // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {
     const element = panel
-    if (!element) {
+    if (!element || !toolbarElement) {
       return
     }
     let narrow: boolean | null = null
-    const layOut = (width: number) => {
+    const layOut = () => {
+      const width = element.getBoundingClientRect().width
+      const mainWidth = toolbarElement.getBoundingClientRect().width
       // A panel that has not been laid out yet, or whose tab is hidden, measures zero. That is not a
       // width to fold the toolbar for, and it is certainly not one to settle the whole layout on.
-      if (width === 0) {
+      if (width === 0 || mainWidth === 0) {
         return
       }
-      setPanelWidth(width)
-      if (narrow === null) {
-        const layout = initialDiffLayout(width, userPreferencesRef.current)
+      setPanelWidth(mainWidth)
+      setIsNarrow(mainWidth < NARROW_DIFF_PANEL_WIDTH)
+      if (!initializedLayout.current) {
+        const layout = initialDiffLayout(
+          width,
+          userPreferencesRef.current,
+          mainWidth,
+        )
         setMode(
           layout.mode === "unified" ? DiffModeEnum.Unified : DiffModeEnum.Split,
         )
-        setIsSidebarOpen(layout.fileTreeOpen)
         setWrap(layout.wrap)
+        initializedLayout.current = true
       }
       const next = width < NARROW_DIFF_PANEL_WIDTH
       if (narrow !== next) {
-        if (narrow !== null) {
-          setIsSidebarOpen(
-            initialDiffLayout(width, userPreferencesRef.current).fileTreeOpen,
-          )
-        }
+        setIsSidebarOpen(
+          initialDiffLayout(width, userPreferencesRef.current).fileTreeOpen,
+        )
         narrow = next
-        setIsNarrow(next)
+        setIsDrawerLayout(next)
       }
     }
-    layOut(element.getBoundingClientRect().width)
-    const observer = new ResizeObserver(([entry]) =>
-      layOut(entry.contentRect.width),
-    )
+    layOut()
+    const observer = new ResizeObserver(layOut)
     observer.observe(element)
+    observer.observe(toolbarElement)
     return () => observer.disconnect()
-  }, [panel])
+  }, [panel, toolbarElement])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -743,11 +752,11 @@ export function DiffPanel({
       pendingRestoredFilePath.current = null
       scrollToFile(file)
       setSelectedFilePath(fileName(file))
-      if (isNarrow) {
+      if (isDrawerLayout) {
         setIsSidebarOpen(false)
       }
     },
-    [isNarrow, scrollToFile],
+    [isDrawerLayout, scrollToFile],
   )
 
   useEffect(() => {
@@ -938,216 +947,229 @@ export function DiffPanel({
     </PopoverContent>
   )
 
-  return (
-    <section className="diff-panel" ref={setPanel}>
-      <div className="diff-toolbar">
-        <Hinted
-          hint={isSidebarOpen ? "Hide changed files" : "Show changed files"}
+  const toolbar = (
+    <div className="diff-toolbar" ref={setToolbarElement}>
+      <Hinted
+        hint={isSidebarOpen ? "Hide changed files" : "Show changed files"}
+      >
+        <Button
+          aria-expanded={isSidebarOpen}
+          aria-label="Toggle changed files"
+          onClick={() => {
+            toggleFileTree()
+          }}
+          size="icon-sm"
+          type="button"
+          variant="outline"
         >
+          <PanelLeft />
+        </Button>
+      </Hinted>
+      <Popover
+        onOpenChange={(open) => (open ? openPicker("base") : setPicker(null))}
+        open={picker === "base"}
+      >
+        <PopoverTrigger asChild>
           <Button
-            aria-expanded={isSidebarOpen}
-            aria-label="Toggle changed files"
-            onClick={() => {
-              toggleFileTree()
-            }}
+            className={
+              isNarrow ?
+                "min-w-0 flex-1 justify-between"
+              : "w-45 justify-between"
+            }
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <span className="truncate">{refs.baseLabel}</span>
+            <ChevronDown />
+          </Button>
+        </PopoverTrigger>
+        {pickerMenu("base")}
+      </Popover>
+      <Hinted
+        hint={
+          refs.base === EMPTY_TREE_REF ?
+            "There is no fork point for an empty base."
+          : refs.mergeBase ?
+            `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}`
+          : `Changes between ${refs.baseLabel} and ${refs.headLabel}`
+        }
+      >
+        <span className="inline-flex">
+          <Button
+            aria-label="Compare since the two sides forked"
+            aria-pressed={refs.mergeBase}
+            disabled={refs.base === EMPTY_TREE_REF}
+            onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <span className="text-muted-foreground">{rangeMarker(refs)}</span>
+            {panelWidth >= WIDE_DIFF_PANEL_WIDTH &&
+              (refs.mergeBase ? "Since fork" : "Direct")}
+          </Button>
+        </span>
+      </Hinted>
+      <Popover
+        onOpenChange={(open) => (open ? openPicker("head") : setPicker(null))}
+        open={picker === "head"}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            className={
+              isNarrow ?
+                "min-w-0 flex-1 justify-between"
+              : "w-45 justify-between"
+            }
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <HeadPickerLabel label={refs.headLabel} reference={refs.head} />
+            <ChevronDown />
+          </Button>
+        </PopoverTrigger>
+        {pickerMenu("head")}
+      </Popover>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        {!isNarrow && (
+          <ButtonGroup>
+            <Hinted hint="Show both sides">
+              <Button
+                aria-label="Split layout"
+                aria-pressed={isSplit}
+                onClick={() => setPreferredMode("split")}
+                size="icon-sm"
+                type="button"
+                variant="outline"
+              >
+                <Columns2 />
+              </Button>
+            </Hinted>
+            <Hinted hint="Show one column">
+              <Button
+                aria-label="Unified layout"
+                aria-pressed={!isSplit}
+                onClick={() => setPreferredMode("unified")}
+                size="icon-sm"
+                type="button"
+                variant="outline"
+              >
+                <Rows3 />
+              </Button>
+            </Hinted>
+          </ButtonGroup>
+        )}
+        {inlineFolds && foldButtons}
+        <Popover>
+          <Tooltip>
+            <PopoverTrigger asChild>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="View options"
+                  size={isNarrow ? "icon-sm" : "sm"}
+                  type="button"
+                  variant="outline"
+                >
+                  <SlidersHorizontal />
+                  {!isNarrow && "View"}
+                </Button>
+              </TooltipTrigger>
+            </PopoverTrigger>
+            <TooltipContent>Choose how the diff is laid out</TooltipContent>
+          </Tooltip>
+          <PopoverContent align="end" className="w-64 p-0">
+            <PanelSection>
+              <PanelHeading>Layout</PanelHeading>
+              {isNarrow && (
+                <LabeledRow label="Columns">
+                  <Segmented
+                    onChange={setPreferredMode}
+                    options={LAYOUT_OPTIONS}
+                    value={isSplit ? "split" : "unified"}
+                  />
+                </LabeledRow>
+              )}
+              <SwitchRow
+                checked={wrap}
+                id="diff-view-wrap"
+                label="Wrap long lines"
+                onCheckedChange={setPreferredWrap}
+              />
+              <SwitchRow
+                checked={ignoreWhitespace}
+                id="diff-view-ignore-whitespace"
+                label="Ignore whitespace"
+                onCheckedChange={setPreferredIgnoreWhitespace}
+              />
+            </PanelSection>
+            <PanelSection>
+              <PanelHeading>Files</PanelHeading>
+              <SwitchRow
+                checked={!hideViewed}
+                id="diff-view-viewed-files"
+                label="Viewed files"
+                onCheckedChange={(shown) => setPreferredHideViewed(!shown)}
+              />
+              {!inlineFolds && (
+                <LabeledRow label="Fold">{foldButtons}</LabeledRow>
+              )}
+            </PanelSection>
+          </PopoverContent>
+        </Popover>
+        <Hinted hint="Reread this comparison">
+          <Button
+            aria-label="Refresh the comparison"
+            onClick={() => setVersion((current) => current + 1)}
             size="icon-sm"
             type="button"
             variant="outline"
           >
-            <PanelLeft />
+            <RefreshCw />
           </Button>
         </Hinted>
-        <Popover
-          onOpenChange={(open) => (open ? openPicker("base") : setPicker(null))}
-          open={picker === "base"}
-        >
-          <PopoverTrigger asChild>
-            <Button
-              className={
-                isNarrow ?
-                  "min-w-0 flex-1 justify-between"
-                : "w-45 justify-between"
-              }
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <span className="truncate">{refs.baseLabel}</span>
-              <ChevronDown />
-            </Button>
-          </PopoverTrigger>
-          {pickerMenu("base")}
-        </Popover>
-        <Hinted
-          hint={
-            refs.base === EMPTY_TREE_REF ?
-              "There is no fork point for an empty base."
-            : refs.mergeBase ?
-              `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}`
-            : `Changes between ${refs.baseLabel} and ${refs.headLabel}`
-          }
-        >
-          <span className="inline-flex">
-            <Button
-              aria-label="Compare since the two sides forked"
-              aria-pressed={refs.mergeBase}
-              disabled={refs.base === EMPTY_TREE_REF}
-              onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              <span className="text-muted-foreground">{rangeMarker(refs)}</span>
-              {panelWidth >= WIDE_DIFF_PANEL_WIDTH &&
-                (refs.mergeBase ? "Since fork" : "Direct")}
-            </Button>
-          </span>
-        </Hinted>
-        <Popover
-          onOpenChange={(open) => (open ? openPicker("head") : setPicker(null))}
-          open={picker === "head"}
-        >
-          <PopoverTrigger asChild>
-            <Button
-              className={
-                isNarrow ?
-                  "min-w-0 flex-1 justify-between"
-                : "w-45 justify-between"
-              }
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <HeadPickerLabel label={refs.headLabel} reference={refs.head} />
-              <ChevronDown />
-            </Button>
-          </PopoverTrigger>
-          {pickerMenu("head")}
-        </Popover>
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          {!isNarrow && (
-            <ButtonGroup>
-              <Hinted hint="Show both sides">
-                <Button
-                  aria-label="Split layout"
-                  aria-pressed={isSplit}
-                  onClick={() => setPreferredMode("split")}
-                  size="icon-sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <Columns2 />
-                </Button>
-              </Hinted>
-              <Hinted hint="Show one column">
-                <Button
-                  aria-label="Unified layout"
-                  aria-pressed={!isSplit}
-                  onClick={() => setPreferredMode("unified")}
-                  size="icon-sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <Rows3 />
-                </Button>
-              </Hinted>
-            </ButtonGroup>
+      </div>
+    </div>
+  )
+
+  const narrowContent = (
+    <div className="diff-content">
+      {isSidebarOpen && (
+        <div
+          className="diff-drawer-backdrop"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+      {isSidebarOpen && <div className="diff-drawer">{sidebar}</div>}
+      {diffScroll}
+    </div>
+  )
+
+  return (
+    <section className="diff-panel" ref={setPanel}>
+      {isDrawerLayout ?
+        <>
+          {toolbar}
+          {narrowContent}
+        </>
+      : <ResizablePanelGroup orientation="horizontal">
+          {isSidebarOpen && (
+            <>
+              <ResizablePanel defaultSize={280} maxSize={480} minSize={200}>
+                {sidebar}
+              </ResizablePanel>
+              <ResizableHandle />
+            </>
           )}
-          {inlineFolds && foldButtons}
-          <Popover>
-            <Tooltip>
-              <PopoverTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label="View options"
-                    size={isNarrow ? "icon-sm" : "sm"}
-                    type="button"
-                    variant="outline"
-                  >
-                    <SlidersHorizontal />
-                    {!isNarrow && "View"}
-                  </Button>
-                </TooltipTrigger>
-              </PopoverTrigger>
-              <TooltipContent>Choose how the diff is laid out</TooltipContent>
-            </Tooltip>
-            <PopoverContent align="end" className="w-64 p-0">
-              <PanelSection>
-                <PanelHeading>Layout</PanelHeading>
-                {isNarrow && (
-                  <LabeledRow label="Columns">
-                    <Segmented
-                      onChange={setPreferredMode}
-                      options={LAYOUT_OPTIONS}
-                      value={isSplit ? "split" : "unified"}
-                    />
-                  </LabeledRow>
-                )}
-                <SwitchRow
-                  checked={wrap}
-                  id="diff-view-wrap"
-                  label="Wrap long lines"
-                  onCheckedChange={setPreferredWrap}
-                />
-                <SwitchRow
-                  checked={ignoreWhitespace}
-                  id="diff-view-ignore-whitespace"
-                  label="Ignore whitespace"
-                  onCheckedChange={setPreferredIgnoreWhitespace}
-                />
-              </PanelSection>
-              <PanelSection>
-                <PanelHeading>Files</PanelHeading>
-                <SwitchRow
-                  checked={!hideViewed}
-                  id="diff-view-viewed-files"
-                  label="Viewed files"
-                  onCheckedChange={(shown) => setPreferredHideViewed(!shown)}
-                />
-                {!inlineFolds && (
-                  <LabeledRow label="Fold">{foldButtons}</LabeledRow>
-                )}
-              </PanelSection>
-            </PopoverContent>
-          </Popover>
-          <Hinted hint="Reread this comparison">
-            <Button
-              aria-label="Refresh the comparison"
-              onClick={() => setVersion((current) => current + 1)}
-              size="icon-sm"
-              type="button"
-              variant="outline"
-            >
-              <RefreshCw />
-            </Button>
-          </Hinted>
-        </div>
-      </div>
-      <div className="diff-content">
-        {isNarrow ?
-          <>
-            {isSidebarOpen && (
-              <div
-                className="diff-drawer-backdrop"
-                onClick={() => setIsSidebarOpen(false)}
-              />
-            )}
-            {isSidebarOpen && <div className="diff-drawer">{sidebar}</div>}
-            {diffScroll}
-          </>
-        : <ResizablePanelGroup orientation="horizontal">
-            {isSidebarOpen && (
-              <>
-                <ResizablePanel defaultSize="22%" maxSize="40%" minSize="15%">
-                  {sidebar}
-                </ResizablePanel>
-                <ResizableHandle />
-              </>
-            )}
-            <ResizablePanel minSize="40%">{diffScroll}</ResizablePanel>
-          </ResizablePanelGroup>
-        }
-      </div>
+          <ResizablePanel minSize="40%">
+            <div className="diff-main">
+              {toolbar}
+              {diffScroll}
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      }
     </section>
   )
 }

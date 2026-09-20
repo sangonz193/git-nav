@@ -318,7 +318,12 @@ export function WorkingTreePanel({
   const [busy, setBusy] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [isNarrow, setIsNarrow] = useState(false)
+  const [isDrawerLayout, setIsDrawerLayout] = useState(false)
   const [panel, setPanel] = useState<HTMLElement | null>(null)
+  const [toolbarElement, setToolbarElement] = useState<HTMLDivElement | null>(
+    null,
+  )
+  const initializedLayout = useRef(false)
   const scrollElement = useRef<HTMLDivElement>(null)
   useTabScrollTop(api, scrollElement)
   const userPreferencesRef = useRef(userPreferences)
@@ -399,40 +404,44 @@ export function WorkingTreePanel({
 
   // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {
-    if (!panel) {
+    if (!panel || !toolbarElement) {
       return
     }
     let narrow: boolean | null = null
-    const layOut = (width: number) => {
-      if (width === 0) {
+    const layOut = () => {
+      const width = panel.getBoundingClientRect().width
+      const mainWidth = toolbarElement.getBoundingClientRect().width
+      if (width === 0 || mainWidth === 0) {
         return
       }
-      if (narrow === null) {
-        const layout = initialDiffLayout(width, userPreferencesRef.current)
+      setIsNarrow(mainWidth < NARROW_DIFF_PANEL_WIDTH)
+      if (!initializedLayout.current) {
+        const layout = initialDiffLayout(
+          width,
+          userPreferencesRef.current,
+          mainWidth,
+        )
         setMode(
           layout.mode === "unified" ? DiffModeEnum.Unified : DiffModeEnum.Split,
         )
-        setIsSidebarOpen(layout.fileTreeOpen)
         setWrap(layout.wrap)
+        initializedLayout.current = true
       }
       const next = width < NARROW_DIFF_PANEL_WIDTH
       if (narrow !== next) {
-        if (narrow !== null) {
-          setIsSidebarOpen(
-            initialDiffLayout(width, userPreferencesRef.current).fileTreeOpen,
-          )
-        }
+        setIsSidebarOpen(
+          initialDiffLayout(width, userPreferencesRef.current).fileTreeOpen,
+        )
         narrow = next
-        setIsNarrow(next)
+        setIsDrawerLayout(next)
       }
     }
-    layOut(panel.getBoundingClientRect().width)
-    const observer = new ResizeObserver(([entry]) =>
-      layOut(entry.contentRect.width),
-    )
+    layOut()
+    const observer = new ResizeObserver(layOut)
     observer.observe(panel)
+    observer.observe(toolbarElement)
     return () => observer.disconnect()
-  }, [panel])
+  }, [panel, toolbarElement])
 
   useEffect(() => {
     const path = pendingRestoredFilePath.current
@@ -463,7 +472,7 @@ export function WorkingTreePanel({
   function toggleFileTree() {
     const next = toggledDiffFileTree(
       isSidebarOpen,
-      isNarrow,
+      isDrawerLayout,
       userPreferencesRef.current,
     )
     if (next.preferences !== userPreferencesRef.current) {
@@ -501,11 +510,11 @@ export function WorkingTreePanel({
       pendingRestoredFilePath.current = null
       scrollToFile(file)
       setSelectedFilePath(selectedFilePathOf(file))
-      if (isNarrow) {
+      if (isDrawerLayout) {
         setIsSidebarOpen(false)
       }
     },
-    [isNarrow, scrollToFile],
+    [isDrawerLayout, scrollToFile],
   )
 
   function report(title: string) {
@@ -796,206 +805,215 @@ export function WorkingTreePanel({
     </div>
   )
 
-  return (
-    <section className="diff-panel" ref={setPanel}>
-      <div className="diff-toolbar">
-        <Hinted
-          hint={isSidebarOpen ? "Hide changed files" : "Show changed files"}
+  const toolbar = (
+    <div className="diff-toolbar" ref={setToolbarElement}>
+      <Hinted
+        hint={isSidebarOpen ? "Hide changed files" : "Show changed files"}
+      >
+        <Button
+          aria-expanded={isSidebarOpen}
+          aria-label="Toggle changed files"
+          onClick={toggleFileTree}
+          size="icon-sm"
+          type="button"
+          variant="outline"
         >
+          <PanelLeft />
+        </Button>
+      </Hinted>
+      <DropdownMenu onOpenChange={setPickerOpen} open={pickerOpen}>
+        <DropdownMenuTrigger asChild>
           <Button
-            aria-expanded={isSidebarOpen}
-            aria-label="Toggle changed files"
-            onClick={toggleFileTree}
+            className={
+              isNarrow ?
+                "min-w-0 flex-1 justify-between"
+              : "w-60 justify-between"
+            }
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              <AppWindow className="shrink-0 text-muted-foreground" />
+              <span className="truncate">{worktreeName(params.path)}</span>
+              {tree && (
+                <span className="truncate text-xs text-muted-foreground">
+                  {tree.branch ?? "Detached"}
+                </span>
+              )}
+            </span>
+            <ChevronDown />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-72">
+          <DropdownMenuLabel>Worktrees</DropdownMenuLabel>
+          {worktrees.map((worktree) => (
+            <DropdownMenuItem
+              className={cn(worktree.path === params.path && "bg-muted")}
+              key={worktree.path}
+              onSelect={() => selectWorktree(worktree)}
+            >
+              <AppWindow />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate">{worktreeName(worktree.path)}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {worktreeDetail(worktree)}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {pending && (
+        <span className="truncate text-xs text-muted-foreground">
+          {`Currently ${PENDING_OPERATION_LABELS[pending]}`}
+        </span>
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        {!isNarrow && (
+          <ButtonGroup>
+            <Hinted hint="Show both sides">
+              <Button
+                aria-label="Split layout"
+                aria-pressed={isSplit}
+                onClick={() => setPreferredMode("split")}
+                size="icon-sm"
+                type="button"
+                variant="outline"
+              >
+                <Columns2 />
+              </Button>
+            </Hinted>
+            <Hinted hint="Show one column">
+              <Button
+                aria-label="Unified layout"
+                aria-pressed={!isSplit}
+                onClick={() => setPreferredMode("unified")}
+                size="icon-sm"
+                type="button"
+                variant="outline"
+              >
+                <Rows3 />
+              </Button>
+            </Hinted>
+          </ButtonGroup>
+        )}
+        <DropdownMenu>
+          <Tooltip>
+            <DropdownMenuTrigger asChild>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="View options"
+                  size={isNarrow ? "icon-sm" : "sm"}
+                  type="button"
+                  variant="outline"
+                >
+                  <SlidersHorizontal />
+                  {!isNarrow && "View"}
+                </Button>
+              </TooltipTrigger>
+            </DropdownMenuTrigger>
+            <TooltipContent>Choose how the diff is laid out</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end">
+            {isNarrow && (
+              <>
+                <DropdownMenuLabel>Layout</DropdownMenuLabel>
+                <DropdownMenuCheckboxItem
+                  checked={isSplit}
+                  onCheckedChange={() => setPreferredMode("split")}
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  <Columns2 />
+                  Split
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={!isSplit}
+                  onCheckedChange={() => setPreferredMode("unified")}
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  <Rows3 />
+                  Unified
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuCheckboxItem
+              checked={wrap}
+              onCheckedChange={(checked) => setPreferredWrap(checked === true)}
+              onSelect={(event) => event.preventDefault()}
+            >
+              Wrap long lines
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              disabled={files.length === 0}
+              onSelect={() => collapseAll(true)}
+            >
+              <ChevronsDownUp />
+              Collapse all files
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={files.length === 0}
+              onSelect={() => collapseAll(false)}
+            >
+              <ChevronsUpDown />
+              Expand all files
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Hinted hint="Reread the working tree">
+          <Button
+            aria-label="Refresh the working tree"
+            onClick={() => setVersion((current) => current + 1)}
             size="icon-sm"
             type="button"
             variant="outline"
           >
-            <PanelLeft />
+            <RefreshCw />
           </Button>
         </Hinted>
-        <DropdownMenu onOpenChange={setPickerOpen} open={pickerOpen}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              className={
-                isNarrow ?
-                  "min-w-0 flex-1 justify-between"
-                : "w-60 justify-between"
-              }
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <span className="flex min-w-0 items-center gap-1.5">
-                <AppWindow className="shrink-0 text-muted-foreground" />
-                <span className="truncate">{worktreeName(params.path)}</span>
-                {tree && (
-                  <span className="truncate text-xs text-muted-foreground">
-                    {tree.branch ?? "Detached"}
-                  </span>
-                )}
-              </span>
-              <ChevronDown />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuLabel>Worktrees</DropdownMenuLabel>
-            {worktrees.map((worktree) => (
-              <DropdownMenuItem
-                className={cn(worktree.path === params.path && "bg-muted")}
-                key={worktree.path}
-                onSelect={() => selectWorktree(worktree)}
-              >
-                <AppWindow />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate">
-                    {worktreeName(worktree.path)}
-                  </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {worktreeDetail(worktree)}
-                  </span>
-                </span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {pending && (
-          <span className="truncate text-xs text-muted-foreground">
-            {`Currently ${PENDING_OPERATION_LABELS[pending]}`}
-          </span>
-        )}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          {!isNarrow && (
-            <ButtonGroup>
-              <Hinted hint="Show both sides">
-                <Button
-                  aria-label="Split layout"
-                  aria-pressed={isSplit}
-                  onClick={() => setPreferredMode("split")}
-                  size="icon-sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <Columns2 />
-                </Button>
-              </Hinted>
-              <Hinted hint="Show one column">
-                <Button
-                  aria-label="Unified layout"
-                  aria-pressed={!isSplit}
-                  onClick={() => setPreferredMode("unified")}
-                  size="icon-sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <Rows3 />
-                </Button>
-              </Hinted>
-            </ButtonGroup>
+      </div>
+    </div>
+  )
+
+  const narrowContent = (
+    <div className="diff-content">
+      {isSidebarOpen && (
+        <div
+          className="diff-drawer-backdrop"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+      {isSidebarOpen && <div className="diff-drawer">{sidebar}</div>}
+      {diffScroll}
+    </div>
+  )
+
+  return (
+    <section className="diff-panel" ref={setPanel}>
+      {isDrawerLayout ?
+        <>
+          {toolbar}
+          {narrowContent}
+        </>
+      : <ResizablePanelGroup orientation="horizontal">
+          {isSidebarOpen && (
+            <>
+              <ResizablePanel defaultSize={280} maxSize={480} minSize={200}>
+                {sidebar}
+              </ResizablePanel>
+              <ResizableHandle />
+            </>
           )}
-          <DropdownMenu>
-            <Tooltip>
-              <DropdownMenuTrigger asChild>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label="View options"
-                    size={isNarrow ? "icon-sm" : "sm"}
-                    type="button"
-                    variant="outline"
-                  >
-                    <SlidersHorizontal />
-                    {!isNarrow && "View"}
-                  </Button>
-                </TooltipTrigger>
-              </DropdownMenuTrigger>
-              <TooltipContent>Choose how the diff is laid out</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end">
-              {isNarrow && (
-                <>
-                  <DropdownMenuLabel>Layout</DropdownMenuLabel>
-                  <DropdownMenuCheckboxItem
-                    checked={isSplit}
-                    onCheckedChange={() => setPreferredMode("split")}
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <Columns2 />
-                    Split
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={!isSplit}
-                    onCheckedChange={() => setPreferredMode("unified")}
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <Rows3 />
-                    Unified
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                </>
-              )}
-              <DropdownMenuCheckboxItem
-                checked={wrap}
-                onCheckedChange={(checked) =>
-                  setPreferredWrap(checked === true)
-                }
-                onSelect={(event) => event.preventDefault()}
-              >
-                Wrap long lines
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={files.length === 0}
-                onSelect={() => collapseAll(true)}
-              >
-                <ChevronsDownUp />
-                Collapse all files
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={files.length === 0}
-                onSelect={() => collapseAll(false)}
-              >
-                <ChevronsUpDown />
-                Expand all files
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Hinted hint="Reread the working tree">
-            <Button
-              aria-label="Refresh the working tree"
-              onClick={() => setVersion((current) => current + 1)}
-              size="icon-sm"
-              type="button"
-              variant="outline"
-            >
-              <RefreshCw />
-            </Button>
-          </Hinted>
-        </div>
-      </div>
-      <div className="diff-content">
-        {isNarrow ?
-          <>
-            {isSidebarOpen && (
-              <div
-                className="diff-drawer-backdrop"
-                onClick={() => setIsSidebarOpen(false)}
-              />
-            )}
-            {isSidebarOpen && <div className="diff-drawer">{sidebar}</div>}
-            {diffScroll}
-          </>
-        : <ResizablePanelGroup orientation="horizontal">
-            {isSidebarOpen && (
-              <>
-                <ResizablePanel defaultSize="26%" maxSize="45%" minSize="18%">
-                  {sidebar}
-                </ResizablePanel>
-                <ResizableHandle />
-              </>
-            )}
-            <ResizablePanel minSize="40%">{diffScroll}</ResizablePanel>
-          </ResizablePanelGroup>
-        }
-      </div>
+          <ResizablePanel minSize="40%">
+            <div className="diff-main">
+              {toolbar}
+              {diffScroll}
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      }
     </section>
   )
 }
