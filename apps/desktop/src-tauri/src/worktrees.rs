@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::{fs, path::Path, path::PathBuf};
+use std::{collections::HashMap, fs, path::Path, path::PathBuf};
 use crate::projects::parse_worktree_records;
 use crate::git::{
     git_output, git_output_allow_empty, primary_reference, resolve_commit, worktree_path,
@@ -103,18 +103,23 @@ fn rebasing_branch(worktree: &str) -> Option<String> {
 }
 
 // A worktree that is mid-rebase reports a detached HEAD, but it still owns the branch it is rebasing.
-pub(crate) fn worktree_for_branch(repo_path: &str, branch: &str) -> Result<Option<String>, String> {
+pub(crate) fn worktree_paths_by_branch(repo_path: &str) -> Result<HashMap<String, String>, String> {
     let output = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
     Ok(parse_worktree_records(&output)
         .into_iter()
-        .find(|worktree| {
+        .filter(|worktree| !worktree.is_prunable)
+        .filter_map(|worktree| {
             if worktree.is_detached {
-                rebasing_branch(&worktree.path).as_deref() == Some(branch)
+                rebasing_branch(&worktree.path).map(|branch| (branch, worktree.path))
             } else {
-                worktree.branch == branch
+                Some((worktree.branch, worktree.path))
             }
         })
-        .map(|worktree| worktree.path))
+        .collect())
+}
+
+pub(crate) fn worktree_for_branch(repo_path: &str, branch: &str) -> Result<Option<String>, String> {
+    Ok(worktree_paths_by_branch(repo_path)?.remove(branch))
 }
 
 pub(crate) fn pending_operation(worktree: &str) -> Option<PendingOperation> {

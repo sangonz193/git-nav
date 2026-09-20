@@ -47,6 +47,7 @@ import {
 } from "react"
 
 import { BranchCleanupDialog } from "./branch-cleanup-dialog"
+import { BranchFastForwardDialog } from "./branch-fast-forward-dialog"
 import { drawCommitGraph } from "./commit-graph-canvas"
 import {
   ancestryPath,
@@ -112,6 +113,7 @@ import {
   type ChipMenuContext,
 } from "./row-chips"
 import { useBranchCleanup } from "./use-branch-cleanup"
+import { useBranchFastForward } from "./use-branch-fast-forward"
 import { useGraphData } from "./use-graph-data"
 import { useGraphSearch } from "./use-graph-search"
 import { useGraphSelection } from "./use-graph-selection"
@@ -557,6 +559,13 @@ function CommitGraphPanelContent({
     graphVersion,
     onError: setError,
     refreshGraph,
+    repoPath: params.path,
+  })
+  const fastForward = useBranchFastForward({
+    cleanOptions,
+    graphVersion,
+    onCompleted: onOperationCompleted,
+    onError: setError,
     repoPath: params.path,
   })
 
@@ -1067,6 +1076,7 @@ function CommitGraphPanelContent({
         cleanup={cleanup}
         collapseUnmarked={collapseUnmarked}
         config={config}
+        fastForward={fastForward}
         fetch={() => fetchMutation.mutate()}
         filters={filters}
         graphOffset={graphOffset}
@@ -1414,6 +1424,7 @@ function CommitGraphPanelContent({
         cleanup={cleanup}
         updateConfig={updateConfig}
       />
+      <BranchFastForwardDialog fastForward={fastForward} />
       {request && (
         <OperationDialog
           onClose={() => setRequest(null)}

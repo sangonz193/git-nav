@@ -30,16 +30,16 @@ pub(crate) enum CleanupReason {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CleanupCandidate {
-    branch: String,
+    pub(crate) branch: String,
     reasons: Vec<CleanupReason>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CleanupOptions {
-    delete_merged_pull_request_branches: bool,
-    delete_merged_branches: bool,
-    delete_squash_merged_branches: bool,
+    pub(crate) delete_merged_pull_request_branches: bool,
+    pub(crate) delete_merged_branches: bool,
+    pub(crate) delete_squash_merged_branches: bool,
 }
 
 pub(crate) struct SquashCandidate {
@@ -600,7 +600,7 @@ fn squash_merged_branch_candidates(repo_path: &str) -> Result<Vec<String>, Strin
         .collect())
 }
 
-fn cleanup_candidates(
+pub(crate) fn cleanup_candidates(
     repo_path: &str,
     options: &CleanupOptions,
     database_path: Option<PathBuf>,
@@ -638,7 +638,7 @@ fn cleanup_candidates(
     Ok(candidates)
 }
 
-fn cleanup_database_path(options: &CleanupOptions) -> Result<Option<PathBuf>, String> {
+pub(crate) fn cleanup_database_path(options: &CleanupOptions) -> Result<Option<PathBuf>, String> {
     options
         .delete_merged_pull_request_branches
         .then(pull_request_database_path)

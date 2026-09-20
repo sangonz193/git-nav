@@ -32,6 +32,7 @@ import {
   Archive,
   Broom,
   ChevronDown,
+  FastForward,
   ListFilter,
   LoaderCircle,
   RefreshCw,
@@ -66,6 +67,7 @@ import {
   type ChipMenuContext,
 } from "./row-chips"
 import type { useBranchCleanup } from "./use-branch-cleanup"
+import type { useBranchFastForward } from "./use-branch-fast-forward"
 import { BROWSER_GRAPH_WINDOW_SIZE } from "./use-graph-data"
 import type { useGraphSearch } from "./use-graph-search"
 
@@ -74,6 +76,7 @@ export function GraphToolbar({
   collapseUnmarked,
   config,
   hasRevealedRuns,
+  fastForward,
   fetch,
   filters,
   graphOffset,
@@ -95,6 +98,7 @@ export function GraphToolbar({
   collapseUnmarked: boolean
   config: ViewConfig
   hasRevealedRuns: boolean
+  fastForward: ReturnType<typeof useBranchFastForward>
   fetch: () => void
   filters: BranchFilters
   graphOffset: number
@@ -284,6 +288,29 @@ export function GraphToolbar({
             : <Broom />}
             {cleanup.candidateCount > 0 && (
               <span className="tabular-nums">{cleanup.candidateCount}</span>
+            )}
+          </Button>
+        </Hinted>
+        <Hinted
+          hint={
+            fastForward.candidateCount > 0 ?
+              `${fastForward.candidateCount} branch${fastForward.candidateCount === 1 ? "" : "es"} can be fast-forwarded`
+            : "Fast-forward branches to the default branch"
+          }
+        >
+          <Button
+            aria-label="Fast-forward branches to the default branch"
+            disabled={isFetching || fastForward.isPending}
+            onClick={() => fastForward.setIsConfirmationOpen(true)}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {fastForward.isPending ?
+              <LoaderCircle className="animate-spin" />
+            : <FastForward />}
+            {fastForward.candidateCount > 0 && (
+              <span className="tabular-nums">{fastForward.candidateCount}</span>
             )}
           </Button>
         </Hinted>

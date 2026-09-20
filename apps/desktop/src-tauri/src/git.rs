@@ -257,7 +257,7 @@ pub(crate) fn ref_shas(repo_path: &str) -> Result<HashMap<String, String>, Strin
     .map(|output| parse_ref_shas(&output))
 }
 
-fn changed_refs(before: &HashMap<String, String>, after: &HashMap<String, String>) -> Vec<RefUpdate> {
+pub(crate) fn changed_refs(before: &HashMap<String, String>, after: &HashMap<String, String>) -> Vec<RefUpdate> {
     let mut updates: Vec<_> = before
         .keys()
         .chain(after.keys())
