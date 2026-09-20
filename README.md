@@ -39,7 +39,10 @@ updates itself from signed releases.
   manager.
 
 Pull request state reads through the [`gh` CLI](https://cli.github.com), so it uses the GitHub login
-you already have. Without it, everything else still works.
+you already have. Without it, everything else still works. Remotes are fetched and GitHub is read
+once per repository while a window shows it, however many worktrees are open. Automatic fetch uses
+noninteractive authentication; HTTPS credential helpers and custom SSH transports are used only
+by a manual Fetch.
 
 ## Guides
 

@@ -45,7 +45,7 @@ export function findSelectedRef(
     worktreesByHead,
   }: {
     branchSync: Map<string, BranchSync>
-    pullRequests: Map<string, BranchPullRequest>
+    pullRequests: Map<string, BranchPullRequest[]>
     remotes: string[] | undefined
     worktreesByHead: Map<string, RowWorktree[]>
   },
@@ -82,7 +82,7 @@ export function useGraphSelection({
   isGraphWindowLoading: boolean
   persist: (selectedCommitHashes: string[]) => void
   persistedHashes: string[] | undefined
-  pullRequests: Map<string, BranchPullRequest>
+  pullRequests: Map<string, BranchPullRequest[]>
   remotes: string[] | undefined
   worktreesByHead: Map<string, RowWorktree[]>
 }) {

@@ -21,6 +21,7 @@ mod server;
 mod sharing;
 mod stash;
 mod storage;
+mod sync;
 mod window;
 mod working_tree;
 mod worktrees;
@@ -84,8 +85,10 @@ commands![
     worktrees::branch_sync,
     worktrees::worktree_status,
     cleanup::inferred_squash_merge_edges,
-    pull_requests::fetch_and_sync_pull_requests,
     pull_requests::branch_pull_requests,
+    sync::watch_repository,
+    sync::unwatch_repository,
+    sync::refresh_repository,
     cleanup::squashed_branch_candidates,
     cleanup::preview_cleanup_candidates,
     cleanup::delete_squashed_branches,
@@ -266,6 +269,7 @@ pub fn run() {
         .setup(move |app| {
             #[cfg(unix)]
             warm_effective_path();
+            sync::attach(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

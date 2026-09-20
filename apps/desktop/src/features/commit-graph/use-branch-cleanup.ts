@@ -21,12 +21,14 @@ export function useBranchCleanup({
   cleanOptions,
   graphVersion,
   onError,
+  pullRequestVersion,
   refreshGraph,
   repoPath,
 }: {
   cleanOptions: CleanOptions
   graphVersion: number
   onError: (message: string | null) => void
+  pullRequestVersion: number
   refreshGraph: () => void
   repoPath: string
 }) {
@@ -90,7 +92,7 @@ export function useBranchCleanup({
   // re-read when the repository changes rather than on a timer of their own.
   useEffect(() => {
     previewCleanCandidates(cleanOptions)
-  }, [cleanOptions, graphVersion, previewCleanCandidates])
+  }, [cleanOptions, graphVersion, previewCleanCandidates, pullRequestVersion])
   return {
     candidateCount: cleanPreview?.length ?? 0,
     clean: () => cleanMutation.mutate(),

@@ -476,7 +476,6 @@ function RefBody({
   tipCommit: Commit | null
 }) {
   const { ref } = selection
-  const pullRequest = ref.pullRequest
   const reference = refName(ref)
   const divergence = divergenceTargets(ref, menus.repository?.defaultBranch)
   const tagDetails = useQuery({
@@ -535,18 +534,18 @@ function RefBody({
             <span className="truncate">{syncDescription(ref)}</span>
           </Field>
         )}
-        {pullRequest && (
-          <Field label="Pull request">
+        {ref.pullRequests.map((pullRequest) => (
+          <Field key={pullRequest.url} label="Pull request">
             <button
               className="commit-graph-details-link truncate"
               onClick={() => menus.openPullRequest(pullRequest.url)}
-              title={pullRequestDescription(ref) ?? undefined}
+              title={pullRequestDescription(pullRequest)}
               type="button"
             >
-              {`#${pullRequest.number} ${pullRequest.title}`}
+              {`${ref.pullRequests.length > 1 ? pullRequest.repository : ""}#${pullRequest.number} ${pullRequest.title}`}
             </button>
           </Field>
-        )}
+        ))}
         {ref.worktrees.map((worktree) => (
           <Field key={worktree.path} label="Worktree">
             <span className="commit-graph-details-worktree">

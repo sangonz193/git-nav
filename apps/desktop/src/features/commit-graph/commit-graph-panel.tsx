@@ -249,6 +249,7 @@ function CommitGraphPanelContent({
     graphVersion,
     hasOlderCommits,
     isGraphWindowLoading,
+    pullRequestVersion,
     pullRequests,
     refreshGraph,
     refreshWorktreeStatus,
@@ -259,6 +260,7 @@ function CommitGraphPanelContent({
     squashMergeInferences,
     stashes,
     stashesByBase,
+    sync,
     worktreesByHead,
   } = useGraphData({
     onBeforeReload: captureScrollAnchor,
@@ -508,10 +510,16 @@ function CommitGraphPanelContent({
     unpushed,
   ])
   const fetchMutation = useMutation({
-    mutationFn: () =>
-      invoke("fetch_and_sync_pull_requests", { repoPath: params.path }),
+    mutationFn: () => sync.refresh("manual"),
     onMutate: () => setError(null),
-    onSuccess: () => refreshGraph(),
+    onSuccess: (status) => {
+      refreshGraph()
+      setError(
+        [status.fetch.error, status.pullRequests.error]
+          .filter(Boolean)
+          .join("; ") || null,
+      )
+    },
     onError: (message) => setError(String(message)),
   })
   const { mutate: mutateWorktree } = useMutation({
@@ -558,6 +566,7 @@ function CommitGraphPanelContent({
     cleanOptions,
     graphVersion,
     onError: setError,
+    pullRequestVersion,
     refreshGraph,
     repoPath: params.path,
   })

@@ -15,6 +15,7 @@ import {
   GRAPH_CANVAS_OVERSCAN,
   graphCanvasHeight,
   graphCanvasTop,
+  indexPullRequests,
   isCurrentCheckout,
   laneColor,
   parentEdgeColor,
@@ -204,7 +205,7 @@ describe("displayRefs", () => {
         label: "main · origin",
         checkedOut: false,
         kind: "branch",
-        pullRequest: null,
+        pullRequests: [],
         remote: "origin",
         sync: null,
         worktrees: [],
@@ -234,7 +235,7 @@ describe("displayRefs", () => {
         label: "feature",
         checkedOut: true,
         kind: "branch",
-        pullRequest: null,
+        pullRequests: [],
         remote: null,
         sync: null,
         worktrees: [],
@@ -249,7 +250,7 @@ describe("displayRefs", () => {
         label: "origin/main",
         checkedOut: true,
         kind: "remote",
-        pullRequest: null,
+        pullRequests: [],
         remote: "origin",
         sync: null,
         worktrees: [],
@@ -264,7 +265,7 @@ describe("displayRefs", () => {
         label: "main",
         checkedOut: false,
         kind: "branch",
-        pullRequest: null,
+        pullRequests: [],
         remote: null,
         sync: null,
         worktrees: [],
@@ -274,7 +275,7 @@ describe("displayRefs", () => {
         label: "v1.0.0",
         checkedOut: false,
         kind: "tag",
-        pullRequest: null,
+        pullRequests: [],
         remote: null,
         sync: null,
         worktrees: [],
@@ -315,17 +316,23 @@ describe("displayRefs with other remotes", () => {
   })
 
   test("reads a pull request only for a ref on the remote they were raised on", () => {
-    const pullRequests = new Map<string, BranchPullRequest>([
-      [
-        "main",
-        { branch: "main", number: 1, state: "open", title: "", url: "" },
-      ],
+    const pullRequests = indexPullRequests([
+      {
+        branch: "main",
+        remote: "origin",
+        host: "github.com",
+        repository: "owner/repo",
+        number: 1,
+        state: "open",
+        title: "",
+        url: "",
+      },
     ])
     expect(
       displayRefs(["origin/main", "upstream/main"], {
         pullRequests,
         remotes,
-      }).map((ref) => [ref.label, ref.pullRequest?.number ?? null]),
+      }).map((ref) => [ref.label, ref.pullRequests.at(0)?.number ?? null]),
     ).toEqual([
       ["origin/main", 1],
       ["upstream/main", null],
@@ -373,14 +380,17 @@ describe("pairing a branch with its upstream", () => {
     expect(refs[0].label).toBe("main · upstream")
   })
 
-  const pullRequest = (
-    branch: string,
-    number: number,
-  ): [string, BranchPullRequest] => [
+  const pullRequest = (branch: string, number: number) => ({
     branch,
-    { branch, number, state: "open", title: "", url: "" },
-  ]
-  const pullRequests = new Map([
+    remote: "origin",
+    host: "github.com",
+    repository: "owner/repo",
+    number,
+    state: "open" as const,
+    title: "",
+    url: "",
+  })
+  const pullRequests = indexPullRequests([
     pullRequest("main", 1),
     pullRequest("trunk", 2),
   ])
@@ -392,7 +402,7 @@ describe("pairing a branch with its upstream", () => {
       remotes,
     })
     expect(ref.label).toBe("main")
-    expect(ref.pullRequest?.number).toBe(2)
+    expect(ref.pullRequests[0]?.number).toBe(2)
   })
 
   test("does not attach another remote's pull request of the same name", () => {
@@ -402,7 +412,7 @@ describe("pairing a branch with its upstream", () => {
       remotes,
     })
     expect(
-      refs.map((ref) => [ref.label, ref.pullRequest?.number ?? null]),
+      refs.map((ref) => [ref.label, ref.pullRequests.at(0)?.number ?? null]),
     ).toEqual([["main · upstream", null]])
   })
 
@@ -413,7 +423,7 @@ describe("pairing a branch with its upstream", () => {
       remotes,
     })
     expect(
-      refs.map((ref) => [ref.label, ref.pullRequest?.number ?? null]),
+      refs.map((ref) => [ref.label, ref.pullRequests.at(0)?.number ?? null]),
     ).toEqual([
       ["main", null],
       ["origin/main", 1],
@@ -426,7 +436,7 @@ describe("pairing a branch with its upstream", () => {
       pullRequests,
       remotes,
     })
-    expect(ref.pullRequest?.number).toBe(1)
+    expect(ref.pullRequests[0]?.number).toBe(1)
   })
 })
 
@@ -922,6 +932,9 @@ describe("branch pull requests", () => {
     overrides: Partial<BranchPullRequest> = {},
   ): BranchPullRequest => ({
     branch: "feature",
+    remote: "origin",
+    host: "github.com",
+    repository: "octocat/hello-world",
     number: 12,
     state: "open",
     title: "Add the thing",
@@ -929,14 +942,16 @@ describe("branch pull requests", () => {
     ...overrides,
   })
   const pullRequests = (...entries: BranchPullRequest[]) =>
-    new Map(entries.map((entry) => [entry.branch, entry]))
+    indexPullRequests(entries)
 
   test("marks the branch a pull request was raised from", () => {
     const refs = displayRefs(["feature", "origin/feature"], {
       pullRequests: pullRequests(pullRequest()),
     })
     expect(pullRequestLabel(refs[0])).toBe("#12")
-    expect(pullRequestDescription(refs[0])).toBe("#12 Open · Add the thing")
+    expect(pullRequestDescription(refs[0].pullRequests[0])).toBe(
+      "github.com/octocat/hello-world#12 Open · Add the thing",
+    )
   })
 
   test("marks a branch that only exists on a remote", () => {
@@ -944,7 +959,9 @@ describe("branch pull requests", () => {
       pullRequests: pullRequests(pullRequest({ state: "draft" })),
     })
     expect(pullRequestLabel(refs[0])).toBe("#12")
-    expect(pullRequestDescription(refs[0])).toBe("#12 Draft · Add the thing")
+    expect(pullRequestDescription(refs[0].pullRequests[0])).toBe(
+      "github.com/octocat/hello-world#12 Draft · Add the thing",
+    )
   })
 
   test("marks a branch through the differently named upstream it consumed", () => {
@@ -974,12 +991,96 @@ describe("branch pull requests", () => {
     expect(refs.map(pullRequestLabel)).toEqual([null, null])
   })
 
+  test("keeps same-named branches on different remotes separate", () => {
+    const origin = pullRequest()
+    const upstream = pullRequest({
+      remote: "upstream",
+      repository: "upstream/hello-world",
+      number: 42,
+      url: "https://github.com/upstream/hello-world/pull/42",
+    })
+    const refs = displayRefs(["origin/feature", "upstream/feature"], {
+      pullRequests: pullRequests(origin, upstream),
+      remotes: ["origin", "upstream"],
+    })
+    expect(refs.map((ref) => ref.pullRequests)).toEqual([[origin], [upstream]])
+  })
+
+  test("keeps every PR destination attached to its actual head remote", () => {
+    const upstream = pullRequest({
+      remote: "fork",
+      repository: "upstream/hello-world",
+    })
+    const fork = pullRequest({ remote: "fork" })
+    const [ref] = displayRefs(["local"], {
+      branchSync: new Map([
+        [
+          "local",
+          {
+            branch: "local",
+            upstream: "fork/feature",
+            ahead: 1,
+            behind: 0,
+            isGone: false,
+          },
+        ],
+      ]),
+      pullRequests: pullRequests(upstream, fork),
+      remotes: ["fork", "upstream"],
+    })
+    expect(ref.pullRequests).toEqual([upstream, fork])
+    expect(ref.pullRequests.map(pullRequestDescription)).toEqual([
+      "github.com/upstream/hello-world#12 Open · Add the thing",
+      "github.com/octocat/hello-world#12 Open · Add the thing",
+    ])
+  })
+
+  test("does not guess a head remote for an ambiguous untracked branch", () => {
+    const [ref] = displayRefs(["feature"], {
+      pullRequests: pullRequests(
+        pullRequest(),
+        pullRequest({ remote: "fork" }),
+      ),
+      remotes: ["origin", "fork"],
+    })
+    expect(ref.pullRequests).toEqual([])
+  })
+
+  test("preserves PRs for aliases of the same head remote", () => {
+    const origin = pullRequest()
+    const alias = pullRequest({ remote: "fork" })
+    const refs = displayRefs(["origin/feature", "fork/feature"], {
+      pullRequests: pullRequests(origin, alias),
+      remotes: ["origin", "fork"],
+    })
+    expect(refs.map((ref) => ref.pullRequests)).toEqual([[origin], [alias]])
+  })
+
   test("counts the number towards the width a chip needs", () => {
     const [marked] = rowChips(
       displayRefs(["feature"], { pullRequests: pullRequests(pullRequest()) }),
     )
     const [plain] = rowChips(displayRefs(["feature"]))
     expect(chipWidth(marked, 460)).toBeGreaterThan(chipWidth(plain, 460))
+  })
+
+  test("counts each PR badge towards the width a chip needs", () => {
+    const first = pullRequest()
+    const second = pullRequest({
+      repository: "upstream/hello-world",
+      number: 42,
+    })
+    const [single] = rowChips(
+      displayRefs(["origin/feature"], {
+        pullRequests: pullRequests(first),
+      }),
+    )
+    const [multiple] = rowChips(
+      displayRefs(["origin/feature"], {
+        pullRequests: pullRequests(first, second),
+      }),
+    )
+    expect(chipWidth(multiple, 460)).toBeGreaterThan(chipWidth(single, 460))
   })
 })
 

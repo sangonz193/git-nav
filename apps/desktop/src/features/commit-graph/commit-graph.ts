@@ -61,6 +61,9 @@ export type PullRequestState = "open" | "draft" | "merged" | "closed"
 
 export type BranchPullRequest = {
   branch: string
+  remote: string
+  host: string
+  repository: string
   number: number
   state: PullRequestState
   title: string
@@ -81,7 +84,7 @@ export type DisplayRef = {
   label: string
   checkedOut: boolean
   kind: RefKind
-  pullRequest: BranchPullRequest | null
+  pullRequests: BranchPullRequest[]
   // For a remote ref, the remote it lives on. For a local branch, the remote it is paired with, if any.
   remote: string | null
   sync: BranchSync | null
@@ -99,7 +102,7 @@ export type RowChip =
 
 export type DisplayRefOptions = {
   branchSync?: Map<string, BranchSync>
-  pullRequests?: Map<string, BranchPullRequest>
+  pullRequests?: Map<string, BranchPullRequest[]>
   remotes?: string[]
   worktrees?: RowWorktree[]
 }
@@ -609,7 +612,8 @@ export function chipWidth(chip: RowChip, maxWidth: number) {
   const pullRequest = pullRequestLabel(chip.ref)
   const badge =
     pullRequest ?
-      CHIP_PULL_REQUEST_WIDTH + pullRequest.length * CHIP_MARKER_CHARACTER_WIDTH
+      CHIP_PULL_REQUEST_WIDTH * chip.ref.pullRequests.length +
+      pullRequest.length * CHIP_MARKER_CHARACTER_WIDTH
     : 0
   const sync =
     (refSyncLabel(chip.ref)?.length ?? 0) * CHIP_MARKER_CHARACTER_WIDTH
@@ -711,14 +715,23 @@ export const PULL_REQUEST_STATE_LABELS: Record<PullRequestState, string> = {
   closed: "Closed",
 }
 
-export function pullRequestLabel({ pullRequest }: DisplayRef) {
-  return pullRequest ? `#${pullRequest.number}` : null
+export function indexPullRequests(entries: BranchPullRequest[]) {
+  const indexed = new Map<string, BranchPullRequest[]>()
+  for (const entry of entries) {
+    const ref = `${entry.remote}/${entry.branch}`
+    const requests = indexed.get(ref) ?? []
+    requests.push(entry)
+    indexed.set(ref, requests)
+  }
+  return indexed
 }
 
-export function pullRequestDescription({ pullRequest }: DisplayRef) {
-  return pullRequest ?
-      `#${pullRequest.number} ${PULL_REQUEST_STATE_LABELS[pullRequest.state]} · ${pullRequest.title}`
-    : null
+export function pullRequestLabel({ pullRequests }: DisplayRef) {
+  return pullRequests.map((request) => `#${request.number}`).join(" ") || null
+}
+
+export function pullRequestDescription(pullRequest: BranchPullRequest) {
+  return `${pullRequest.host}/${pullRequest.repository}#${pullRequest.number} ${PULL_REQUEST_STATE_LABELS[pullRequest.state]} · ${pullRequest.title}`
 }
 
 export function refSyncLabel({ sync }: DisplayRef) {
@@ -757,35 +770,20 @@ export function syncDescription({ sync }: DisplayRef) {
     : `In sync with ${sync.upstream}`
 }
 
-// Pull requests are read from the repository behind the origin remote and keyed by the branch they were
-// raised from, so a ref on any other remote has none of them whatever it is called.
-const PULL_REQUEST_REMOTE = "origin"
-
-function pullRequestOf(
-  remote: string,
-  ref: string,
-  pullRequests: Map<string, BranchPullRequest> | undefined,
-) {
-  if (remote !== PULL_REQUEST_REMOTE) {
-    return null
-  }
-  return pullRequests?.get(ref.slice(remote.length + 1)) ?? null
-}
-
-// The upstream a branch tracks is the remote branch it was raised from, whether or not the two sit on the
-// same commit right now, so that is where its pull request is read from. A branch tracking nothing is taken
-// to be the remote branch of its own name.
-function branchPullRequest(
+function branchPullRequests(
   branch: string,
   upstream: string | null,
   remotes: string[],
-  pullRequests: Map<string, BranchPullRequest> | undefined,
+  pullRequests: Map<string, BranchPullRequest[]> | undefined,
 ) {
   if (!upstream) {
-    return pullRequests?.get(branch) ?? null
+    const matches = remotes
+      .map((remote) => pullRequests?.get(`${remote}/${branch}`))
+      .filter((requests) => requests !== undefined)
+    return matches.length === 1 ? matches[0] : []
   }
   const remote = remoteOf(upstream, remotes)
-  return remote ? pullRequestOf(remote, upstream, pullRequests) : null
+  return remote ? (pullRequests?.get(upstream) ?? []) : []
 }
 
 // Which remote a ref belongs to can only be read from the remotes the repository actually has, since a remote
@@ -852,7 +850,7 @@ export function displayRefs(
       label: tracking ? `${branch} · ${tracking.remote}` : branch,
       checkedOut: branch === checkedOut,
       kind: "branch",
-      pullRequest: branchPullRequest(
+      pullRequests: branchPullRequests(
         branch,
         sync?.upstream ?? tracking?.ref ?? null,
         remotes,
@@ -872,7 +870,7 @@ export function displayRefs(
         label: ref,
         checkedOut: ref === checkedOut,
         kind: remote ? "remote" : "branch",
-        pullRequest: remote ? pullRequestOf(remote, ref, pullRequests) : null,
+        pullRequests: remote ? (pullRequests?.get(ref) ?? []) : [],
         remote,
         sync: null,
         worktrees: [],
@@ -887,7 +885,7 @@ export function displayRefs(
         label: ref.slice("tag: ".length),
         checkedOut: false,
         kind: "tag",
-        pullRequest: null,
+        pullRequests: [],
         remote: null,
         sync: null,
         worktrees: [],
@@ -902,7 +900,7 @@ export function displayRefs(
       label: checkedOut,
       checkedOut: true,
       kind: "remote",
-      pullRequest: pullRequestOf(checkedOutRemote, checkedOut, pullRequests),
+      pullRequests: pullRequests?.get(checkedOut) ?? [],
       remote: checkedOutRemote,
       sync: null,
       worktrees: [],
