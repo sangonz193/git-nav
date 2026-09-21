@@ -1485,6 +1485,7 @@ mod tests {
         ])).unwrap();
         store_pull_requests(&mut connection, "github.com", "upstream/repo", &pulls, None).unwrap();
         store_pull_requests(&mut connection, "github.com", "fork/repo", &pulls[..1], None).unwrap();
+        connection.close().unwrap();
 
         let entries = pull_requests_by_branch(&repo_path, database_path).unwrap();
         let mut identities = entries.iter().map(|entry| (entry.remote.as_str(), entry.repository.as_str(), entry.branch.as_str(), entry.number)).collect::<Vec<_>>();
