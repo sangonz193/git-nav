@@ -3,7 +3,7 @@
 FROM fedora:44
 RUN dnf install -y \
       xorg-x11-server-Xvfb ImageMagick git \
-      mesa-dri-drivers mesa-libEGL mesa-libGL mesa-libgbm \
+      mesa-dri-drivers mesa-libEGL mesa-libGL mesa-libgbm libglvnd-gles \
       gtk3 libsoup3 gdk-pixbuf2 \
       libwayland-client libwayland-cursor libwayland-egl libwayland-server \
  && dnf clean all
