@@ -13,8 +13,11 @@ import { Button } from "@workspace/shadcn/components/button"
 import { ButtonGroup } from "@workspace/shadcn/components/button-group"
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/shadcn/components/dropdown-menu"
 import {
@@ -42,6 +45,7 @@ import {
 
 import {
   PULL_REQUEST_STATE_LABELS,
+  relativeDate,
   type PullRequestState,
   type StashEntry,
 } from "./commit-graph"
@@ -68,6 +72,7 @@ import {
 } from "./row-chips"
 import type { useBranchCleanup } from "./use-branch-cleanup"
 import type { useBranchFastForward } from "./use-branch-fast-forward"
+import type { SyncStatus } from "./repository-sync"
 import { BROWSER_GRAPH_WINDOW_SIZE } from "./use-graph-data"
 import type { useGraphSearch } from "./use-graph-search"
 
@@ -89,8 +94,10 @@ export function GraphToolbar({
   pullRequestCount,
   refreshGraph,
   search,
+  setAutoFetch,
   showGraphWindow,
   stashes,
+  syncStatus,
   updateConfig,
   updateFilters,
 }: {
@@ -111,8 +118,10 @@ export function GraphToolbar({
   pullRequestCount: number
   refreshGraph: () => void
   search: ReturnType<typeof useGraphSearch>
+  setAutoFetch: (enabled: boolean) => void
   showGraphWindow: (offset: number) => void
   stashes: StashEntry[]
+  syncStatus: SyncStatus | null
   updateConfig: (change: ViewConfigChange) => void
   updateFilters: (change: Partial<BranchFilters>) => void
 }) {
@@ -350,14 +359,49 @@ export function GraphToolbar({
             <DropdownMenuContent>
               <DropdownMenuItem disabled={isFetching} onSelect={() => fetch()}>
                 <RefreshCw />
-                Fetch from origin
+                Fetch remotes
               </DropdownMenuItem>
+              <DropdownMenuCheckboxItem
+                checked={syncStatus?.autoFetch ?? true}
+                disabled={syncStatus === null}
+                onCheckedChange={(checked) => setAutoFetch(checked === true)}
+                onSelect={(event) => event.preventDefault()}
+              >
+                Fetch automatically
+              </DropdownMenuCheckboxItem>
+              {syncStatus && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="font-normal text-muted-foreground">
+                    {describeSync(syncStatus)}
+                  </DropdownMenuLabel>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </ButtonGroup>
       </div>
     </div>
   )
+}
+
+function describeSync(status: SyncStatus) {
+  const lines = [
+    status.fetch.isRunning ? "Fetching…"
+    : status.fetch.succeededAt !== null ?
+      `Fetched ${relativeDate(new Date(status.fetch.succeededAt).toISOString())}`
+    : "Not fetched yet",
+  ]
+  for (const error of [status.fetch.error, status.pullRequests.error]) {
+    if (error && !lines.includes(error)) {
+      lines.push(error)
+    }
+  }
+  return lines.map((line, index) => (
+    <span className="block max-w-72 truncate" key={index}>
+      {line}
+    </span>
+  ))
 }
 
 function ViewPanel({

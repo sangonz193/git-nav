@@ -573,6 +573,7 @@ function CommitGraphPanelContent({
   const fastForward = useBranchFastForward({
     cleanOptions,
     graphVersion,
+    pullRequestVersion,
     onCompleted: onOperationCompleted,
     onError: setError,
     repoPath: params.path,
@@ -1099,8 +1100,10 @@ function CommitGraphPanelContent({
         pullRequestCount={pullRequests.size}
         refreshGraph={refreshGraph}
         search={search}
+        setAutoFetch={sync.setAutoFetch}
         showGraphWindow={showGraphWindow}
         stashes={stashes}
+        syncStatus={sync.status}
         updateConfig={updateConfig}
         updateFilters={updateFilters}
       />
