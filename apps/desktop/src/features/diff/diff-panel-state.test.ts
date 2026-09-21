@@ -71,6 +71,32 @@ describe("svgContent", () => {
 })
 
 describe("initialDiffLayout", () => {
+  test("uses the main pane for diff defaults while retaining a desktop sidebar", () => {
+    for (const [width, mainWidth] of [
+      [800, 519],
+      [700, 419],
+      [1000, 719],
+    ]) {
+      expect(initialDiffLayout(width, {}, mainWidth)).toEqual({
+        fileTreeOpen: true,
+        mode: "unified",
+        wrap: mainWidth < NARROW_DIFF_PANEL_WIDTH,
+      })
+    }
+    expect(initialDiffLayout(1200, {}, 919)).toEqual({
+      fileTreeOpen: true,
+      mode: "split",
+      wrap: false,
+    })
+    expect(
+      initialDiffLayout(1000, { mode: "split", wrap: false }, 519),
+    ).toEqual({
+      fileTreeOpen: true,
+      mode: "split",
+      wrap: false,
+    })
+  })
+
   test("uses explicit preferences without treating responsive state as one", () => {
     expect(
       initialDiffLayout(500, { fileTreeOpen: true, mode: "split" }),

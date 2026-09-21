@@ -1058,6 +1058,22 @@ button.commit-ref-selected:hover {
   position: relative;
 }
 
+.diff-main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.diff-main .diff-view-container {
+  flex: 1;
+}
+
+.diff-main .diff-toolbar {
+  flex: 0 0 34px;
+  padding-block: 2px;
+}
+
 .diff-drawer-backdrop {
   background: rgb(0 0 0 / 45%);
   inset: 0;

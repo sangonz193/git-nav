@@ -151,16 +151,17 @@ export type DiffLayoutPreferences = Pick<
 export function initialDiffLayout(
   width: number,
   preferences: DiffLayoutPreferences,
+  mainWidth = width,
 ) {
   return {
     fileTreeOpen:
       width >= NARROW_DIFF_PANEL_WIDTH && (preferences.fileTreeOpen ?? true),
     mode:
       preferences.mode ??
-      (width < WIDE_DIFF_PANEL_WIDTH ?
+      (mainWidth < WIDE_DIFF_PANEL_WIDTH ?
         ("unified" as const)
       : ("split" as const)),
-    wrap: preferences.wrap ?? width < NARROW_DIFF_PANEL_WIDTH,
+    wrap: preferences.wrap ?? mainWidth < NARROW_DIFF_PANEL_WIDTH,
   }
 }
 
