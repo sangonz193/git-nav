@@ -1,14 +1,14 @@
-use std::process::Command;
+use std::{io, io::Read, process::Command, process::Output, process::Stdio, thread, time::Duration, time::Instant};
 #[cfg(any(unix, test))]
 use std::{env, ffi::OsStr, ffi::OsString, path::Path};
-#[cfg(unix)]
-use std::thread;
 #[cfg(all(unix, not(test)))]
-use std::{os::unix::ffi::OsStringExt, process::Stdio, time::Duration, time::Instant};
+use std::os::unix::ffi::OsStringExt;
 #[cfg(any(unix, test))]
-use std::{io::ErrorKind, io::Read};
+use std::io::ErrorKind;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
 
@@ -206,6 +206,116 @@ pub(crate) fn warm_effective_path() {
     });
 }
 
+pub(crate) fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Option<Output>> {
+    let deadline = Instant::now() + timeout;
+    #[cfg(unix)]
+    command.process_group(0);
+    #[cfg(target_os = "windows")]
+    let job = {
+        use windows::{core::Owned, Win32::System::JobObjects::*};
+
+        let job = unsafe { Owned::new(CreateJobObjectW(None, None).map_err(io::Error::other)?) };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        unsafe {
+            SetInformationJobObject(
+                *job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                std::mem::size_of_val(&limits) as u32,
+            ).map_err(io::Error::other)?;
+        }
+        // Suspend before assignment so descendants cannot escape the job during startup.
+        command.creation_flags(CREATE_NO_WINDOW | windows::Win32::System::Threading::CREATE_SUSPENDED.0);
+        job
+    };
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    #[cfg(target_os = "windows")]
+    if let Err(error) = assign_and_resume_job_child(&child, *job) {
+        let _ = child.kill();
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+        return Err(error);
+    }
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let (stdout_sender, stdout_receiver) = std::sync::mpsc::sync_channel(1);
+    let (stderr_sender, stderr_receiver) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let result = stdout.read_to_end(&mut buffer).map(|_| buffer);
+        let _ = stdout_sender.send(result);
+    });
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let result = stderr.read_to_end(&mut buffer).map(|_| buffer);
+        let _ = stderr_sender.send(result);
+    });
+    let output = (|| {
+        let status = loop {
+            match child.try_wait()? {
+                Some(status) => break status,
+                None if Instant::now() >= deadline => return Ok(None),
+                None => thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        // Descendants can retain either pipe after the direct child exits.
+        let Ok(stdout) = stdout_receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
+            return Ok(None);
+        };
+        let Ok(stderr) = stderr_receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
+            return Ok(None);
+        };
+        Ok(Some(Output { status, stdout: stdout?, stderr: stderr? }))
+    })();
+    if !matches!(output, Ok(Some(_))) {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        }
+        let _ = child.kill();
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+    output
+}
+
+#[cfg(target_os = "windows")]
+fn assign_and_resume_job_child(child: &std::process::Child, job: windows::Win32::Foundation::HANDLE) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::{core::Owned, Win32::{Foundation::HANDLE, System::{
+        Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD},
+        JobObjects::AssignProcessToJobObject,
+        Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME},
+    }}};
+
+    unsafe {
+        AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())).map_err(io::Error::other)?;
+        let snapshot = Owned::new(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0).map_err(io::Error::other)?);
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        Thread32First(*snapshot, &mut entry).map_err(io::Error::other)?;
+        loop {
+            if entry.th32OwnerProcessID == child.id() {
+                let thread = Owned::new(OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID).map_err(io::Error::other)?);
+                if ResumeThread(*thread) == u32::MAX {
+                    return Err(io::Error::last_os_error());
+                }
+                return Ok(());
+            }
+            Thread32Next(*snapshot, &mut entry).map_err(io::Error::other)?;
+        }
+    }
+}
+
 pub(crate) fn external_command(program: &str) -> Command {
     let command = Command::new(program);
     #[cfg(any(unix, target_os = "windows"))]
@@ -270,6 +380,97 @@ fn apply_appimage_environment(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn timeout_terminates_windows_descendants_even_after_parent_exit() {
+        use windows::{core::Owned, Win32::{
+            Foundation::{ERROR_INVALID_PARAMETER, WAIT_OBJECT_0},
+            System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE},
+        }};
+
+        for mode in ["wait", "exit"] {
+            let pid_file = env::temp_dir().join(format!("git-nav-timeout-{mode}-{}.pid", std::process::id()));
+            let mut command = Command::new(env::current_exe().unwrap());
+            command.args(["--exact", "process::tests::windows_timeout_fixture", "--nocapture"])
+                .env("GITNAV_TIMEOUT_FIXTURE", mode)
+                .env("GITNAV_TIMEOUT_PID_FILE", &pid_file);
+            let started = Instant::now();
+
+            assert!(output_with_timeout(&mut command, Duration::from_secs(5)).unwrap().is_none());
+            assert!(started.elapsed() < Duration::from_secs(8));
+            let pid = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+            std::fs::remove_file(pid_file).unwrap();
+            unsafe {
+                match OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid) {
+                    Ok(handle) => {
+                        let process = Owned::new(handle);
+                        let status = WaitForSingleObject(*process, 2000);
+                        if status != WAIT_OBJECT_0 {
+                            let _ = TerminateProcess(*process, 1);
+                        }
+                        assert_eq!(status, WAIT_OBJECT_0, "descendant survived a timed-out {mode} parent");
+                    }
+                    Err(error) => assert_eq!(error.code(), ERROR_INVALID_PARAMETER.to_hresult()),
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_timeout_fixture() {
+        let Ok(mode) = env::var("GITNAV_TIMEOUT_FIXTURE") else {
+            return;
+        };
+        if mode == "descendant" {
+            thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        let mut child = Command::new(env::current_exe().unwrap())
+            .args(["--exact", "process::tests::windows_timeout_fixture", "--nocapture"])
+            .env("GITNAV_TIMEOUT_FIXTURE", "descendant")
+            .spawn().unwrap();
+        std::fs::write(env::var_os("GITNAV_TIMEOUT_PID_FILE").unwrap(), child.id().to_string()).unwrap();
+        if mode == "wait" {
+            child.wait().unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn timeout_bounds_a_command_with_descendants_holding_pipes() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5 & wait"]);
+        let started = Instant::now();
+
+        assert!(output_with_timeout(&mut command, Duration::from_millis(100)).unwrap().is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn timeout_bounds_pipe_reads_after_the_direct_child_exits() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5 & exit 0"]);
+        let started = Instant::now();
+
+        assert!(output_with_timeout(&mut command, Duration::from_millis(100)).unwrap().is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn reads_both_pipes_without_blocking_a_chatty_process() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "head -c 100000 /dev/zero; head -c 100000 /dev/zero >&2"]);
+
+        let output = output_with_timeout(&mut command, Duration::from_secs(5)).unwrap().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 100000);
+        assert_eq!(output.stderr.len(), 100000);
+    }
 
     fn joined_paths<const N: usize>(paths: [&str; N]) -> OsString {
         env::join_paths(paths).unwrap()
