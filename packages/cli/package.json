@@ -1,6 +1,6 @@
 {
   "name": "git-nav",
-  "version": "0.0.29",
+  "version": "0.0.30",
   "description": "A free, open-source Git GUI for macOS, Windows and Linux: commit graphs, diffs, worktrees, staging and branch cleanup.",
   "keywords": [
     "git",
@@ -34,12 +34,12 @@
     "node": ">=20"
   },
   "optionalDependencies": {
-    "@git-nav/darwin-arm64": "0.0.29",
-    "@git-nav/darwin-x64": "0.0.29",
-    "@git-nav/linux-arm64": "0.0.29",
-    "@git-nav/linux-x64": "0.0.29",
-    "@git-nav/win32-arm64": "0.0.29",
-    "@git-nav/win32-x64": "0.0.29"
+    "@git-nav/darwin-arm64": "0.0.30",
+    "@git-nav/darwin-x64": "0.0.30",
+    "@git-nav/linux-arm64": "0.0.30",
+    "@git-nav/linux-x64": "0.0.30",
+    "@git-nav/win32-arm64": "0.0.30",
+    "@git-nav/win32-x64": "0.0.30"
   },
   "scripts": {
     "build:package": "bun run --cwd ../../apps/desktop build:app && bun scripts/package-platform.ts",
