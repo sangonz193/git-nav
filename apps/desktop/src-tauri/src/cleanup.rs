@@ -7,8 +7,7 @@ use crate::git::{
     resolve_commit,
 };
 use crate::pull_requests::{
-    github_repository, pull_request_database, pull_request_database_path,
-    should_sync_pull_requests, sync_pull_requests,
+    GithubRepository, github_repositories, pull_request_database, pull_request_database_path,
 };
 
 #[derive(Serialize)]
@@ -458,24 +457,19 @@ fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
 fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(String, String)> {
     let mut edges: HashSet<_> = local_squash_merges(repo_path).into_iter().collect();
     // Pull requests still cover squashes whose conflict resolution changed the content on the way in.
-    let Some(remote) = git_output(repo_path, &["remote", "get-url", "origin"]) else {
+    let repositories = github_repositories(repo_path);
+    if repositories.is_empty() {
         return edges.into_iter().collect();
-    };
-    let Some((host, repository)) = github_repository(&remote) else {
-        return edges.into_iter().collect();
-    };
+    }
     let Ok(primary) = squash_search_reference(repo_path) else {
         return edges.into_iter().collect();
     };
     let Some(refs) = git_output(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]) else {
         return edges.into_iter().collect();
     };
-    let Ok(mut connection) = pull_request_database(database_path) else {
+    let Ok(connection) = pull_request_database(database_path) else {
         return edges.into_iter().collect();
     };
-    if should_sync_pull_requests(&connection, &host, &repository).unwrap_or(false) {
-        let _ = sync_pull_requests(&mut connection, &host, &repository);
-    }
     let ref_hashes: HashSet<_> = refs.lines().collect();
     let mut statement = match connection.prepare(
         "
@@ -487,17 +481,19 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
         Ok(statement) => statement,
         Err(_) => return edges.into_iter().collect(),
     };
-    let pull_requests = match statement.query_map(params![host, repository], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
-        Ok(pull_requests) => pull_requests,
-        Err(_) => return edges.into_iter().collect(),
-    };
-    for pull_request in pull_requests.flatten() {
-        let (source, target) = pull_request;
-        if ref_hashes.contains(source.as_str())
-            && !git_succeeds(repo_path, &["merge-base", "--is-ancestor", &source, &primary])
-            && git_succeeds(repo_path, &["merge-base", "--is-ancestor", &target, &primary])
-        {
-            edges.insert((source, target));
+    for GithubRepository { host, repository } in &repositories {
+        let pull_requests = match statement.query_map(params![host, repository], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+            Ok(pull_requests) => pull_requests,
+            Err(_) => continue,
+        };
+        for pull_request in pull_requests.flatten() {
+            let (source, target) = pull_request;
+            if ref_hashes.contains(source.as_str())
+                && !git_succeeds(repo_path, &["merge-base", "--is-ancestor", &source, &primary])
+                && git_succeeds(repo_path, &["merge-base", "--is-ancestor", &target, &primary])
+            {
+                edges.insert((source, target));
+            }
         }
     }
     edges.into_iter().collect()
@@ -515,13 +511,12 @@ fn checked_out_branches(repo_path: &str) -> Result<HashSet<String>, String> {
 }
 
 fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<Vec<String>, String> {
-    let remote = git_output(repo_path, &["remote", "get-url", "origin"]).ok_or_else(|| "Could not identify the origin remote.".to_string())?;
-    let (host, repository) = github_repository(&remote).ok_or_else(|| "Only GitHub remotes are supported.".to_string())?;
-    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
-    let mut connection = pull_request_database(database_path)?;
-    if should_sync_pull_requests(&connection, &host, &repository)? {
-        sync_pull_requests(&mut connection, &host, &repository)?;
+    let repositories = github_repositories(repo_path);
+    if repositories.is_empty() {
+        return Err("Only GitHub remotes are supported.".to_string());
     }
+    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
+    let connection = pull_request_database(database_path)?;
     let mut statement = connection
         .prepare(
             "
@@ -531,11 +526,15 @@ fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<V
             ",
         )
         .map_err(|error| error.to_string())?;
-    let merged_heads = statement
-        .query_map(params![host, repository], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .flatten()
-        .collect::<HashSet<_>>();
+    let mut merged_heads = HashSet::new();
+    for GithubRepository { host, repository } in &repositories {
+        merged_heads.extend(
+            statement
+                .query_map(params![host, repository], |row| row.get::<_, String>(0))
+                .map_err(|error| error.to_string())?
+                .flatten(),
+        );
+    }
     let primary = primary_reference(repo_path).ok().and_then(|reference| reference.strip_prefix("origin/").map(str::to_string).or(Some(reference)));
     let protected = ["main", "master"]
         .into_iter()

@@ -109,7 +109,7 @@ export function branchFiltersKey(filters: BranchFilters) {
 export function branchFilterMetadataKey(
   filters: BranchFilters,
   branchSync: Map<string, BranchSync>,
-  pullRequests: Map<string, BranchPullRequest>,
+  pullRequests: Map<string, BranchPullRequest[]>,
 ) {
   const readsSync = filters.upstream !== "any" || filters.pullRequest !== "any"
   return JSON.stringify([
@@ -122,7 +122,10 @@ export function branchFilterMetadataKey(
       []
     : [...pullRequests]
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([branch, pullRequest]) => [branch, pullRequest.state]),
+        .map(([ref, requests]) => [
+          ref,
+          requests.map((request) => request.state),
+        ]),
   ])
 }
 export const CHIP_KIND_LABELS: Record<ChipKind, string> = {
@@ -405,7 +408,7 @@ export type ChipContext = {
   branchSync: Map<string, BranchSync>
   chipKinds: Record<ChipKind, boolean>
   filters: BranchFilters
-  pullRequests: Map<string, BranchPullRequest>
+  pullRequests: Map<string, BranchPullRequest[]>
   remotes: string[] | undefined
   stashesByBase: Map<string, StashEntry[]>
   worktreesByHead: Map<string, RowWorktree[]>
@@ -446,10 +449,10 @@ function matchesPullRequest(ref: DisplayRef, filters: BranchFilters) {
     return true
   }
   if (filters.pullRequest === "none") {
-    return ref.pullRequest === null
+    return ref.pullRequests.length === 0
   }
-  return (
-    ref.pullRequest !== null && filters.pullRequestStates[ref.pullRequest.state]
+  return ref.pullRequests.some(
+    (request) => filters.pullRequestStates[request.state],
   )
 }
 

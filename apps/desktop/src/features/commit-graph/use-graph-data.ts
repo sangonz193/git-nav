@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import {
   commitFromTuple,
+  indexPullRequests,
   type BranchPullRequest,
   type BranchSync,
   type Commit,
@@ -17,8 +18,9 @@ import type {
   Project,
   Worktree as ProjectWorktree,
 } from "../repository/project"
+import type { SyncKind } from "./repository-sync"
+import { useRepositorySync } from "./use-repository-sync"
 
-const PULL_REQUEST_SYNC_INTERVAL = 60_000
 export const BROWSER_GRAPH_WINDOW_SIZE = 2_000
 const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const REPOSITORY_FOCUS_DEBOUNCE = 150
@@ -58,19 +60,34 @@ export function useGraphData({
     new Map(),
   )
   const [pullRequests, setPullRequests] = useState<
-    Map<string, BranchPullRequest>
+    Map<string, BranchPullRequest[]>
   >(new Map())
+  const [pullRequestVersion, setPullRequestVersion] = useState(0)
   const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
   const [repository, setRepository] = useState<RepositoryState | null>(null)
   const [stashes, setStashes] = useState<StashEntry[]>([])
   const fingerprint = useRef<string | null>(null)
   const fingerprintGeneration = useRef(0)
   const streamedRepoPath = useRef<string | null>(null)
+  const squashMergeInferenceGeneration = useRef(0)
   const squashMergeInferenceRequest = useRef<{
     graphVersion: number
     path: string
     request: Promise<SquashMergeInference[] | null>
   } | null>(null)
+  const refreshSquashMergeInferencesRef = useRef<(() => void) | null>(null)
+  // The backend syncs GitHub once per repository however many windows show it, and says when it has.
+  const sync = useRepositorySync({
+    repoPath,
+    onSynced: useCallback((kind: SyncKind) => {
+      if (kind === "pullRequests") {
+        setPullRequestVersion((version) => version + 1)
+        squashMergeInferenceGeneration.current += 1
+        squashMergeInferenceRequest.current = null
+        refreshSquashMergeInferencesRef.current?.()
+      }
+    }, []),
+  })
   const refreshGraph = useCallback(() => {
     onError(null)
     onBeforeReload()
@@ -176,7 +193,6 @@ export function useGraphData({
   useEffect(() => {
     let disposed = false
     let isReplaced = false
-    let inferenceInterval: number | null = null
     let inferenceTimeout: number | null = null
     // The reset belongs to the stream that replaces the window, so it lives where that stream starts. Only
     // another repository is cleared outright: a refresh keeps the graph on screen until its replacement's first
@@ -193,6 +209,7 @@ export function useGraphData({
         return
       }
       const current = squashMergeInferenceRequest.current
+      const generation = squashMergeInferenceGeneration.current
       const request =
         current?.graphVersion === graphVersion && current.path === repoPath ?
           current.request
@@ -210,22 +227,26 @@ export function useGraphData({
         }
       })
       return request.then((inferences) => {
-        if (!disposed && inferences !== null) {
+        if (
+          !disposed &&
+          generation === squashMergeInferenceGeneration.current &&
+          inferences !== null
+        ) {
           setSquashMergeInferences(inferences)
         }
       })
     }
     function scheduleSquashMergeInferences() {
-      if (inferenceTimeout !== null || inferenceInterval !== null) {
+      if (
+        inferenceTimeout !== null ||
+        refreshSquashMergeInferencesRef.current !== null
+      ) {
         return
       }
       inferenceTimeout = window.setTimeout(() => {
         inferenceTimeout = null
         refreshSquashMergeInferences()
-        inferenceInterval = window.setInterval(
-          refreshSquashMergeInferences,
-          PULL_REQUEST_SYNC_INTERVAL,
-        )
+        refreshSquashMergeInferencesRef.current = refreshSquashMergeInferences
       })
     }
     const refreshSquashMergeInferencesOnVisibility = () => {
@@ -298,9 +319,7 @@ export function useGraphData({
       if (inferenceTimeout !== null) {
         window.clearTimeout(inferenceTimeout)
       }
-      if (inferenceInterval !== null) {
-        window.clearInterval(inferenceInterval)
-      }
+      refreshSquashMergeInferencesRef.current = null
       document.removeEventListener(
         "visibilitychange",
         refreshSquashMergeInferencesOnVisibility,
@@ -390,31 +409,22 @@ export function useGraphData({
     }
   }, [repoPath, refreshWorktreeStatus])
 
-  // The backend answers from what it has already stored and refreshes from GitHub on its own interval, so a
-  // poll costs a read whether or not it lands on one of those refreshes.
+  // Answered from what the backend has stored, so a read is cheap and only worth repeating once a sync lands.
   useEffect(() => {
     let disposed = false
-    const refresh = () => {
-      invoke<BranchPullRequest[]>("branch_pull_requests", {
-        repoPath,
+    invoke<BranchPullRequest[]>("branch_pull_requests", {
+      repoPath,
+    })
+      .then((entries) => {
+        if (!disposed) {
+          setPullRequests(indexPullRequests(entries))
+        }
       })
-        .then((entries) => {
-          if (!disposed) {
-            setPullRequests(
-              new Map(entries.map((entry) => [entry.branch, entry])),
-            )
-          }
-        })
-        .catch(() => undefined)
-    }
-
-    refresh()
-    const interval = window.setInterval(refresh, PULL_REQUEST_SYNC_INTERVAL)
+      .catch(() => undefined)
     return () => {
       disposed = true
-      window.clearInterval(interval)
     }
-  }, [graphVersion, repoPath])
+  }, [graphVersion, pullRequestVersion, repoPath])
 
   return {
     branchSync,
@@ -423,6 +433,7 @@ export function useGraphData({
     graphVersion,
     hasOlderCommits,
     isGraphWindowLoading,
+    pullRequestVersion,
     pullRequests,
     refreshGraph,
     refreshWorktreeStatus,
@@ -433,6 +444,7 @@ export function useGraphData({
     squashMergeInferences,
     stashes,
     stashesByBase,
+    sync,
     worktreesByHead,
   }
 }

@@ -169,7 +169,6 @@ export function refMenuActions(
 ) {
   const { Item, Sub, SubContent, SubTrigger } = components
   const reference = refName(ref)
-  const pullRequest = ref.pullRequest
   return (
     <>
       <OperationMenuItems
@@ -190,12 +189,15 @@ export function refMenuActions(
         <Copy />
         {`Copy ${SELECTION_LABELS[ref.kind].toLowerCase()} name`}
       </Item>
-      {pullRequest && (
-        <Item onSelect={() => menus.openPullRequest(pullRequest.url)}>
+      {ref.pullRequests.map((pullRequest) => (
+        <Item
+          key={pullRequest.url}
+          onSelect={() => menus.openPullRequest(pullRequest.url)}
+        >
           {pullRequestIcon(pullRequest.state)}
-          {`Open pull request #${pullRequest.number}`}
+          {`Open pull request ${ref.pullRequests.length > 1 ? pullRequest.repository : ""}#${pullRequest.number}`}
         </Item>
-      )}
+      ))}
       {ref.worktrees.length > 0 && (
         <Sub>
           <SubTrigger>
@@ -520,7 +522,7 @@ function chipTitle(chip: RowChip) {
   }
   return [
     chip.ref.label,
-    pullRequestDescription(chip.ref),
+    ...chip.ref.pullRequests.map(pullRequestDescription),
     syncDescription(chip.ref),
     ...chip.ref.worktrees.map(worktreeDescription),
   ]
@@ -542,7 +544,7 @@ export function rowChip(
   const { start, end } =
     ref ? splitRefLabel(ref.label) : { start: chipLabel(chip), end: "" }
   const sync = ref && refSyncLabel(ref)
-  const pullRequest = ref?.pullRequest ?? null
+  const pullRequests = ref?.pullRequests ?? []
   // A worktree holding no branch is a chip of its own; one holding a branch is a marker inside that chip.
   const chipWorktrees =
     chip.kind === "worktree" ? [chip.worktree] : (ref?.worktrees ?? [])
@@ -602,14 +604,15 @@ export function rowChip(
                 <span className="commit-ref-label-start">{start}</span>
                 {end && <span className="commit-ref-label-end">{end}</span>}
               </span>
-              {pullRequest && (
+              {pullRequests.map((pullRequest) => (
                 <span
                   className={`commit-ref-pull-request commit-ref-pull-request-${pullRequest.state}`}
+                  key={pullRequest.url}
                 >
                   {pullRequestIcon(pullRequest.state)}
                   {`#${pullRequest.number}`}
                 </span>
-              )}
+              ))}
               {sync && (
                 <span
                   className={cn(

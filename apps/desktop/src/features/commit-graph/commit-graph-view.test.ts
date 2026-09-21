@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
+import { indexPullRequests } from "./commit-graph"
 import type {
   BranchPullRequest,
   BranchSync,
@@ -416,9 +417,20 @@ describe("commitChips", () => {
   const pullRequest = (
     branch: string,
     state: BranchPullRequest["state"],
-  ): [string, BranchPullRequest] => [
-    branch,
-    { branch, number: 1, state, title: branch, url: "" },
+  ): [string, BranchPullRequest[]] => [
+    `origin/${branch}`,
+    [
+      {
+        branch,
+        remote: "origin",
+        host: "github.com",
+        repository: "owner/repo",
+        number: 1,
+        state,
+        title: branch,
+        url: "",
+      },
+    ],
   ]
   const pullRequests = new Map([
     pullRequest("gone", "merged"),
@@ -456,6 +468,55 @@ describe("commitChips", () => {
       }),
     )
     expect(labels(chips)).toEqual(["local", "tracked · origin", "v1"])
+  })
+
+  test("matches any PR destination without matching another remote's branch", () => {
+    const row = commit("a", ["origin/feature", "upstream/feature"])
+    const entry = {
+      branch: "feature",
+      remote: "origin",
+      host: "github.com",
+      repository: "owner/repo",
+      number: 1,
+      state: "closed" as const,
+      title: "Feature",
+      url: "https://github.com/owner/repo/pull/1",
+    }
+    const requests = indexPullRequests([
+      entry,
+      {
+        ...entry,
+        repository: "fork/repo",
+        state: "open",
+        url: "https://github.com/fork/repo/pull/1",
+      },
+      { ...entry, remote: "upstream" },
+    ])
+    const filters = {
+      ...DEFAULT_BRANCH_FILTERS,
+      pullRequest: "linked" as const,
+      pullRequestStates: {
+        open: true,
+        draft: false,
+        merged: false,
+        closed: false,
+      },
+    }
+    expect(
+      labels(
+        commitChips(
+          row,
+          context({
+            filters,
+            pullRequests: requests,
+            remotes: ["origin", "upstream"],
+          }),
+        ),
+      ),
+    ).toEqual(["origin/feature"])
+    expect(branchFilterMetadataKey(filters, new Map(), requests)).not.toBe(
+      branchFilterMetadataKey(filters, new Map(), indexPullRequests([entry])),
+    )
   })
 
   test("a branch tracking a differently named upstream carries that upstream's pull request", () => {
@@ -810,33 +871,33 @@ describe("collapsed graph state", () => {
     const before = branchFilterMetadataKey(
       filters,
       new Map(),
-      new Map([
-        [
-          "feature",
-          {
-            branch: "feature",
-            number: 1,
-            state: "open" as const,
-            title: "Feature",
-            url: "https://example.com/pull/1",
-          },
-        ],
+      indexPullRequests([
+        {
+          branch: "feature",
+          remote: "origin",
+          host: "github.com",
+          repository: "owner/repo",
+          number: 1,
+          state: "open" as const,
+          title: "Feature",
+          url: "https://example.com/pull/1",
+        },
       ]),
     )
     const after = branchFilterMetadataKey(
       filters,
       new Map(),
-      new Map([
-        [
-          "feature",
-          {
-            branch: "feature",
-            number: 1,
-            state: "closed" as const,
-            title: "Feature",
-            url: "https://example.com/pull/1",
-          },
-        ],
+      indexPullRequests([
+        {
+          branch: "feature",
+          remote: "origin",
+          host: "github.com",
+          repository: "owner/repo",
+          number: 1,
+          state: "closed" as const,
+          title: "Feature",
+          url: "https://example.com/pull/1",
+        },
       ]),
     )
 
@@ -846,17 +907,17 @@ describe("collapsed graph state", () => {
   test("invalidates cached rows when branch sync lands after the pull requests it pairs", () => {
     const filters = { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" as const }
     const row = commit("a", ["local", "origin/feature"])
-    const pullRequests = new Map([
-      [
-        "feature",
-        {
-          branch: "feature",
-          number: 1,
-          state: "open" as const,
-          title: "Feature",
-          url: "https://example.com/pull/1",
-        },
-      ],
+    const pullRequests = indexPullRequests([
+      {
+        branch: "feature",
+        remote: "origin",
+        host: "github.com",
+        repository: "owner/repo",
+        number: 1,
+        state: "open" as const,
+        title: "Feature",
+        url: "https://example.com/pull/1",
+      },
     ])
     const branchSync = new Map([
       [
