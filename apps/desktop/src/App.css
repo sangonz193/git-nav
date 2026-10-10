@@ -62,10 +62,22 @@
   visibility: visible;
 }
 
+/* Dockview colours an unselected tab through these variables from a more specific selector, so hovering
+   changes the variables rather than the properties. */
 @media (hover: hover) {
   .git-nav-dockview-theme .dv-tab.dv-inactive-tab:hover {
-    background-color: color-mix(in oklch, var(--muted), transparent 50%);
-    color: var(--foreground);
+    --dv-activegroup-hiddenpanel-tab-background-color: color-mix(
+      in oklch,
+      var(--muted),
+      transparent 50%
+    );
+    --dv-inactivegroup-hiddenpanel-tab-background-color: color-mix(
+      in oklch,
+      var(--muted),
+      transparent 50%
+    );
+    --dv-activegroup-hiddenpanel-tab-color: var(--foreground);
+    --dv-inactivegroup-hiddenpanel-tab-color: var(--foreground);
   }
 }
 
