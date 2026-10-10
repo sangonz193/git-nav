@@ -35,6 +35,7 @@
   height: 28px;
   margin: 0;
   overflow: hidden;
+  padding-right: 0;
 }
 
 /* The icon naming what a tab holds sits beside the title, so the title takes the rest of the row
@@ -81,8 +82,19 @@
   }
 }
 
-.git-nav-dockview-theme .dv-tab .dv-default-tab-action {
+/* The close action fills the end of the tab, edge to edge, and the tab's rounding clips its hover. */
+.git-nav-dockview-theme .dv-tab .dv-default-tab .dv-default-tab-action {
+  align-self: stretch;
+  border-radius: 0;
   cursor: default;
+  margin: -4px 0;
+  padding: 0;
+  width: 28px;
+}
+
+/* The accent the default hover uses is the selected tab's own fill, so a tint of the text shows on any tab. */
+.git-nav-dockview-theme .dv-tab .dv-default-tab .dv-default-tab-action:hover {
+  background-color: color-mix(in oklch, var(--foreground), transparent 90%);
 }
 
 .git-nav-dockview-theme .dv-tab .dv-default-tab-action .dv-svg {
