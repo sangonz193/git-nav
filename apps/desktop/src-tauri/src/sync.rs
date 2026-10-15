@@ -419,6 +419,21 @@ fn fetch_command(repo_path: &str, remote: &str, is_manual: bool) -> Result<std::
             command.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes").env("GIT_SSH_VARIANT", "ssh");
         }
     }
+    if !remote.contains('=') {
+        // A stale remote HEAD misdirects merged-branch checks, but explicit followRemoteHEAD settings take precedence.
+        let follow_remote_head = format!("remote.{remote}.followRemoteHEAD");
+        let mut configured_follow = git_result(repo_path, &["config", "--get", &follow_remote_head])?;
+        if configured_follow.status.code() == Some(1) {
+            configured_follow = git_result(repo_path, &["config", "--get", "fetch.followRemoteHEAD"])?;
+        }
+        match configured_follow.status.code() {
+            Some(0) => {}
+            Some(1) => {
+                command.args(["-c", &format!("{follow_remote_head}=always")]);
+            }
+            _ => return Err(String::from_utf8_lossy(&configured_follow.stderr).trim().to_string()),
+        }
+    }
     command.args(["fetch", "--prune", "--", remote]);
     Ok(command)
 }
@@ -792,6 +807,67 @@ mod tests {
         assert!(attempts.contains("askpass"), "{attempts}");
         assert_eq!(server.join().unwrap(), 2);
         remove_scratch_repository(&repo_path);
+    }
+
+    #[test]
+    fn fetch_repoints_a_stale_remote_head_unless_configured_otherwise() {
+        use crate::git::{git_output, git_version};
+        use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+        let (upstream_path, upstream) = scratch_repository("fetch-remote-head-upstream");
+        upstream(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        upstream(&["branch", "stale"]);
+        let (repo_path, git) = scratch_repository("fetch-remote-head");
+        let remote = "test-origin";
+        git(&["remote", "add", remote, &upstream_path]);
+        let remote_head = || {
+            git_output(&repo_path, &["symbolic-ref", "refs/remotes/test-origin/HEAD"])
+        };
+
+        fetch_remote(&repo_path, remote, false).unwrap();
+        git(&["remote", "set-head", remote, "stale"]);
+        fetch_remote(&repo_path, remote, false).unwrap();
+        let followed = remote_head();
+
+        git(&["remote", "set-head", remote, "stale"]);
+        git(&["config", "remote.test-origin.followRemoteHEAD", "never"]);
+        fetch_remote(&repo_path, remote, false).unwrap();
+        let kept = remote_head();
+        git(&["config", "--unset", "remote.test-origin.followRemoteHEAD"]);
+        git(&["config", "fetch.followRemoteHEAD", "never"]);
+        fetch_remote(&repo_path, remote, false).unwrap();
+        let kept_with_fetch_config = remote_head();
+        let version = git_version(&repo_path);
+        remove_scratch_repository(&repo_path);
+        remove_scratch_repository(&upstream_path);
+
+        if version.is_some_and(|version| version >= (2, 48)) {
+            assert_eq!(followed.as_deref(), Some("refs/remotes/test-origin/main"));
+        }
+        assert_eq!(kept.as_deref(), Some("refs/remotes/test-origin/stale"));
+        assert_eq!(kept_with_fetch_config.as_deref(), Some("refs/remotes/test-origin/stale"));
+    }
+
+    #[test]
+    fn fetch_supports_remote_names_containing_equals() {
+        use crate::git::git_output;
+        use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+        let (upstream_path, upstream) = scratch_repository("fetch-equals-upstream");
+        upstream(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        let (repo_path, git) = scratch_repository("fetch-equals");
+        let remote = "team/fork=mirror";
+        git(&["remote", "add", remote, &upstream_path]);
+
+        fetch_remote(&repo_path, remote, false).unwrap();
+
+        assert!(git_output(
+            &repo_path,
+            &["rev-parse", "--verify", "refs/remotes/team/fork=mirror/main"]
+        )
+        .is_some());
+        remove_scratch_repository(&repo_path);
+        remove_scratch_repository(&upstream_path);
     }
 
     #[test]
