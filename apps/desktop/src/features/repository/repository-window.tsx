@@ -54,6 +54,10 @@ import {
   unresolvablePanelIds,
   usableRepositoryLayout,
 } from "../../lib/repository-layout"
+import {
+  repositoryLayoutDrafts,
+  RepositoryLayoutDraftsContext,
+} from "../../lib/repository-layout-drafts"
 import { settingsClientId } from "../../lib/settings"
 import type { RepositoryPanelParams } from "../../lib/panel-params"
 
@@ -281,6 +285,7 @@ const repositoryDockviewTheme = {
 
 export function RepositoryWindow({ path }: { path: string }) {
   const [repositoryPath, setRepositoryPath] = useState(path)
+  const [layoutDrafts] = useState(repositoryLayoutDrafts)
   const activeDockview = useRef<DockviewApi | null>(null)
   const disposeDockviewListeners = useRef<() => void>(() => undefined)
   const closedTabs = useRef<ReturnType<typeof closedTabHistory> | null>(null)
@@ -319,7 +324,7 @@ export function RepositoryWindow({ path }: { path: string }) {
     reopenTab,
   })
 
-  return (
+  const content = (
     <main className="h-svh">
       <RepositoryContext.Provider value={params}>
         <ReopenTabContext.Provider value={canReopenTab ? reopenTab : undefined}>
@@ -356,6 +361,7 @@ export function RepositoryWindow({ path }: { path: string }) {
                     description: String(error),
                   })
                 },
+                layoutDrafts.flush,
               )
               const layoutRestore = repositoryLayoutRestoreController(() => {
                 if (isCurrent()) {
@@ -367,6 +373,7 @@ export function RepositoryWindow({ path }: { path: string }) {
                   layoutRestore.changed()
                 }
               }
+              const unsubscribeDraftChanges = layoutDrafts.subscribe(save)
               const layoutSubscription = event.api.onDidLayoutChange(() => {
                 save()
               })
@@ -377,8 +384,10 @@ export function RepositoryWindow({ path }: { path: string }) {
               closedTabs.current = history
               const syncReopenTab = () => setCanReopenTab(history.size > 0)
               const willMutateSubscription = event.api.onWillMutateLayout(
-                (mutation) =>
-                  history.beginMutation(mutation.kind, event.api.panels),
+                (mutation) => {
+                  layoutDrafts.flush()
+                  history.beginMutation(mutation.kind, event.api.panels)
+                },
               )
               const didMutateSubscription = event.api.onDidMutateLayout(() => {
                 history.endMutation()
@@ -414,6 +423,7 @@ export function RepositoryWindow({ path }: { path: string }) {
               disposeDockviewListeners.current = () => {
                 listenersDisposed = true
                 closeUnlisten?.()
+                unsubscribeDraftChanges()
                 pageHideUnlisten()
                 layoutSubscription.dispose()
                 panelAddedSubscription.dispose()
@@ -501,5 +511,10 @@ export function RepositoryWindow({ path }: { path: string }) {
         </ReopenTabContext.Provider>
       </RepositoryContext.Provider>
     </main>
+  )
+  return (
+    <RepositoryLayoutDraftsContext.Provider value={layoutDrafts}>
+      {content}
+    </RepositoryLayoutDraftsContext.Provider>
   )
 }
