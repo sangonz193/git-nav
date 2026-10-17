@@ -39,6 +39,11 @@ export type WorkingTreePanelUserPreferences = {
 }
 
 export type WorkingTreePanelParams = RepositoryPanelParams & {
+  message?: string
+  amend?: boolean
+  amendHeadSha?: string | null
+  amendBranch?: string | null
+  amendHeadMessage?: string | null
   selectedFilePath?: string | null
   userPreferences?: WorkingTreePanelUserPreferences
 }

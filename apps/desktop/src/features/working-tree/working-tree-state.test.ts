@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test"
 
 import type { ChangedFile } from "../diff/diff-panel-state"
 import {
+  amendHeadChanged,
   amendMessage,
   canCommit,
   commitLabel,
   filePaths,
   persistedWorkingTreePanelParams,
+  restoredAmendingHead,
   workingTreeFileKey,
   workingTreeFiles,
   worktreeName,
@@ -121,6 +123,61 @@ describe("amendMessage", () => {
   })
 })
 
+describe("restoredAmendingHead", () => {
+  const repository = { name: "git-nav", path: "/projects/git-nav" }
+  const saved = {
+    ...repository,
+    amend: true,
+    amendHeadSha: "abc",
+    amendBranch: "main",
+    amendHeadMessage: "first\n\nbody",
+  }
+
+  test("keeps the original commit across serialization and restore", () => {
+    const params = persistedWorkingTreePanelParams(
+      repository,
+      null,
+      {},
+      "first\n\nbody",
+      true,
+      tree(),
+    )
+    const head = restoredAmendingHead(JSON.parse(JSON.stringify(params)))!
+
+    expect(head).toEqual({
+      branch: "main",
+      headSha: "abc",
+      headMessage: "first\n\nbody",
+    })
+    expect(amendHeadChanged(head, tree())).toBe(false)
+    expect(amendHeadChanged(head, tree({ headSha: "def" }))).toBe(true)
+    expect(amendHeadChanged(head, tree({ branch: "feature" }))).toBe(true)
+    expect(amendHeadChanged(head, tree({ headSha: null }))).toBe(true)
+    expect(amendMessage(params.message, head.headMessage, false, true)).toBe("")
+    expect(amendMessage("edited draft", head.headMessage, false, true)).toBe(
+      "edited draft",
+    )
+  })
+
+  test("restores a detached HEAD without treating it as an unknown branch", () => {
+    const head = restoredAmendingHead({ ...saved, amendBranch: null })!
+    expect(amendHeadChanged(head, tree({ branch: null }))).toBe(false)
+    expect(amendHeadChanged(head, tree())).toBe(true)
+  })
+
+  test("drops Amend when its original commit or branch is unknown", () => {
+    expect(restoredAmendingHead({ ...repository, amend: true })).toBeNull()
+    expect(
+      restoredAmendingHead({ ...saved, amendHeadSha: undefined }),
+    ).toBeNull()
+    expect(restoredAmendingHead({ ...saved, amendHeadSha: null })).toBeNull()
+    expect(
+      restoredAmendingHead({ ...saved, amendBranch: undefined }),
+    ).toBeNull()
+    expect(restoredAmendingHead({ ...saved, amend: false })).toBeNull()
+  })
+})
+
 describe("labels", () => {
   test("counts the files a commit will carry", () => {
     expect(commitLabel(0, false)).toBe("Commit")
@@ -142,10 +199,18 @@ describe("persistedWorkingTreePanelParams", () => {
         { name: "git-nav", path: "/projects/git-nav" },
         null,
         {},
+        "",
+        false,
+        null,
       ),
     ).toEqual({
       name: "git-nav",
       path: "/projects/git-nav",
+      message: "",
+      amend: false,
+      amendHeadSha: undefined,
+      amendBranch: undefined,
+      amendHeadMessage: undefined,
       selectedFilePath: null,
       userPreferences: undefined,
     })
@@ -154,7 +219,49 @@ describe("persistedWorkingTreePanelParams", () => {
         { name: "git-nav", path: "/projects/git-nav" },
         "src/index.ts",
         { mode: "unified" },
+        "Draft commit\n\nDetails",
+        true,
+        tree(),
       ).userPreferences,
     ).toEqual({ mode: "unified" })
+  })
+
+  test("serializes both a commit draft and a cleared draft", () => {
+    const repository = { name: "git-nav", path: "/projects/git-nav" }
+    const draft = persistedWorkingTreePanelParams(
+      repository,
+      "src/index.ts",
+      { mode: "unified" },
+      "Draft commit\n\nDetails",
+      true,
+      tree(),
+    )
+    expect(JSON.parse(JSON.stringify(draft))).toMatchObject({
+      ...repository,
+      message: "Draft commit\n\nDetails",
+      amend: true,
+      amendHeadSha: "abc",
+      amendBranch: "main",
+      amendHeadMessage: "first\n\nbody",
+    })
+    expect(
+      JSON.parse(
+        JSON.stringify(
+          persistedWorkingTreePanelParams(
+            repository,
+            null,
+            {},
+            "",
+            false,
+            tree(),
+          ),
+        ),
+      ),
+    ).toEqual({
+      ...repository,
+      message: "",
+      amend: false,
+      selectedFilePath: null,
+    })
   })
 })
