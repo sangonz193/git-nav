@@ -4,6 +4,8 @@ import {
   closesTab,
   desktopAppShortcut,
   reopensTab,
+  repositoryShortcutIndex,
+  togglesSidebar,
   usesNativeMenu,
 } from "./app-menu-shortcuts"
 
@@ -23,7 +25,7 @@ function shortcut(key: string, overrides: Partial<KeyboardEvent> = {}) {
 
 describe("desktop app shortcuts", () => {
   test("maps navigation and zoom commands", () => {
-    expect(shortcut("n")).toBe("show-launcher")
+    expect(shortcut("n")).toBe("new-window")
     expect(shortcut("o")).toBe("choose-repository")
     expect(shortcut("=")).toBe("zoom-in")
     expect(shortcut("-")).toBe("zoom-out")
@@ -100,5 +102,111 @@ describe("desktop app shortcuts", () => {
     expect(shortcut("N", { shiftKey: true })).toBeNull()
     expect(shortcut("O", { shiftKey: true })).toBeNull()
     expect(shortcut("p")).toBeNull()
+  })
+})
+
+describe("repository shortcuts", () => {
+  const key = (key: string, overrides: Partial<KeyboardEvent> = {}) => ({
+    altKey: false,
+    code: "",
+    ctrlKey: false,
+    key,
+    metaKey: true,
+    shiftKey: false,
+    ...overrides,
+  })
+
+  test("pick a repository by position, with 9 for the last", () => {
+    expect(repositoryShortcutIndex(key("1"), true, 3)).toBe(0)
+    expect(repositoryShortcutIndex(key("3"), true, 3)).toBe(2)
+    expect(repositoryShortcutIndex(key("4"), true, 3)).toBeNull()
+    expect(repositoryShortcutIndex(key("9"), true, 3)).toBe(2)
+    expect(repositoryShortcutIndex(key("9"), true, 0)).toBeNull()
+  })
+
+  test("use Command on macOS and Ctrl elsewhere", () => {
+    expect(repositoryShortcutIndex(key("1"), false, 3)).toBeNull()
+    expect(
+      repositoryShortcutIndex(
+        key("1", { ctrlKey: true, metaKey: false }),
+        false,
+        3,
+      ),
+    ).toBe(0)
+    expect(repositoryShortcutIndex(key("1", { shiftKey: true }), true, 3)).toBe(
+      0,
+    )
+  })
+
+  test("accept physical digit keys on layouts with shifted digits", () => {
+    for (let digit = 1; digit <= 9; digit++) {
+      const index = digit === 9 ? 9 : digit - 1
+      for (const shiftKey of [false, true]) {
+        expect(
+          repositoryShortcutIndex(
+            key("&", { code: `Digit${digit}`, shiftKey }),
+            true,
+            10,
+          ),
+        ).toBe(index)
+        expect(
+          repositoryShortcutIndex(
+            key("&", {
+              code: `Digit${digit}`,
+              ctrlKey: true,
+              metaKey: false,
+              shiftKey,
+            }),
+            false,
+            10,
+          ),
+        ).toBe(index)
+      }
+    }
+    expect(
+      repositoryShortcutIndex(key("&", { code: "Digit4" }), true, 3),
+    ).toBeNull()
+    expect(
+      repositoryShortcutIndex(key("&", { code: "Digit9" }), true, 0),
+    ).toBeNull()
+  })
+
+  test("reject other physical keys and conflicting modifiers", () => {
+    for (const code of ["Digit0", "Numpad1", "KeyA", ""]) {
+      expect(repositoryShortcutIndex(key("&", { code }), true, 3)).toBeNull()
+    }
+    for (const overrides of [
+      { altKey: true },
+      { metaKey: false },
+      { ctrlKey: true },
+    ]) {
+      expect(
+        repositoryShortcutIndex(
+          key("&", { code: "Digit1", ...overrides }),
+          true,
+          3,
+        ),
+      ).toBeNull()
+    }
+  })
+})
+
+describe("sidebar shortcut", () => {
+  const key = (overrides: Partial<KeyboardEvent>) => ({
+    altKey: false,
+    ctrlKey: false,
+    key: "b",
+    metaKey: false,
+    shiftKey: false,
+    ...overrides,
+  })
+
+  test("uses Command on macOS and Ctrl elsewhere", () => {
+    expect(togglesSidebar(key({ metaKey: true }), true)).toBeTrue()
+    expect(togglesSidebar(key({ ctrlKey: true }), true)).toBeFalse()
+    expect(togglesSidebar(key({ ctrlKey: true }), false)).toBeTrue()
+    expect(
+      togglesSidebar(key({ metaKey: true, shiftKey: true }), true),
+    ).toBeFalse()
   })
 })

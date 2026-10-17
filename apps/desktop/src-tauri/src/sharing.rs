@@ -15,7 +15,7 @@ use crate::projects::OpenWorktrees;
 #[cfg(target_os = "windows")]
 use crate::process::CREATE_NO_WINDOW;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-use crate::window::reveal_launcher;
+use crate::window::show_windows;
 
 const SHARING_CHANGED_EVENT: &str = "sharing-changed";
 
@@ -346,8 +346,8 @@ pub(crate) fn handle_sharing_tray_menu_event(app: &AppHandle, event: MenuEvent) 
             // Windows deadlocks when a webview is built from the main thread's menu handler.
             let app = app.clone();
             tauri::async_runtime::spawn_blocking(move || {
-                if let Err(error) = reveal_launcher(&app) {
-                    log::error!("Could not show the launcher from the tray: {error}");
+                if let Err(error) = show_windows(&app) {
+                    log::error!("Could not show a window from the tray: {error}");
                 }
             });
         }

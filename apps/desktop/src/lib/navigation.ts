@@ -1,35 +1,52 @@
+import type { ProjectWorktree } from "../features/workspace/workspace"
 import { invoke, isDesktop } from "./ipc"
 
 export type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
 
-function repositoryUrl(path: string) {
+const openedListeners = new Set<(opened: ProjectWorktree) => void>()
+
+export function repositoryUrl(path: string) {
   return `/?${new URLSearchParams({ repository: path })}`
 }
 
-/**
- * The desktop app opens repositories in native windows. The browser has no such handle, so the
- * server resolves and records the path and the client navigates there itself.
- */
+// Browser tabs receive resolved worktrees locally because only desktop windows share backend routing.
+export function onRepositoryOpened(
+  listener: (opened: ProjectWorktree) => void,
+) {
+  openedListeners.add(listener)
+  return () => {
+    openedListeners.delete(listener)
+  }
+}
+
+function announceOpened(opened: ProjectWorktree) {
+  for (const listener of openedListeners) listener(opened)
+}
+
 export async function openRepository(path: string) {
   if (isDesktop) {
     return invoke<void>("open_repository", { path })
   }
-  const { path: resolved } = await invoke<{ path: string }>("open_repository", {
-    path,
-  })
-  window.location.assign(repositoryUrl(resolved))
+  announceOpened(await invoke<ProjectWorktree>("open_repository", { path }))
+}
+
+export async function openRepositoryInNewWindow(path: string) {
+  if (isDesktop) {
+    return invoke<void>("open_repository_in_new_window", { path })
+  }
+  window.open(repositoryUrl(path), "_blank", "noopener")
 }
 
 export async function openWorktree(path: string, target: WorktreeTarget) {
   if (isDesktop) {
     return invoke<void>("open_worktree", { path, target })
   }
-  const { path: resolved } = await invoke<{ path: string }>("open_worktree", {
+  const opened = await invoke<ProjectWorktree>("open_worktree", {
     path,
     target,
   })
   if (target === "git-nav") {
-    window.open(repositoryUrl(resolved), "_blank")
+    announceOpened(opened)
   }
 }
 

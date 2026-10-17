@@ -298,9 +298,14 @@ fn is_https_url(url: &str) -> bool {
 }
 
 #[tauri::command(async)]
-pub(crate) fn open_worktree(app: AppHandle, path: String, target: String) -> Result<(), String> {
+pub(crate) fn open_worktree(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+    target: String,
+) -> Result<(), String> {
     if target == "git-nav" {
-        return open_repository_window(&app, &path);
+        return open_repository_window(&app, &path, Some(window.label()));
     }
     launch_worktree(&path, &target)
 }

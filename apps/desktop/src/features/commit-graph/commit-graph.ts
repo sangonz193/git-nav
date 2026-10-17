@@ -677,8 +677,8 @@ export function worktreeDescription(worktree: RowWorktree) {
     .filter(Boolean)
     .join(", ")
   return [
-    worktree.isCurrent ? `${worktree.name} is this window's worktree`
-    : worktree.isOpen ? `${worktree.name} is open in another window`
+    worktree.isCurrent ? `${worktree.name} is the worktree shown here`
+    : worktree.isOpen ? `${worktree.name} is open in Git Nav`
     : `Checked out at ${worktree.name}`,
     worktree.branch ? null : "Not on a branch",
     worktree.pendingOperation &&

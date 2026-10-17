@@ -121,9 +121,14 @@ fn exposure(command: &IpcCommand) -> Exposure {
         IpcCommand::sidebar_projects => Exposure::Api(post(sidebar_projects)),
         IpcCommand::remove_sidebar_project => Exposure::Api(post(remove_sidebar_project)),
         IpcCommand::open_repository => Exposure::Api(post(open_repository)),
-        IpcCommand::show_launcher | IpcCommand::choose_repository | IpcCommand::zoom => {
+        IpcCommand::new_window | IpcCommand::choose_repository | IpcCommand::zoom => {
             Exposure::DesktopOnly
         }
+        IpcCommand::open_repository_in_new_window
+        | IpcCommand::window_session
+        | IpcCommand::save_window_worktree
+        | IpcCommand::clear_window_worktree
+        | IpcCommand::take_opened_repositories => Exposure::DesktopOnly,
         IpcCommand::update_command => Exposure::DesktopOnly,
         // A browser cannot put anything on the path of the machine it is reading.
         IpcCommand::command_line_link | IpcCommand::install_command_line_link => {
@@ -680,14 +685,16 @@ async fn project_snapshot(
     ok(project_at(&path, &state.open_worktrees)?)
 }
 
-/// The browser cannot open a window from the server, so it gets the path back and navigates itself.
+fn opened_worktree(path: &str, state: &ServerState) -> Result<Value, String> {
+    let project = remember_repository(path, &state.open_worktrees, None)?;
+    Ok(json!({ "project": project.id, "worktree": worktree_path(path)? }))
+}
+
 async fn open_repository(
     State(state): State<Arc<ServerState>>,
     Json(args): Json<PathArg>,
 ) -> CommandResult {
-    let path = args.path.unwrap_or_default();
-    remember_repository(&path, &state.open_worktrees, None)?;
-    ok(json!({ "path": worktree_path(&path)? }))
+    ok(opened_worktree(&args.path.unwrap_or_default(), &state)?)
 }
 
 async fn open_worktree(
@@ -695,8 +702,7 @@ async fn open_worktree(
     Json(args): Json<WorktreeArgs>,
 ) -> CommandResult {
     if args.target == "git-nav" {
-        remember_repository(&args.path, &state.open_worktrees, None)?;
-        return ok(json!({ "path": worktree_path(&args.path)? }));
+        return ok(opened_worktree(&args.path, &state)?);
     }
     launch_worktree(&args.path, &args.target)?;
     ok(json!({ "path": args.path }))
