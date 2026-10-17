@@ -27,9 +27,13 @@ use tower_http::compression::{
 
 use crate::{
     IpcCommand,
-    projects::{OpenWorktrees, directory_listing, project_at, recent_project_list, remember_repository},
+    projects::{
+        OpenWorktrees, directory_listing, project_at, recent_project_list, remember_repository,
+        remove_sidebar_project_at, sidebar_project_list,
+    },
     graph::walk_commit_graph_page,
     desktop::launch_worktree,
+    git::worktree_path,
 };
 
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
@@ -114,6 +118,8 @@ fn exposure(command: &IpcCommand) -> Exposure {
     match command {
         IpcCommand::recent_projects => Exposure::Api(post(recent_projects)),
         IpcCommand::clear_recent_projects => Exposure::Api(post(clear_recent_projects)),
+        IpcCommand::sidebar_projects => Exposure::Api(post(sidebar_projects)),
+        IpcCommand::remove_sidebar_project => Exposure::Api(post(remove_sidebar_project)),
         IpcCommand::open_repository => Exposure::Api(post(open_repository)),
         IpcCommand::show_launcher | IpcCommand::choose_repository | IpcCommand::zoom => {
             Exposure::DesktopOnly
@@ -590,6 +596,23 @@ async fn clear_recent_projects() -> CommandResult {
     ok(blocking(|| crate::projects::clear_recent_paths(None)).await?)
 }
 
+async fn sidebar_projects(State(state): State<Arc<ServerState>>) -> CommandResult {
+    let open_worktrees = state.open_worktrees.clone();
+    ok(blocking(move || sidebar_project_list(&open_worktrees)).await?)
+}
+
+#[derive(Deserialize)]
+struct ProjectArg {
+    project: String,
+}
+
+async fn remove_sidebar_project(Json(args): Json<ProjectArg>) -> CommandResult {
+    if args.project.is_empty() {
+        return Err(CommandError("Choose a project to remove.".to_string()));
+    }
+    ok(blocking(move || remove_sidebar_project_at(&args.project, None)).await?)
+}
+
 async fn settings() -> CommandResult {
     let mut settings = crate::storage::load_settings()?;
     redact_network_sharing_settings(&mut settings);
@@ -663,8 +686,8 @@ async fn open_repository(
     Json(args): Json<PathArg>,
 ) -> CommandResult {
     let path = args.path.unwrap_or_default();
-    let project = remember_repository(&path, &state.open_worktrees, None)?;
-    ok(json!({ "path": project.path }))
+    remember_repository(&path, &state.open_worktrees, None)?;
+    ok(json!({ "path": worktree_path(&path)? }))
 }
 
 async fn open_worktree(
@@ -672,8 +695,8 @@ async fn open_worktree(
     Json(args): Json<WorktreeArgs>,
 ) -> CommandResult {
     if args.target == "git-nav" {
-        let project = remember_repository(&args.path, &state.open_worktrees, None)?;
-        return ok(json!({ "path": project.path }));
+        remember_repository(&args.path, &state.open_worktrees, None)?;
+        return ok(json!({ "path": worktree_path(&args.path)? }));
     }
     launch_worktree(&args.path, &args.target)?;
     ok(json!({ "path": args.path }))

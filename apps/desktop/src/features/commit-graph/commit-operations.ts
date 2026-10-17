@@ -1689,13 +1689,14 @@ export function clearConflictPredictions() {
   predictionCache.clear()
 }
 
-function predictionKey(request: PredictionRequest) {
+// Repositories share the page, and the same branch names, so the path is part of the key.
+function predictionKey(repoPath: string, request: PredictionRequest) {
   if (request.kind === "rebase") {
-    return `rebase ${request.onto} ${request.upstream} ${request.branch}`
+    return `${repoPath} rebase ${request.onto} ${request.upstream} ${request.branch}`
   }
   return request.kind === "revert" ?
-      `revert ${request.base} ${request.tip}`
-    : `merge ${request.source} ${request.into}`
+      `${repoPath} revert ${request.base} ${request.tip}`
+    : `${repoPath} merge ${request.source} ${request.into}`
 }
 
 function predictionInvocation(repoPath: string, request: PredictionRequest) {
@@ -1722,7 +1723,7 @@ function predictionInvocation(repoPath: string, request: PredictionRequest) {
 }
 
 function predict(repoPath: string, request: PredictionRequest) {
-  const key = predictionKey(request)
+  const key = predictionKey(repoPath, request)
   const cached = predictionCache.get(key)
   if (cached) {
     return Promise.resolve(cached)

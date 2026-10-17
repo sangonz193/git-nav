@@ -131,14 +131,13 @@ pub(crate) fn worktree_path(path: &str) -> Result<String, String> {
 }
 
 pub(crate) fn project_id(path: &str) -> Result<String, String> {
-    let worktree_path = worktree_path(path)?;
-    let common_dir = git_output(&worktree_path, &["rev-parse", "--git-common-dir"])
-        .ok_or_else(|| "Could not identify the Git project.".to_string())?;
+    let common_dir = git_output(path, &["rev-parse", "--git-common-dir"])
+        .ok_or_else(|| "Choose a Git repository.".to_string())?;
     let common_dir = PathBuf::from(common_dir);
     let common_dir = if common_dir.is_absolute() {
         common_dir
     } else {
-        PathBuf::from(worktree_path).join(common_dir)
+        PathBuf::from(path).join(common_dir)
     };
 
     fs::canonicalize(common_dir)

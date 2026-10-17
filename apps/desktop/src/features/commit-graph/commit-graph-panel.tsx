@@ -886,7 +886,7 @@ function CommitGraphPanelContent({
       id: operationToastId,
     })
     clearConflictPredictions()
-    refreshWorktreeStatus()
+    refreshWorktreeStatus("all", undefined, true)
     refreshGraph()
   }
 

@@ -21,6 +21,30 @@ export type WorkingTree = {
   unstaged: ChangedFile[]
 }
 
+export type AmendingHead = Pick<
+  WorkingTree,
+  "branch" | "headSha" | "headMessage"
+>
+
+export function restoredAmendingHead(params: WorkingTreePanelParams) {
+  if (
+    !params.amend ||
+    params.amendHeadSha == null ||
+    params.amendBranch === undefined
+  ) {
+    return null
+  }
+  return {
+    branch: params.amendBranch,
+    headSha: params.amendHeadSha,
+    headMessage: params.amendHeadMessage ?? null,
+  }
+}
+
+export function amendHeadChanged(head: AmendingHead, tree: WorkingTree) {
+  return head.headSha !== tree.headSha || head.branch !== tree.branch
+}
+
 export type WorktreeStatus = {
   path: string
   branch: string
@@ -133,12 +157,39 @@ export function persistedWorkingTreePanelParams(
   { name, path }: RepositoryPanelParams,
   selectedFilePath: string | null,
   userPreferences: WorkingTreePanelUserPreferences,
-): WorkingTreePanelParams {
+  message: string,
+  amend: boolean,
+  amendingHead: AmendingHead | null,
+) {
   return {
     name,
     path,
+    message,
+    amend,
+    amendHeadSha: amend ? amendingHead?.headSha : undefined,
+    amendBranch: amend ? amendingHead?.branch : undefined,
+    amendHeadMessage: amend ? amendingHead?.headMessage : undefined,
     selectedFilePath,
     userPreferences:
       Object.keys(userPreferences).length > 0 ? userPreferences : undefined,
+  } satisfies WorkingTreePanelParams
+}
+
+export function workingTreeDraft(initialMessage: string) {
+  let message = initialMessage
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => message,
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    setMessage(next: string) {
+      if (message === next) return
+      message = next
+      listeners.forEach((listener) => listener())
+    },
   }
 }
