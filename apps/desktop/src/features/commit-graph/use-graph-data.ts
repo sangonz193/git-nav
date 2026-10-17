@@ -1,5 +1,12 @@
 import { invoke, isDesktop, stream } from "@/lib/ipc"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import {
   commitFromTuple,
@@ -8,32 +15,20 @@ import {
   type BranchSync,
   type Commit,
   type CommitBatch,
-  type PendingOperation,
   type RowWorktree,
   type SquashMergeInference,
   type StashEntry,
 } from "./commit-graph"
-import type { RepositoryState } from "./commit-operations"
-import type {
-  Project,
-  Worktree as ProjectWorktree,
-} from "../repository/project"
 import type { SyncKind } from "./repository-sync"
 import { useRepositorySync } from "./use-repository-sync"
+import {
+  getWorktreeStatusCache,
+  type WorktreeStatusScope,
+} from "./worktree-status-cache"
 
 export const BROWSER_GRAPH_WINDOW_SIZE = 2_000
 const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const REPOSITORY_FOCUS_DEBOUNCE = 150
-type WorktreeStatus = {
-  path: string
-  branch: string
-  head: string
-  isDetached: boolean
-  changedFiles: number
-  untrackedFiles: number
-  pendingOperation: PendingOperation | null
-}
-type WorktreeStatusScope = "all" | "current"
 type GraphWindowComplete = { hasMore: boolean }
 
 export function useGraphData({
@@ -53,9 +48,13 @@ export function useGraphData({
   const [graphOffset, setGraphOffset] = useState(0)
   const [hasOlderCommits, setHasOlderCommits] = useState(false)
   const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(true)
-  const [projectWorktrees, setProjectWorktrees] = useState<ProjectWorktree[]>(
-    [],
-  )
+  const worktreeStatusCache = getWorktreeStatusCache(repoPath)
+  const { projectWorktrees, worktreeStatuses, repository, stashes } =
+    useSyncExternalStore(
+      worktreeStatusCache.subscribe,
+      worktreeStatusCache.getSnapshot,
+      worktreeStatusCache.getSnapshot,
+    )
   const [branchSync, setBranchSync] = useState<Map<string, BranchSync>>(
     new Map(),
   )
@@ -63,9 +62,6 @@ export function useGraphData({
     Map<string, BranchPullRequest[]>
   >(new Map())
   const [pullRequestVersion, setPullRequestVersion] = useState(0)
-  const [worktreeStatuses, setWorktreeStatuses] = useState<WorktreeStatus[]>([])
-  const [repository, setRepository] = useState<RepositoryState | null>(null)
-  const [stashes, setStashes] = useState<StashEntry[]>([])
   const fingerprint = useRef<string | null>(null)
   const fingerprintGeneration = useRef(0)
   const streamedRepoPath = useRef<string | null>(null)
@@ -99,49 +95,20 @@ export function useGraphData({
   }, [onBeforeReload, onError])
   // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
   const refreshWorktreeStatus = useCallback(
-    (scope: WorktreeStatusScope = "all", isDisposed?: () => boolean) => {
-      return Promise.all([
-        invoke<Project>("project_snapshot", { path: repoPath })
-          .then((project) => {
-            if (!isDisposed?.()) {
-              setProjectWorktrees(
-                project.worktrees.filter((worktree) => !worktree.isPrunable),
-              )
-            }
-          })
-          .catch((message: unknown) => {
-            if (!isDisposed?.()) {
-              onError(String(message))
-            }
-          }),
-        invoke<WorktreeStatus[]>("worktree_status", {
-          repoPath,
-          worktreePaths: scope === "current" ? [repoPath] : undefined,
+    (
+      scope: WorktreeStatusScope = "all",
+      isDisposed?: () => boolean,
+      afterOperation = false,
+    ) => {
+      return worktreeStatusCache
+        .refresh(scope, afterOperation)
+        .then((message) => {
+          if (message !== null && !isDisposed?.()) {
+            onError(message)
+          }
         })
-          .then((statuses) => {
-            setWorktreeStatuses((current) => {
-              if (scope === "all") {
-                return statuses
-              }
-              const merged = new Map(
-                current.map((status) => [status.path, status]),
-              )
-              for (const status of statuses) {
-                merged.set(status.path, status)
-              }
-              return [...merged.values()]
-            })
-          })
-          .catch(() => undefined),
-        invoke<RepositoryState>("repository_state", { repoPath })
-          .then(setRepository)
-          .catch(() => undefined),
-        invoke<StashEntry[]>("stash_list", { repoPath })
-          .then(setStashes)
-          .catch(() => undefined),
-      ])
     },
-    [onError, repoPath],
+    [onError, worktreeStatusCache],
   )
   // Until the repository reports its remotes, refs are classified against the conventional one rather than
   // against none, which would read every remote branch as a local one. Repository state is re-read on a timer,

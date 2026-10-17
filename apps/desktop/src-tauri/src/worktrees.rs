@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::{collections::HashMap, fs, path::Path, path::PathBuf};
+use std::{collections::HashMap, fs, path::Path, path::PathBuf, thread};
 use crate::projects::parse_worktree_records;
 use crate::git::{
     git_output, git_output_allow_empty, primary_reference, resolve_commit, worktree_path,
@@ -158,7 +158,7 @@ fn parse_status_counts(output: &str) -> (u32, u32) {
 #[tauri::command(async)]
 pub(crate) fn worktree_status(repo_path: String, worktree_paths: Option<Vec<String>>) -> Result<Vec<WorktreeStatus>, String> {
     let output = git_output_allow_empty(&repo_path, &["worktree", "list", "--porcelain", "-z"])?;
-    Ok(parse_worktree_records(&output)
+    let worktrees = parse_worktree_records(&output)
         .into_iter()
         .filter(|worktree| !worktree.is_prunable)
         .filter(|worktree| {
@@ -166,29 +166,38 @@ pub(crate) fn worktree_status(repo_path: String, worktree_paths: Option<Vec<Stri
                 .as_ref()
                 .map_or(true, |paths| paths.iter().any(|path| same_path(&worktree.path, path)))
         })
-        .filter_map(|worktree| {
-            let status = git_output_allow_empty(
-                &worktree.path,
-                &[
-                    "--no-optional-locks",
-                    "status",
-                    "--porcelain=v2",
-                    "--untracked-files=normal",
-                ],
-            )
-            .ok()?;
-            let (changed_files, untracked_files) = parse_status_counts(&status);
-            Some(WorktreeStatus {
-                branch: worktree.branch,
-                head: worktree.head,
-                is_detached: worktree.is_detached,
-                changed_files,
-                untracked_files,
-                pending_operation: pending_operation(&worktree.path),
-                path: worktree.path,
-            })
-        })
-        .collect())
+        .collect::<Vec<_>>();
+    if worktrees.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(thread::scope(|scope| {
+        let workers = worktrees.chunks(worktrees.len().div_ceil(8))
+            .map(|chunk| scope.spawn(move || {
+                chunk.iter().filter_map(|worktree| {
+                    let status = git_output_allow_empty(
+                        &worktree.path,
+                        &[
+                            "--no-optional-locks",
+                            "status",
+                            "--porcelain=v2",
+                            "--untracked-files=normal",
+                        ],
+                    ).ok()?;
+                    let (changed_files, untracked_files) = parse_status_counts(&status);
+                    Some(WorktreeStatus {
+                        branch: worktree.branch.clone(),
+                        head: worktree.head.clone(),
+                        is_detached: worktree.is_detached,
+                        changed_files,
+                        untracked_files,
+                        pending_operation: pending_operation(&worktree.path),
+                        path: worktree.path.clone(),
+                    })
+                }).collect::<Vec<_>>()
+            }))
+            .collect::<Vec<_>>();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap()).collect()
+    }))
 }
 
 fn same_path(left: &str, right: &str) -> bool {
@@ -369,5 +378,51 @@ mod tests {
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].branch, "feature");
         assert!(clean.iter().all(|status| status.changed_files == 0 && status.untracked_files == 0));
+    }
+
+    #[test]
+    fn concurrent_status_preserves_order_and_filters_worktrees() {
+        let directory = env::temp_dir().join(format!("git-nav-worktree-status-order-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let directory = fs::canonicalize(directory).unwrap();
+        let path = directory.join("main").to_string_lossy().into_owned();
+        fs::create_dir_all(&path).unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(&path, arguments).unwrap();
+            assert!(output.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        let linked = (0..12).map(|index| {
+            let linked = directory.join(format!("linked-{index:02}")).to_string_lossy().into_owned();
+            run(&["worktree", "add", "--quiet", "-b", &format!("feature-{index}"), &linked]);
+            for file in 0..index {
+                fs::write(Path::new(&linked).join(format!("untracked-{file}")), "new").unwrap();
+            }
+            worktree_path(&linked).unwrap()
+        }).collect::<Vec<_>>();
+        fs::remove_dir_all(&linked[3]).unwrap();
+        fs::write(Path::new(&linked[7]).join(".git"), "invalid").unwrap();
+        let output = git_output_allow_empty(&path, &["worktree", "list", "--porcelain", "-z"]).unwrap();
+        let records = parse_worktree_records(&output);
+        assert!(records.iter().any(|record| record.path == linked[3] && record.is_prunable));
+        let expected = records.into_iter()
+            .filter(|record| !record.is_prunable && record.path != linked[7])
+            .map(|record| record.path)
+            .collect::<Vec<_>>();
+        let statuses = worktree_status(path.clone(), None).unwrap();
+        assert_eq!(statuses.iter().map(|status| status.path.clone()).collect::<Vec<_>>(), expected);
+        for (index, linked) in linked.iter().enumerate().filter(|(index, _)| *index != 3 && *index != 7) {
+            let status = statuses.iter().find(|status| &status.path == linked).unwrap();
+            assert_eq!(status.untracked_files, index as u32);
+        }
+        let scoped = worktree_status(path.clone(), Some(vec![format!("{}/.", linked[10]), linked[1].clone(), linked[3].clone(), linked[7].clone()])).unwrap();
+        let expected_scoped = expected.into_iter().filter(|path| path == &linked[1] || path == &linked[10]).collect::<Vec<_>>();
+        assert_eq!(scoped.into_iter().map(|status| status.path).collect::<Vec<_>>(), expected_scoped);
+        assert!(worktree_status(path, Some(Vec::new())).unwrap().is_empty());
+        fs::remove_dir_all(directory).unwrap();
     }
 }
