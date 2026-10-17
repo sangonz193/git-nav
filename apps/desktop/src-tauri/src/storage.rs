@@ -61,7 +61,7 @@ pub(crate) fn load_settings() -> Result<BTreeMap<String, serde_json::Value>, Str
     })
 }
 
-fn malformed_settings_path(path: &Path) -> PathBuf {
+pub(crate) fn malformed_settings_path(path: &Path) -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -103,7 +103,7 @@ pub(crate) fn save_setting_at_then(
     })
 }
 
-fn with_locked_file<T>(
+pub(crate) fn with_locked_file<T>(
     path: &Path,
     operation: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
@@ -119,7 +119,7 @@ fn with_locked_file<T>(
     operation()
 }
 
-fn write_json_atomically(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn write_json_atomically(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let contents = serde_json::to_string(value).map_err(|error| error.to_string())?;
     let temporary_path = path.with_extension("json.tmp");
     let mut temporary = open_owner_only_file(&temporary_path)?;

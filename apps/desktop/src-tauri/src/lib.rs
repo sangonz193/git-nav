@@ -70,6 +70,8 @@ macro_rules! commands {
 commands![
     projects::recent_projects,
     projects::clear_recent_projects,
+    projects::sidebar_projects,
+    projects::remove_sidebar_project,
     window::open_repository,
     window::show_launcher,
     window::choose_repository,
