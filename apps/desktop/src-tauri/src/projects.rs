@@ -350,7 +350,7 @@ pub(crate) fn project_at(path: &str, open_worktrees: &OpenWorktrees) -> Result<P
 }
 
 fn project_from_id(id: String, open_worktrees: &OpenWorktrees) -> Result<Project, String> {
-    let output = git_output_bytes(&id, &["--git-dir", &id, "worktree", "list", "--porcelain", "-z"])
+    let output = git_output_bytes(&id, &["--git-dir", ".", "worktree", "list", "--porcelain", "-z"])
         .ok_or_else(|| "Could not list Git worktrees.".to_string())?;
     let output = String::from_utf8(output).map_err(|error| error.to_string())?;
     let records = parse_worktree_records(&output);
