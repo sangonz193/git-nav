@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
 
 describe("worktree selection", () => {
   test.each(["desktop", "browser"])("routes selections in %s", async (mode) => {
     const child = Bun.spawn(
       [
         process.execPath,
-        new URL("./test-fixtures/workspace-routing.tsx", import.meta.url)
-          .pathname,
+        fileURLToPath(
+          new URL("./test-fixtures/workspace-routing.tsx", import.meta.url),
+        ),
         mode,
       ],
       {
-        cwd: new URL("../../../../", import.meta.url).pathname,
+        cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -33,10 +35,12 @@ describe("worktree selection", () => {
       const child = Bun.spawn(
         [
           process.execPath,
-          new URL(`./test-fixtures/${fixture}.tsx`, import.meta.url).pathname,
+          fileURLToPath(
+            new URL(`./test-fixtures/${fixture}.tsx`, import.meta.url),
+          ),
         ],
         {
-          cwd: new URL("../../../../", import.meta.url).pathname,
+          cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
           stdout: "pipe",
           stderr: "pipe",
         },
