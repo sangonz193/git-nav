@@ -385,7 +385,6 @@ mod tests {
     fn concurrent_status_preserves_order_and_filters_worktrees() {
         let directory = env::temp_dir().join(format!("git-nav-worktree-status-order-{}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
-        let directory = fs::canonicalize(directory).unwrap();
         let path = directory.join("main").to_string_lossy().into_owned();
         fs::create_dir_all(&path).unwrap();
         let run = |arguments: &[&str]| {
