@@ -36,7 +36,10 @@ globalThis.fetch = Object.assign(
   { preconnect: globalThis.fetch.preconnect },
 )
 const { WorkspaceWindow } = await import("../workspace-window")
-notifyManager.setScheduler((callback) => setTimeout(callback, 100))
+notifyManager.setScheduler(queueMicrotask)
+notifyManager.setNotifyFunction((callback) => {
+  act(callback)
+})
 const client = new QueryClient({
   defaultOptions: { queries: { retry: false } },
 })
