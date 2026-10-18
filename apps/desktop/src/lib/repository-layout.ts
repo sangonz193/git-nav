@@ -266,59 +266,87 @@ export async function closeRepositoryWindowAfterSaving(
   }
 }
 
-export function repositoryLayoutSaveScheduler(
-  save: (keepalive?: boolean) => Promise<void>,
+export function repositoryLayoutSaveScheduler<Snapshot>(
+  capture: () => Snapshot | null,
+  save: (snapshot: Snapshot, keepalive?: boolean) => Promise<void>,
   onError: (error: unknown) => void,
-  isCurrent = () => true,
+  beforeCapture: () => void = () => undefined,
 ) {
   let timeout: ReturnType<typeof globalThis.setTimeout> | undefined
   let saveChain = Promise.resolve()
   let normalSavesPending = 0
-  const flush = () => {
-    if (timeout === undefined) {
-      return saveChain
-    }
+  let pageHideVersion = 0
+  let disposed = false
+  let lastSnapshot: string | undefined
+  const clearTimeout = () => {
     globalThis.clearTimeout(timeout)
     timeout = undefined
+  }
+  const snapshot = (reissue = false) => {
+    try {
+      beforeCapture()
+      const value = capture()
+      if (value === null) return null
+      const serialized = JSON.stringify(value)
+      if (!reissue && serialized === lastSnapshot) return null
+      const captured = JSON.parse(serialized) as Snapshot
+      lastSnapshot = serialized
+      return captured
+    } catch (error) {
+      onError(error)
+      return null
+    }
+  }
+  const write = async (value: Snapshot, keepalive?: boolean) => {
+    try {
+      await save(value, keepalive)
+    } catch (error) {
+      lastSnapshot = undefined
+      onError(error)
+    }
+  }
+  const flush = () => {
+    if (disposed) return saveChain
+    clearTimeout()
+    const value = snapshot()
+    if (value === null) return saveChain
+    const version = pageHideVersion
     normalSavesPending++
     saveChain = saveChain
-      .then(async () => {
-        try {
-          if (isCurrent()) {
-            await save()
-          }
-        } finally {
-          normalSavesPending--
-        }
+      .then(() => {
+        if (version === pageHideVersion) return write(value)
       })
-      .catch(onError)
+      .finally(() => normalSavesPending--)
     return saveChain
   }
   return {
     schedule() {
-      globalThis.clearTimeout(timeout)
+      if (disposed) return
+      clearTimeout()
       timeout = globalThis.setTimeout(() => void flush(), 400)
     },
     flush,
     flushOnPageHide() {
-      if ((timeout === undefined && normalSavesPending === 0) || !isCurrent()) {
-        return
-      }
-      if (timeout !== undefined) {
-        globalThis.clearTimeout(timeout)
-        timeout = undefined
-      }
+      if (disposed) return
+      clearTimeout()
+      const value = snapshot(normalSavesPending > 0)
+      if (value === null) return
       // A pagehide reissue can race an in-flight save and the later write wins; losing the save entirely on unload is worse.
-      const unloadSave = save(true).catch(onError)
+      pageHideVersion++
+      const unloadSave = write(value, true)
       saveChain = Promise.all([saveChain, unloadSave]).then(() => undefined)
     },
     dispose() {
       void flush()
+      disposed = true
     },
   }
 }
 
-export function repositoryLayoutRestoreController(save: () => void) {
+export function repositoryLayoutRestoreController(
+  save: () => void,
+  settled: () => void = () => undefined,
+) {
   const restore = createUserWinningRestore(true)
   let saveEnabled = false
   let applyingRestore = false
@@ -341,6 +369,9 @@ export function repositoryLayoutRestoreController(save: () => void) {
     get pending() {
       return restore.pending
     },
+    get canSave() {
+      return saveEnabled && !applyingRestore
+    },
     changed,
     userAction() {
       if (!restore.pending) {
@@ -348,6 +379,7 @@ export function repositoryLayoutRestoreController(save: () => void) {
       }
       restore.userAction(() => undefined)
       saveEnabled = true
+      settled()
       return true
     },
     restored(change: () => void) {
@@ -360,6 +392,7 @@ export function repositoryLayoutRestoreController(save: () => void) {
           restoreApplyFailed = true
           throw error
         }
+        settled()
         changed()
       })
     },
@@ -368,7 +401,11 @@ export function repositoryLayoutRestoreController(save: () => void) {
         return false
       }
       restoreApplyFailed = false
-      apply(change)
+      try {
+        apply(change)
+      } finally {
+        settled()
+      }
       return true
     },
   }

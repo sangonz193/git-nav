@@ -433,6 +433,7 @@ describe("repositoryLayoutSaveScheduler", () => {
   test("flushes a pending save on dispose", async () => {
     let saves = 0
     const scheduler = repositoryLayoutSaveScheduler(
+      () => ({}),
       async () => {
         saves++
       },
@@ -447,10 +448,87 @@ describe("repositoryLayoutSaveScheduler", () => {
     expect(saves).toBe(1)
   })
 
+  test("captures the final layout before disposal while an earlier save exceeds the close bound", async () => {
+    const layout = { panels: { draft: { message: "first" } } }
+    const saved: string[] = []
+    let finishSave = () => {}
+    let current = true
+    const scheduler = repositoryLayoutSaveScheduler(
+      () => (current ? layout : null),
+      async (snapshot) => {
+        saved.push(snapshot.panels.draft.message)
+        if (saved.length === 1) {
+          await new Promise<void>((resolve) => {
+            finishSave = resolve
+          })
+        }
+      },
+      () => undefined,
+    )
+    scheduler.schedule()
+    await closeRepositoryWindowAfterSaving(
+      { preventDefault() {} },
+      scheduler.flush,
+      async () => {
+        layout.panels.draft.message = "edited during handoff"
+        scheduler.dispose()
+        current = false
+        layout.panels.draft.message = "disposed"
+      },
+      0,
+    )
+    expect(saved).toEqual(["first"])
+    finishSave()
+    await scheduler.flush()
+    expect(saved).toEqual(["first", "edited during handoff"])
+  })
+
+  test("captures changes on unmount before a buffered layout event arrives", async () => {
+    let message = "saved"
+    const saved: string[] = []
+    const scheduler = repositoryLayoutSaveScheduler(
+      () => ({ message }),
+      async (snapshot) => {
+        saved.push(snapshot.message)
+      },
+      () => undefined,
+    )
+    await scheduler.flush()
+    message = "last edit"
+    scheduler.dispose()
+    await scheduler.flush()
+    expect(saved).toEqual(["saved", "last edit"])
+  })
+
+  test("leaves a pending or failed restore untouched through StrictMode cleanup and remount", async () => {
+    const saved: string[] = []
+    for (const outcome of ["pending", "failed", "restored"] as const) {
+      let current = true
+      const restore = repositoryLayoutRestoreController(() =>
+        scheduler.schedule(),
+      )
+      const scheduler = repositoryLayoutSaveScheduler(
+        () => (current && restore.canSave ? { layout: "restored" } : null),
+        async (snapshot) => {
+          saved.push(snapshot.layout)
+        },
+        () => undefined,
+      )
+      if (outcome !== "pending") restore[outcome](() => undefined)
+      scheduler.dispose()
+      current = false
+      scheduler.dispose()
+      scheduler.schedule()
+      await scheduler.flush()
+    }
+    expect(saved).toEqual(["restored"])
+  })
+
   test("lets a window close await the pending save", async () => {
     let finishSave = () => undefined
     let saved = false
     const scheduler = repositoryLayoutSaveScheduler(
+      () => ({}),
       () =>
         new Promise<void>((resolve) => {
           finishSave = () => {
@@ -474,6 +552,7 @@ describe("repositoryLayoutSaveScheduler", () => {
   test("handles a failed save", async () => {
     const errors: unknown[] = []
     const scheduler = repositoryLayoutSaveScheduler(
+      () => ({}),
       async () => {
         throw new Error("disk full")
       },
@@ -488,15 +567,15 @@ describe("repositoryLayoutSaveScheduler", () => {
     expect(String(errors[0])).toContain("disk full")
   })
 
-  test("does not flush a disposed dockview after it stops being current", async () => {
+  test("saves the snapshot even after the dockview stops being current", async () => {
     let current = true
     let saves = 0
     const scheduler = repositoryLayoutSaveScheduler(
+      () => (current ? {} : null),
       async () => {
         saves++
       },
       () => undefined,
-      () => current,
     )
 
     scheduler.schedule()
@@ -504,13 +583,14 @@ describe("repositoryLayoutSaveScheduler", () => {
     current = false
     await scheduler.flush()
 
-    expect(saves).toBe(0)
+    expect(saves).toBe(1)
   })
 
   test("starts a keepalive save synchronously on pagehide", async () => {
     const keepalive: (boolean | undefined)[] = []
     const scheduler = repositoryLayoutSaveScheduler(
-      async (value) => {
+      () => ({}),
+      async (_, value) => {
         keepalive.push(value)
       },
       () => undefined,
@@ -534,11 +614,46 @@ describe("repositoryLayoutSaveScheduler", () => {
     await scheduler.flush()
   })
 
+  test("pagehide supersedes queued snapshots and keeps the latest snapshot after resuming", async () => {
+    let layout = "A"
+    let persisted = ""
+    let finishSave = () => {}
+    const writes: string[] = []
+    const scheduler = repositoryLayoutSaveScheduler(
+      () => ({ layout }),
+      async (snapshot) => {
+        persisted = snapshot.layout
+        writes.push(persisted)
+        if (writes.length === 1)
+          await new Promise<void>((resolve) => {
+            finishSave = resolve
+          })
+      },
+      () => undefined,
+    )
+    void scheduler.flush()
+    await Promise.resolve()
+    layout = "B"
+    void scheduler.flush()
+    layout = "C"
+    scheduler.flushOnPageHide()
+    expect(persisted).toBe("C")
+    finishSave()
+    await scheduler.flush()
+    await scheduler.flush()
+    expect(writes).toEqual(["A", "C"])
+    expect(persisted).toBe("C")
+    layout = "D"
+    await scheduler.flush()
+    expect(persisted).toBe("D")
+  })
+
   test("reissues an in-flight save with keepalive on pagehide", async () => {
     let finishSave = () => {}
     const keepalive: (boolean | undefined)[] = []
     const scheduler = repositoryLayoutSaveScheduler(
-      (value) => {
+      () => ({}),
+      (_, value) => {
         keepalive.push(value)
         return value ?
             Promise.resolve()
@@ -563,8 +678,10 @@ describe("repositoryLayoutSaveScheduler", () => {
 
   test("saves parameter updates through Dockview's layout change event", async () => {
     const layoutChanges = event<void>()
+    let parameters = 0
     let saves = 0
     const scheduler = repositoryLayoutSaveScheduler(
+      () => ({ parameters }),
       async () => {
         saves++
       },
@@ -572,7 +689,14 @@ describe("repositoryLayoutSaveScheduler", () => {
     )
     const restore = repositoryLayoutRestoreController(scheduler.schedule)
     const subscription = layoutChanges.event(restore.changed)
-    const panel = { api: { updateParameters: () => layoutChanges.fire() } }
+    const panel = {
+      api: {
+        updateParameters: () => {
+          parameters++
+          layoutChanges.fire()
+        },
+      },
+    }
 
     restore.restored(() => undefined)
     await scheduler.flush()
@@ -644,12 +768,43 @@ describe("repository window close", () => {
 })
 
 describe("repositoryLayoutRestoreController", () => {
+  test("keeps the empty state hidden until restoration or fallback finishes", () => {
+    for (const outcome of ["restored", "failed"] as const) {
+      let hidden = true
+      let applied = false
+      const restore = repositoryLayoutRestoreController(
+        () => undefined,
+        () => {
+          expect(applied).toBe(true)
+          hidden = false
+        },
+      )
+
+      restore.changed()
+      expect(hidden).toBe(true)
+      expect(restore.pending).toBe(true)
+      restore[outcome](() => {
+        expect(hidden).toBe(true)
+        applied = true
+      })
+      expect(hidden).toBe(false)
+      expect(restore.pending).toBe(false)
+    }
+  })
+
   test("lets an early user action cancel restore while this and later changes keep saving", () => {
     let saves = 0
+    let hidden = true
     const state = { layout: "user" }
-    const restore = repositoryLayoutRestoreController(() => saves++)
+    const restore = repositoryLayoutRestoreController(
+      () => saves++,
+      () => {
+        hidden = false
+      },
+    )
 
     expect(restore.userAction()).toBe(true)
+    expect(hidden).toBe(false)
     restore.changed()
 
     expect(
@@ -681,13 +836,20 @@ describe("repositoryLayoutRestoreController", () => {
   test("falls back without saving when applying a stored layout fails", () => {
     let saves = 0
     let fallback = false
-    const restore = repositoryLayoutRestoreController(() => saves++)
+    let hidden = true
+    const restore = repositoryLayoutRestoreController(
+      () => saves++,
+      () => {
+        hidden = false
+      },
+    )
 
     expect(() =>
       restore.restored(() => {
         throw new Error("invalid layout")
       }),
     ).toThrow("invalid layout")
+    expect(hidden).toBe(true)
     expect(
       restore.failed(() => {
         fallback = true
@@ -696,7 +858,24 @@ describe("repositoryLayoutRestoreController", () => {
     restore.changed()
 
     expect(fallback).toBe(true)
+    expect(hidden).toBe(false)
     expect(saves).toBe(0)
+  })
+
+  test("settles even when adding the failure fallback throws", () => {
+    let settled = false
+    const restore = repositoryLayoutRestoreController(
+      () => undefined,
+      () => {
+        settled = true
+      },
+    )
+    expect(() =>
+      restore.failed(() => {
+        throw new Error("fallback failed")
+      }),
+    ).toThrow("fallback failed")
+    expect(settled).toBe(true)
   })
 })
 

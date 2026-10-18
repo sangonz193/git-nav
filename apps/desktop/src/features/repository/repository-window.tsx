@@ -12,7 +12,7 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentType,
@@ -289,7 +289,7 @@ export function RepositoryWindow({ path }: { path: string }) {
     repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath
   const params = { name, path: repositoryPath }
 
-  useEffect(
+  useLayoutEffect(
     () => () => {
       disposeDockviewListeners.current()
       activeDockview.current = null
@@ -335,17 +335,20 @@ export function RepositoryWindow({ path }: { path: string }) {
               let repositoryParams = params
               const isCurrent = () => activeDockview.current === event.api
               const layoutSave = repositoryLayoutSaveScheduler(
-                (keepalive) =>
-                  invoke<void>(
-                    "save_repository_layout",
+                () =>
+                  isCurrent() && layoutRestore.canSave ?
                     {
-                      clientId,
+                      path: repositoryParams.path,
                       layout: {
                         version: REPOSITORY_LAYOUT_VERSION,
                         layout: event.api.toJSON(),
                       },
-                      path: repositoryParams.path,
-                    },
+                    }
+                  : null,
+                (snapshot, keepalive) =>
+                  invoke<void>(
+                    "save_repository_layout",
+                    { clientId, ...snapshot },
                     { keepalive },
                   ),
                 (error) => {
@@ -353,7 +356,6 @@ export function RepositoryWindow({ path }: { path: string }) {
                     description: String(error),
                   })
                 },
-                isCurrent,
               )
               const layoutRestore = repositoryLayoutRestoreController(() => {
                 if (isCurrent()) {
