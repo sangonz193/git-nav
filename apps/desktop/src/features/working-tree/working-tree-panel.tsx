@@ -15,13 +15,14 @@ import {
   SlidersHorizontal,
 } from "lucide-react"
 import {
-  type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
@@ -49,6 +50,7 @@ import {
 import { toast } from "@workspace/shadcn/components/sonner"
 import { cn } from "@workspace/shadcn/lib/utils"
 import { Hinted } from "@/components/hinted"
+import { RepositoryLayoutDraftsContext } from "@/lib/repository-layout-drafts"
 import { useTheme } from "@/components/theme-provider"
 import { PENDING_OPERATION_LABELS } from "../commit-graph/commit-graph"
 import type { OperationResult } from "../commit-graph/commit-operations"
@@ -84,6 +86,7 @@ import {
   persistedWorkingTreePanelParams,
   restoredAmendingHead,
   selectedFilePathOf,
+  workingTreeDraft,
   workingTreeFileKey,
   workingTreeFiles,
   worktreeName,
@@ -260,25 +263,123 @@ function AreaHeader({
   )
 }
 
+function CommitForm({
+  amend,
+  busy,
+  draft,
+  onAmend,
+  onCommit,
+  tree,
+}: {
+  amend: boolean
+  busy: boolean
+  draft: ReturnType<typeof workingTreeDraft>
+  onAmend: (amend: boolean) => void
+  onCommit: () => void
+  tree: WorkingTree | null
+}) {
+  const message = useSyncExternalStore(
+    draft.subscribe,
+    draft.getSnapshot,
+    draft.getSnapshot,
+  )
+  const pending = tree?.pendingOperation
+  const commitBlockedByOperation = pendingOperationBlocksCommit(pending)
+  return (
+    <form
+      className="working-tree-commit"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onCommit()
+      }}
+    >
+      <textarea
+        aria-label="Commit message"
+        className="working-tree-message"
+        disabled={busy}
+        onChange={(event) => draft.setMessage(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault()
+            onCommit()
+          }
+        }}
+        placeholder={
+          tree?.branch ? `Commit to ${tree.branch}` : "Commit message"
+        }
+        rows={3}
+        value={message}
+      />
+      <div className="working-tree-commit-actions">
+        <label
+          className={cn(
+            "working-tree-amend",
+            !tree?.headSha && "text-muted-foreground",
+          )}
+        >
+          <Checkbox
+            checked={amend}
+            disabled={busy || !tree?.headSha}
+            onCheckedChange={(checked) => onAmend(checked === true)}
+          />
+          Amend
+        </label>
+        <div className="ml-auto flex min-w-0 items-center gap-2">
+          {commitBlockedByOperation && pending && (
+            <span className="truncate text-xs text-muted-foreground">
+              {`Finish ${PENDING_OPERATION_LABELS[pending]} in a terminal before committing here.`}
+            </span>
+          )}
+          <Button
+            disabled={busy || !canCommit(tree, message, amend)}
+            size="sm"
+            type="submit"
+          >
+            {commitLabel(tree?.staged.length ?? 0, amend)}
+          </Button>
+        </div>
+      </div>
+    </form>
+  )
+}
+
 export function WorkingTreePanel({
   api,
   params,
 }: IDockviewPanelProps<WorkingTreePanelParams>) {
   const theme = useTheme()
   const [version, setVersion] = useState(0)
-  const [message, setMessage] = useState(params.message ?? "")
+  const [draft] = useState(() => workingTreeDraft(params.message ?? ""))
+  const layoutDrafts = useContext(RepositoryLayoutDraftsContext)
+  useLayoutEffect(() => {
+    if (!layoutDrafts) return
+    const unregister = layoutDrafts.register(() => {
+      const message = draft.getSnapshot()
+      if (api.getParameters<WorkingTreePanelParams>().message !== message) {
+        api.updateParameters({ message })
+      }
+    })
+    const unsubscribe = draft.subscribe(layoutDrafts.changed)
+    return () => {
+      unsubscribe()
+      unregister()
+    }
+  }, [api, draft, layoutDrafts])
   const [amend, setAmend] = useState(
     () => restoredAmendingHead(params) !== null,
   )
   const amendingHead = useRef<AmendingHead | null>(restoredAmendingHead(params))
-  const resetAmend = useCallback((headMessage: string | null) => {
-    const wasAmending = amendingHead.current !== null
-    amendingHead.current = null
-    setAmend(false)
-    setMessage((current) =>
-      amendMessage(current, headMessage, false, wasAmending),
-    )
-  }, [])
+  const resetAmend = useCallback(
+    (headMessage: string | null) => {
+      const wasAmending = amendingHead.current !== null
+      amendingHead.current = null
+      setAmend(false)
+      draft.setMessage(
+        amendMessage(draft.getSnapshot(), headMessage, false, wasAmending),
+      )
+    },
+    [draft],
+  )
   const applySnapshot = useCallback(
     (snapshot: Snapshot) => {
       if (
@@ -399,7 +500,7 @@ export function WorkingTreePanel({
         { name: params.name, path: params.path },
         selectedFilePath,
         userPreferences,
-        message,
+        draft.getSnapshot(),
         amend,
         amendingHead.current,
       ),
@@ -410,7 +511,7 @@ export function WorkingTreePanel({
     params.path,
     selectedFilePath,
     userPreferences,
-    message,
+    draft,
     amend,
   ])
 
@@ -555,6 +656,7 @@ export function WorkingTreePanel({
     move([file], areaOf(file) === "staged" ? "unstaged" : "staged")
 
   function commit() {
+    const message = draft.getSnapshot()
     if (!canCommit(tree, message, amend) || busy) {
       return
     }
@@ -573,19 +675,12 @@ export function WorkingTreePanel({
           return
         }
         toast(result.summary)
-        setMessage("")
+        draft.setMessage("")
         resetAmend(tree?.headMessage ?? null)
       })
       .catch(report("Could not commit."))
       .then(refresh)
       .finally(() => setBusy(false))
-  }
-
-  function onMessageKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault()
-      commit()
-    }
   }
 
   function setAmending(next: boolean) {
@@ -599,8 +694,8 @@ export function WorkingTreePanel({
       headMessage: tree?.headMessage ?? null,
     }
     setAmend(next)
-    setMessage((current) =>
-      amendMessage(current, tree?.headMessage ?? null, next, amend),
+    draft.setMessage(
+      amendMessage(draft.getSnapshot(), tree?.headMessage ?? null, next, amend),
     )
   }
 
@@ -629,7 +724,6 @@ export function WorkingTreePanel({
   const unstagedCount = tree?.unstaged.length ?? 0
   const isSplit = (mode & DiffModeEnum.Split) !== 0
   const pending = tree?.pendingOperation
-  const commitBlockedByOperation = pendingOperationBlocksCommit(pending)
   const stageCheckbox = (file: ChangedFile) => (
     <Checkbox
       aria-label={areaOf(file) === "staged" ? "Unstage" : "Stage"}
@@ -716,55 +810,14 @@ export function WorkingTreePanel({
         {fileList}
         {emptyNotice}
       </div>
-      <form
-        className="working-tree-commit"
-        onSubmit={(event) => {
-          event.preventDefault()
-          commit()
-        }}
-      >
-        <textarea
-          aria-label="Commit message"
-          className="working-tree-message"
-          disabled={busy}
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={onMessageKeyDown}
-          placeholder={
-            tree?.branch ? `Commit to ${tree.branch}` : "Commit message"
-          }
-          rows={3}
-          value={message}
-        />
-        <div className="working-tree-commit-actions">
-          <label
-            className={cn(
-              "working-tree-amend",
-              !tree?.headSha && "text-muted-foreground",
-            )}
-          >
-            <Checkbox
-              checked={amend}
-              disabled={busy || !tree?.headSha}
-              onCheckedChange={(checked) => setAmending(checked === true)}
-            />
-            Amend
-          </label>
-          <div className="ml-auto flex min-w-0 items-center gap-2">
-            {commitBlockedByOperation && pending && (
-              <span className="truncate text-xs text-muted-foreground">
-                {`Finish ${PENDING_OPERATION_LABELS[pending]} in a terminal before committing here.`}
-              </span>
-            )}
-            <Button
-              disabled={busy || !canCommit(tree, message, amend)}
-              size="sm"
-              type="submit"
-            >
-              {commitLabel(stagedCount, amend)}
-            </Button>
-          </div>
-        </div>
-      </form>
+      <CommitForm
+        amend={amend}
+        busy={busy}
+        draft={draft}
+        onAmend={setAmending}
+        onCommit={commit}
+        tree={tree}
+      />
     </nav>
   )
 

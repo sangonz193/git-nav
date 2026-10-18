@@ -174,3 +174,22 @@ export function persistedWorkingTreePanelParams(
       Object.keys(userPreferences).length > 0 ? userPreferences : undefined,
   } satisfies WorkingTreePanelParams
 }
+
+export function workingTreeDraft(initialMessage: string) {
+  let message = initialMessage
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => message,
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    setMessage(next: string) {
+      if (message === next) return
+      message = next
+      listeners.forEach((listener) => listener())
+    },
+  }
+}
