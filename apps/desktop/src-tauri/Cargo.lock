@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "git-nav"
-version = "0.0.30"
+version = "0.0.31"
 dependencies = [
  "axum",
  "dbus",
