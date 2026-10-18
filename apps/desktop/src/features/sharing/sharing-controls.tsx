@@ -540,6 +540,25 @@ export function NetworkSharingRow() {
   )
 }
 
+export function NetworkSharingDialog({
+  onOpenChange,
+  open,
+}: {
+  onOpenChange: (open: boolean) => void
+  open: boolean
+}) {
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Network sharing</DialogTitle>
+        </DialogHeader>
+        <NetworkSharingRow />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function SharingIndicator() {
   const state = useSharingState()
   const [qrOpen, setQrOpen] = useState(false)

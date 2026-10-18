@@ -23,6 +23,7 @@ mod stash;
 mod storage;
 mod sync;
 mod window;
+mod window_sessions;
 mod working_tree;
 mod worktrees;
 #[cfg(test)]
@@ -31,8 +32,9 @@ mod test_support;
 use storage::load_settings;
 use projects::OpenWorktrees;
 use window::{
-    open_repository_window, repository_path_from_args, reveal_launcher,
-    sharing_survives_window_close, should_keep_sharing_without_windows, watch_sharing_close,
+    LastFocusedWindow, PendingRepositories, WindowLabels, open_repository_window,
+    repository_path_from_args, restore_windows, sharing_survives_window_close,
+    should_keep_sharing_without_windows, show_windows, target_window,
 };
 use sharing::{
     SERVE_START_SHARING_SETTING, SERVE_USAGE, ServeMode, SharingServer, TrayExit,
@@ -73,7 +75,12 @@ commands![
     projects::sidebar_projects,
     projects::remove_sidebar_project,
     window::open_repository,
-    window::show_launcher,
+    window::open_repository_in_new_window,
+    window::new_window,
+    window::window_session,
+    window::save_window_worktree,
+    window::clear_window_worktree,
+    window::take_opened_repositories,
     window::choose_repository,
     window::zoom,
     desktop::update_command,
@@ -237,11 +244,19 @@ pub fn run() {
                 if let Some(path) = readiness_path {
                     write_serve_readiness(&path, result);
                 }
-            } else if let Some(path) = repository_path_from_args(&args, &cwd) {
-                let _ = open_repository_window(app, &path);
             } else {
-                // A serve-started app has no visible window, so a plain launch must bring one back.
-                let _ = reveal_launcher(app);
+                // This runs on the main thread, where Windows deadlocks building a webview.
+                let app = app.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let result = match repository_path_from_args(&args, &cwd) {
+                        Some(path) => open_repository_window(&app, &path, None),
+                        // A serve-started app has no visible window, so a plain launch must bring one back.
+                        None => show_windows(&app),
+                    };
+                    if let Err(error) = result {
+                        log::error!("Could not open a window for the new launch: {error}");
+                    }
+                });
             }
         }));
         builder = builder.plugin(
@@ -265,6 +280,9 @@ pub fn run() {
     let app = match builder
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenWorktrees::default())
+        .manage(PendingRepositories::default())
+        .manage(LastFocusedWindow::default())
+        .manage(WindowLabels::default())
         .manage(SharingServer::default())
         .manage(TrayExit::default())
         .invoke_handler(invoke_handler())
@@ -284,9 +302,6 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let Err(error) = install_app_menu(app.handle()) {
                 log::error!("Could not install the application menu: {error}");
-            }
-            if let Some(window) = app.get_webview_window("main") {
-                watch_sharing_close(&window);
             }
             if let Some((readiness_path, options)) = &serve_request {
                 #[cfg(target_os = "macos")]
@@ -315,13 +330,14 @@ pub fn run() {
                     log::error!("Could not start sharing on launch: {error}");
                 }
             }
+            restore_windows(app.handle())?;
             if let Some(path) = &repository_path {
-                open_repository_window(app.handle(), path)?;
-            } else {
-                reveal_launcher(app.handle())?;
-                #[cfg(target_os = "macos")]
-                update_recent_menu(Some(app.handle()));
+                if let Err(error) = open_repository_window(app.handle(), path, None) {
+                    log::error!("Could not open the repository on launch: {error}");
+                }
             }
+            #[cfg(target_os = "macos")]
+            update_recent_menu(Some(app.handle()));
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -350,13 +366,13 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             if matches!(event, RunEvent::Reopen { has_visible_windows: false, .. }) {
-                let _ = reveal_launcher(app);
+                let _ = show_windows(app);
                 return;
             }
             // macOS only grants the process activation once the run loop is going, so a shell-launched
             // app has to claim the foreground here rather than while its window is being built.
             if matches!(event, RunEvent::Ready) {
-                if let Some(window) = app.webview_windows().values().next() {
+                if let Some(window) = target_window(app, None) {
                     let _ = window.set_focus();
                 }
             }

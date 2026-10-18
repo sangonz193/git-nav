@@ -798,8 +798,9 @@ describe("repository window close", () => {
     )
 
     expect(capability.windows).toContain("main")
-    expect(capability.windows).toContain("repository-*")
+    expect(capability.windows).toContain("window-*")
     expect(capability.permissions).toContain("core:window:allow-destroy")
+    expect(capability.permissions).toContain("core:window:allow-set-title")
   })
 })
 

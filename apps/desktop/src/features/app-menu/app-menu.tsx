@@ -4,10 +4,9 @@ import {
   SquareTerminal,
   FolderOpen,
   Maximize,
+  MonitorSmartphone,
   RefreshCw,
-  RotateCcw,
   Rows3,
-  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react"
@@ -27,6 +26,7 @@ import { toast } from "@workspace/shadcn/components/sonner"
 import { invoke, isDesktop } from "@/lib/ipc"
 import { openRepository } from "@/lib/navigation"
 import { FolderPicker } from "../launcher/folder-picker"
+import { NetworkSharingDialog } from "../sharing/sharing-controls"
 import type { Project } from "../repository/project"
 import {
   checkForUpdateNow,
@@ -45,17 +45,10 @@ type CommandLineLink = {
   state: "elsewhere" | "installed" | "missing" | "unsupported"
 }
 
-type AppMenuButtonProps = {
-  loadRecentProjects?: () => Promise<Project[]>
-  onCloseTab?: () => void
-  onReopenTab?: () => void
-  onRecentProjectsChange?: (projects: Project[]) => void
-}
-
 function runDesktopCommand(command: DesktopAppCommand) {
   switch (command) {
-    case "show-launcher":
-      return invoke<void>("show_launcher")
+    case "new-window":
+      return invoke<void>("new_window")
     case "choose-repository":
       return invoke<void>("choose_repository")
     case "zoom-in":
@@ -99,27 +92,19 @@ function Shortcut({ children }: { children: ReactNode }) {
   )
 }
 
-export function AppMenuButton({
-  loadRecentProjects,
-  onCloseTab,
-  onReopenTab,
-  onRecentProjectsChange,
-}: AppMenuButtonProps) {
+export function AppMenuButton() {
   const [projects, setProjects] = useState<Project[]>([])
   const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const [isSharingOpen, setIsSharingOpen] = useState(false)
   const availableUpdate = useAvailableUpdate()
   const version = useAppVersion()
   const [commandLine, setCommandLine] = useState<CommandLineLink | null>(null)
   const shortcutPrefix =
     isDesktop && usesNativeMenu(navigator.userAgent) ? "⌘" : "Ctrl+"
-  const shiftShortcutPrefix = shortcutPrefix === "⌘" ? "⇧⌘" : "Ctrl+Shift+"
 
   async function refreshProjects() {
     try {
-      const projects = await (loadRecentProjects?.() ??
-        invoke<Project[]>("recent_projects"))
-      setProjects(projects)
-      if (!loadRecentProjects) onRecentProjectsChange?.(projects)
+      setProjects(await invoke<Project[]>("recent_projects"))
     } catch (error) {
       toast.error("Could not load recent repositories.", {
         description: String(error),
@@ -159,10 +144,7 @@ export function AppMenuButton({
 
   function clearRecentProjects() {
     invoke<void>("clear_recent_projects")
-      .then(() => {
-        setProjects([])
-        onRecentProjectsChange?.([])
-      })
+      .then(() => setProjects([]))
       .catch(reportCommandError)
   }
 
@@ -196,7 +178,7 @@ export function AppMenuButton({
           {isDesktop && (
             <DropdownMenuItem
               onSelect={() =>
-                runDesktopCommand("show-launcher").catch(reportCommandError)
+                runDesktopCommand("new-window").catch(reportCommandError)
               }
             >
               <Rows3 />
@@ -235,27 +217,13 @@ export function AppMenuButton({
               </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-          {(onCloseTab || onReopenTab) && (
-            <>
-              <DropdownMenuSeparator />
-              {onCloseTab && (
-                <DropdownMenuItem onSelect={onCloseTab}>
-                  <X />
-                  Close Tab
-                  {isDesktop && <Shortcut>{shortcutPrefix}W</Shortcut>}
-                </DropdownMenuItem>
-              )}
-              {onReopenTab && (
-                <DropdownMenuItem onSelect={onReopenTab}>
-                  <RotateCcw />
-                  Reopen Closed Tab
-                  {isDesktop && <Shortcut>{shiftShortcutPrefix}T</Shortcut>}
-                </DropdownMenuItem>
-              )}
-            </>
-          )}
           {isDesktop && (
             <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setIsSharingOpen(true)}>
+                <MonitorSmartphone />
+                Share on Network…
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() =>
@@ -327,6 +295,12 @@ export function AppMenuButton({
             openRecent(path)
           }}
           open={isPickerOpen}
+        />
+      )}
+      {isDesktop && (
+        <NetworkSharingDialog
+          onOpenChange={setIsSharingOpen}
+          open={isSharingOpen}
         />
       )}
     </>

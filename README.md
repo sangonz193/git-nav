@@ -37,6 +37,9 @@ updates itself from signed releases.
   would delete grouped by reason.
 - Every worktree beside the repository, openable in Git Nav, an editor, a terminal or the file
   manager.
+- One window for all of it: every project sits in a resizable sidebar that ⌘B folds away, each
+  expanding to its worktrees, ⌘1 to ⌘9 (Ctrl on Windows and Linux) switch between them, and any of
+  them can open in a window of its own. The windows open at quit come back on the next launch.
 
 Pull request state reads through the [`gh` CLI](https://cli.github.com), so it uses the GitHub login
 you already have. Without it, everything else still works. Remotes are fetched and GitHub is read

@@ -7,8 +7,7 @@ use tauri::{AppHandle, Emitter};
 use crate::storage::{data_dir, malformed_settings_path, with_locked_file, write_json_atomically};
 use crate::git::{git_output_bytes, project_id, worktree_name, worktree_path};
 use crate::window::update_recent_menu;
-
-const RECENT_PROJECTS_CLEARED_EVENT: &str = "recent-projects-cleared";
+use crate::window_sessions::WindowSession;
 
 const SIDEBAR_PROJECTS_CHANGED_EVENT: &str = "sidebar-projects-changed";
 
@@ -73,14 +72,8 @@ pub(crate) struct DirectoryListing {
     entries: Vec<DirectoryEntry>,
 }
 
-#[derive(Clone)]
-pub(crate) struct OpenWorktree {
-    pub(crate) project_id: String,
-    pub(crate) worktree_path: String,
-}
-
 #[derive(Clone, Default)]
-pub(crate) struct OpenWorktrees(pub(crate) Arc<Mutex<HashMap<String, OpenWorktree>>>);
+pub(crate) struct OpenWorktrees(pub(crate) Arc<Mutex<HashMap<String, WindowSession>>>);
 
 
 #[derive(Default, Deserialize, Serialize)]
@@ -241,10 +234,6 @@ fn save_recent_path(repository_path: &str, app: Option<&AppHandle>) -> Result<()
 pub(crate) fn clear_recent_paths(app: Option<&AppHandle>) -> Result<(), String> {
     write_recent_paths(Vec::new())?;
     update_recent_menu(app);
-    if let Some(app) = app {
-        app.emit(RECENT_PROJECTS_CLEARED_EVENT, ())
-            .map_err(|error| error.to_string())?;
-    }
     Ok(())
 }
 
@@ -381,8 +370,11 @@ fn project_from_id(id: String, open_worktrees: &OpenWorktrees) -> Result<Project
     {
         let open_worktrees = open_worktrees.0.lock().map_err(|error| error.to_string())?;
         for worktree in &mut worktrees {
-            worktree.is_open = open_worktrees.values().any(|open| {
-                open.project_id == id && open.worktree_path == worktree.path
+            worktree.is_open = open_worktrees.values().any(|session| {
+                session
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.worktree == worktree.path)
             });
         }
     }
@@ -472,6 +464,34 @@ mod tests {
             seeded_sidebar(Ok(vec![path.clone(), id.clone(), format!("{path}/missing")])),
             vec![id]
         );
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
+    fn project_marks_only_worktrees_shown_in_windows_as_open() {
+        let (path, run) = scratch_repository("project-open-worktrees");
+        run(&["commit", "--allow-empty", "--quiet", "-m", "init"]);
+        let linked = format!("{path}-linked");
+        run(&["worktree", "add", "--quiet", "-b", "linked", &linked]);
+        let linked = worktree_path(&linked).unwrap();
+        let open_worktrees = OpenWorktrees::default();
+        open_worktrees.0.lock().unwrap().insert(
+            "main".to_string(),
+            WindowSession {
+                label: "main".to_string(),
+                active: Some(crate::window_sessions::ProjectWorktree {
+                    project: project_id(&path).unwrap(),
+                    worktree: linked.clone(),
+                }),
+            },
+        );
+
+        let project = project_at(&path, &open_worktrees).unwrap();
+        assert_eq!(project.worktrees.len(), 2);
+        assert!(!project.worktrees[0].is_open);
+        assert_eq!(project.worktrees[1].path, linked);
+        assert!(project.worktrees[1].is_open);
+        remove_scratch_repository(&linked);
         remove_scratch_repository(&path);
     }
 
