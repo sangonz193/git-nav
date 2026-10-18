@@ -175,6 +175,42 @@ describe("usableRepositoryLayout", () => {
         path,
       ),
     ).toBeNull()
+    for (const draft of [
+      {},
+      { message: "Draft commit\n\nDetails", amend: true },
+      { message: "", amend: false },
+      { message: "Draft commit" },
+      { amend: true },
+      {
+        message: "Original commit",
+        amend: true,
+        amendHeadSha: "abc",
+        amendBranch: "main",
+        amendHeadMessage: "Original commit",
+      },
+      {
+        amend: true,
+        amendHeadSha: "abc",
+        amendBranch: null,
+        amendHeadMessage: null,
+      },
+      { amendHeadSha: null },
+    ]) {
+      const restored = usableRepositoryLayout(withWorkingTree(draft), path)
+      expect(restored).not.toBeNull()
+      expect(restored?.panels.tree.params).toMatchObject(draft)
+    }
+    for (const draft of [
+      { message: null },
+      { message: 123 },
+      { amend: "true" },
+      { amend: 1 },
+      { amendHeadSha: 123 },
+      { amendBranch: true },
+      { amendHeadMessage: [] },
+    ]) {
+      expect(usableRepositoryLayout(withWorkingTree(draft), path)).toBeNull()
+    }
   })
 
   test("drops a working tree tab whose worktree is gone", async () => {

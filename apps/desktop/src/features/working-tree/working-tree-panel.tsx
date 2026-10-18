@@ -74,6 +74,7 @@ import type {
   WorkingTreePanelUserPreferences,
 } from "@/lib/panel-params"
 import {
+  amendHeadChanged,
   amendMessage,
   areaLabel,
   canCommit,
@@ -81,11 +82,13 @@ import {
   filePaths,
   pendingOperationBlocksCommit,
   persistedWorkingTreePanelParams,
+  restoredAmendingHead,
   selectedFilePathOf,
   workingTreeFileKey,
   workingTreeFiles,
   worktreeName,
   type Area,
+  type AmendingHead,
   type WorkingTree,
   type WorkingTreeFile,
   type WorktreeStatus,
@@ -263,12 +266,11 @@ export function WorkingTreePanel({
 }: IDockviewPanelProps<WorkingTreePanelParams>) {
   const theme = useTheme()
   const [version, setVersion] = useState(0)
-  const [message, setMessage] = useState("")
-  const [amend, setAmend] = useState(false)
-  const amendingHead = useRef<Pick<
-    WorkingTree,
-    "branch" | "headSha" | "headMessage"
-  > | null>(null)
+  const [message, setMessage] = useState(params.message ?? "")
+  const [amend, setAmend] = useState(
+    () => restoredAmendingHead(params) !== null,
+  )
+  const amendingHead = useRef<AmendingHead | null>(restoredAmendingHead(params))
   const resetAmend = useCallback((headMessage: string | null) => {
     const wasAmending = amendingHead.current !== null
     amendingHead.current = null
@@ -281,8 +283,7 @@ export function WorkingTreePanel({
     (snapshot: Snapshot) => {
       if (
         amendingHead.current &&
-        (amendingHead.current.headSha !== snapshot.tree.headSha ||
-          amendingHead.current.branch !== snapshot.tree.branch)
+        amendHeadChanged(amendingHead.current, snapshot.tree)
       ) {
         resetAmend(amendingHead.current.headMessage)
       }
@@ -398,9 +399,20 @@ export function WorkingTreePanel({
         { name: params.name, path: params.path },
         selectedFilePath,
         userPreferences,
+        message,
+        amend,
+        amendingHead.current,
       ),
     )
-  }, [api, params.name, params.path, selectedFilePath, userPreferences])
+  }, [
+    api,
+    params.name,
+    params.path,
+    selectedFilePath,
+    userPreferences,
+    message,
+    amend,
+  ])
 
   // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {

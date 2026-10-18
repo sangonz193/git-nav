@@ -24,6 +24,11 @@ type PanelParams = {
   mergeBase?: unknown
   selectedCommitHashes?: unknown
   selectedFilePath?: unknown
+  message?: unknown
+  amend?: unknown
+  amendHeadSha?: unknown
+  amendBranch?: unknown
+  amendHeadMessage?: unknown
   userPreferences?: unknown
 }
 
@@ -142,6 +147,14 @@ const GRAPH_PARAM_CHECKS = {
 const WORKING_TREE_PARAM_CHECKS = {
   name: isString,
   path: isString,
+  message: isString,
+  amend: isBoolean,
+  amendHeadSha: (value): value is string | null =>
+    value === null || isString(value),
+  amendBranch: (value): value is string | null =>
+    value === null || isString(value),
+  amendHeadMessage: (value): value is string | null =>
+    value === null || isString(value),
   selectedFilePath: (value): value is string | null =>
     value === null || isString(value),
   userPreferences: (value): value is WorkingTreePanelUserPreferences =>
