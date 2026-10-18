@@ -33,6 +33,7 @@ use crate::{
     },
     graph::walk_commit_graph_page,
     desktop::launch_worktree,
+    git::worktree_path,
 };
 
 include!(concat!(env!("OUT_DIR"), "/assets.rs"));
@@ -685,8 +686,8 @@ async fn open_repository(
     Json(args): Json<PathArg>,
 ) -> CommandResult {
     let path = args.path.unwrap_or_default();
-    let project = remember_repository(&path, &state.open_worktrees, None)?;
-    ok(json!({ "path": project.path }))
+    remember_repository(&path, &state.open_worktrees, None)?;
+    ok(json!({ "path": worktree_path(&path)? }))
 }
 
 async fn open_worktree(
@@ -694,8 +695,8 @@ async fn open_worktree(
     Json(args): Json<WorktreeArgs>,
 ) -> CommandResult {
     if args.target == "git-nav" {
-        let project = remember_repository(&args.path, &state.open_worktrees, None)?;
-        return ok(json!({ "path": project.path }));
+        remember_repository(&args.path, &state.open_worktrees, None)?;
+        return ok(json!({ "path": worktree_path(&args.path)? }));
     }
     launch_worktree(&args.path, &args.target)?;
     ok(json!({ "path": args.path }))
