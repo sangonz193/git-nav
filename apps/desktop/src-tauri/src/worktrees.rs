@@ -160,6 +160,7 @@ pub(crate) fn worktree_status(repo_path: String, worktree_paths: Option<Vec<Stri
     let output = git_output_allow_empty(&repo_path, &["worktree", "list", "--porcelain", "-z"])?;
     let worktrees = parse_worktree_records(&output)
         .into_iter()
+        .map(crate::projects::normalize_worktree_record)
         .filter(|worktree| !worktree.is_prunable)
         .filter(|worktree| {
             worktree_paths
