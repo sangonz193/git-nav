@@ -1039,8 +1039,42 @@ describe("branch pull requests", () => {
     const [ref] = displayRefs(["feature"], {
       pullRequests: pullRequests(
         pullRequest(),
-        pullRequest({ remote: "fork" }),
+        pullRequest({
+          remote: "fork",
+          url: "https://github.com/fork/hello-world/pull/12",
+        }),
       ),
+      remotes: ["origin", "fork"],
+    })
+    expect(ref.pullRequests).toEqual([])
+  })
+
+  test("marks an untracked branch when remote aliases have the same PR URLs", () => {
+    const first = pullRequest()
+    const second = pullRequest({
+      number: 42,
+      url: "https://github.com/octocat/hello-world/pull/42",
+    })
+    const [ref] = displayRefs(["feature"], {
+      pullRequests: pullRequests(
+        first,
+        second,
+        { ...second, remote: "fork" },
+        { ...first, remote: "fork" },
+      ),
+      remotes: ["origin", "fork"],
+    })
+    expect(ref.pullRequests).toEqual([first, second])
+  })
+
+  test("leaves an untracked branch unmarked when remote PR lists only overlap", () => {
+    const first = pullRequest()
+    const second = pullRequest({
+      number: 42,
+      url: "https://github.com/octocat/hello-world/pull/42",
+    })
+    const [ref] = displayRefs(["feature"], {
+      pullRequests: pullRequests(first, second, { ...first, remote: "fork" }),
       remotes: ["origin", "fork"],
     })
     expect(ref.pullRequests).toEqual([])

@@ -26,6 +26,12 @@ pub(crate) struct GithubPullRequest {
     merge_commit_sha: Option<String>,
     updated_at: String,
     head: GithubPullRequestHead,
+    base: Option<GithubPullRequestBase>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct GithubPullRequestBase {
+    repo: GithubRepositoryRef,
 }
 
 #[derive(Deserialize)]
@@ -78,15 +84,75 @@ pub(crate) fn github_repository(remote: &str) -> Option<(String, String)> {
 
 /// The GitHub repositories behind a repository's remotes, origin first and each listed once however many
 /// remotes point at it.
-pub(crate) fn github_repositories(repo_path: &str) -> Vec<GithubRepository> {
+pub(crate) fn github_repositories(connection: &Connection, repo_path: &str) -> Vec<GithubRepository> {
     let mut seen = HashSet::new();
-    github_remotes(repo_path)
+    github_remotes(connection, repo_path)
         .into_iter()
         .filter_map(|(_, repository)| seen.insert(repository.clone()).then_some(repository))
         .collect()
 }
 
-fn github_remotes(repo_path: &str) -> Vec<(String, GithubRepository)> {
+// GitHub keeps answering for a renamed repository under its old name, so a remote still using that name is
+// resolved to the current one rather than synced as a second copy of the same pull requests.
+fn github_remotes(connection: &Connection, repo_path: &str) -> Vec<(String, GithubRepository)> {
+    let mut remotes = github_remotes_by_url(repo_path);
+    for (_, GithubRepository { host, repository }) in &mut remotes {
+        if let Ok(Some(renamed)) = renamed_repository(connection, host, repository) {
+            *repository = renamed;
+        }
+    }
+    remotes
+}
+
+fn renamed_repository(connection: &Connection, host: &str, repository: &str) -> Result<Option<String>, String> {
+    connection
+        .query_row(
+            "SELECT renamed_to FROM repository_renames WHERE host = ?1 AND repository = ?2",
+            params![host, repository],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+}
+
+fn record_repository_rename(connection: &mut Connection, host: &str, repository: &str, renamed_to: &str) -> Result<(), String> {
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let execute = |statement: &str, parameters: &[&str]| {
+        transaction
+            .execute(statement, rusqlite::params_from_iter(parameters))
+            .map_err(|error| error.to_string())
+    };
+    execute(
+        "INSERT INTO pull_requests (host, repository, number, head_sha, head_ref, merge_commit_sha, merged_at, state, title, is_draft, updated_at, head_repository, head_repository_resolved)
+         SELECT host, ?3, number, head_sha, head_ref, merge_commit_sha, merged_at, state, title, is_draft, updated_at, head_repository, head_repository_resolved
+         FROM pull_requests WHERE host = ?1 AND repository = ?2
+         ON CONFLICT(host, repository, number) DO UPDATE SET
+           head_sha = excluded.head_sha,
+           head_ref = excluded.head_ref,
+           head_repository = excluded.head_repository,
+           head_repository_resolved = excluded.head_repository_resolved,
+           merge_commit_sha = excluded.merge_commit_sha,
+           merged_at = excluded.merged_at,
+           state = excluded.state,
+           title = excluded.title,
+           is_draft = excluded.is_draft,
+           updated_at = excluded.updated_at
+         WHERE excluded.updated_at >= pull_requests.updated_at",
+        &[host, repository, renamed_to],
+    )?;
+    execute("DELETE FROM pull_requests WHERE host = ?1 AND repository = ?2", &[host, repository])?;
+    execute("DELETE FROM pull_request_syncs WHERE host = ?1 AND repository = ?2", &[host, repository])?;
+    execute("UPDATE repository_renames SET renamed_to = ?3 WHERE host = ?1 AND renamed_to = ?2", &[host, repository, renamed_to])?;
+    execute(
+        "INSERT INTO repository_renames (host, repository, renamed_to) VALUES (?1, ?2, ?3)
+         ON CONFLICT(host, repository) DO UPDATE SET renamed_to = excluded.renamed_to",
+        &[host, repository, renamed_to],
+    )?;
+    execute("DELETE FROM repository_renames WHERE host = ?1 AND repository = ?2", &[host, renamed_to])?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn github_remotes_by_url(repo_path: &str) -> Vec<(String, GithubRepository)> {
     let remotes = git_output_allow_empty(repo_path, &["remote", "--verbose"]).unwrap_or_default();
     parse_github_remotes(&remotes, |host| {
         if std::env::var("GH_HOST").is_ok_and(|configured| host.eq_ignore_ascii_case(&configured)) {
@@ -406,6 +472,25 @@ fn migrate_pull_request_database(connection: &mut Connection) -> Result<(), Stri
             .map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
+    if version < 6 {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        // Dropping the ETags makes the next sync read a page in full, which is where a rename shows up.
+        transaction
+            .execute_batch(
+                "
+                CREATE TABLE repository_renames (
+                  host TEXT NOT NULL,
+                  repository TEXT NOT NULL,
+                  renamed_to TEXT NOT NULL,
+                  PRIMARY KEY (host, repository)
+                );
+                UPDATE pull_request_syncs SET etag = NULL;
+                INSERT INTO schema_migrations (version) VALUES (6);
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -575,6 +660,15 @@ fn sync_pull_requests_with(
             break;
         }
     }
+    let renamed_to = pull_requests
+        .iter()
+        .find_map(|pull_request| pull_request.base.as_ref())
+        .map(|base| base.repo.full_name.clone())
+        .filter(|base| base != repository);
+    if let Some(renamed_to) = renamed_to {
+        record_repository_rename(connection, host, repository, &renamed_to)?;
+        return sync_pull_requests_with(connection, host, &renamed_to, request);
+    }
     store_pull_requests(connection, host, repository, &pull_requests, first_page_etag.as_deref())?;
     hydrate_head_repositories(connection, host, repository, rate_limit, &mut request)
 }
@@ -664,11 +758,11 @@ fn rank_branch_pull_requests(host: &str, repository: &str, remote: &str, rows: V
 }
 
 fn pull_requests_by_branch(repo_path: &str, database_path: PathBuf) -> Result<Vec<BranchPullRequest>, String> {
-    let remotes = github_remotes(repo_path);
+    let connection = pull_request_database(database_path)?;
+    let remotes = github_remotes(&connection, repo_path);
     if remotes.is_empty() {
         return Err("Only GitHub remotes are supported.".to_string());
     }
-    let connection = pull_request_database(database_path)?;
     let mut statement = connection
         .prepare(
             "
@@ -812,7 +906,7 @@ mod tests {
         let version = connection
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         connection
             .execute(
                 "INSERT INTO pull_requests (host, repository, number, head_sha, head_ref, state, title, is_draft, updated_at) VALUES ('github.com', 'octocat/hello-world', 1, 'abc', 'feature', 'open', 'A title', 0, '2026-01-01T00:00:00Z')",
@@ -840,6 +934,7 @@ mod tests {
         connection.execute_batch(
             "ALTER TABLE pull_requests DROP COLUMN head_repository;
              ALTER TABLE pull_requests DROP COLUMN head_repository_resolved;
+             DROP TABLE repository_renames;
              DELETE FROM schema_migrations WHERE version >= 4;
              INSERT INTO pull_requests (host, repository, number, head_sha, head_ref, state, title, updated_at)
              VALUES ('github.com', 'upstream/repo', 1, 'a', 'feature', 'open', 'First', '2026-01-01T00:00:00Z');
@@ -970,6 +1065,7 @@ mod tests {
         connection.execute_batch(
             "ALTER TABLE pull_requests DROP COLUMN head_repository;
              ALTER TABLE pull_requests DROP COLUMN head_repository_resolved;
+             DROP TABLE repository_renames;
              DELETE FROM schema_migrations WHERE version >= 4;
              INSERT INTO pull_requests (host, repository, number, head_sha, head_ref, state, title, updated_at)
              VALUES ('github.com', 'upstream/repo', 1, 'a', NULL, 'open', 'Legacy', '2025-01-01T00:00:00Z'),
@@ -1487,7 +1583,7 @@ mod tests {
         store_pull_requests(&mut connection, "github.com", "fork/repo", &pulls[..1], None).unwrap();
         connection.close().unwrap();
 
-        let entries = pull_requests_by_branch(&repo_path, database_path).unwrap();
+        let entries = pull_requests_by_branch(&repo_path, database_path.clone()).unwrap();
         let mut identities = entries.iter().map(|entry| (entry.remote.as_str(), entry.repository.as_str(), entry.branch.as_str(), entry.number)).collect::<Vec<_>>();
         identities.sort();
         assert_eq!(identities, vec![
@@ -1497,8 +1593,108 @@ mod tests {
             ("origin", "upstream/repo", "feature", 1),
             ("upstream", "upstream/repo", "feature", 2),
         ]);
-        assert_eq!(github_repositories(&repo_path).len(), 2);
+        assert_eq!(github_repositories(&pull_request_database(database_path).unwrap(), &repo_path).len(), 2);
         remove_scratch_repository(&repo_path);
+    }
+
+    #[test]
+    fn resolves_remotes_that_still_use_a_renamed_repository_name() {
+        use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+        let (repo_path, run) = scratch_repository("pr-renamed-repository");
+        run(&["remote", "add", "origin", "https://github.com/owner/new.git"]);
+        run(&["remote", "add", "stale", "https://github.com/owner/old.git"]);
+        let database_path = PathBuf::from(&repo_path).join("pull-requests.sqlite");
+        let mut connection = pull_request_database(database_path.clone()).unwrap();
+        let pull = serde_json::json!({
+            "number":1,"title":"Feature","state":"open","draft":false,"updated_at":"2026-01-01T00:00:00Z",
+            "head":{"ref":"feature","sha":"a","repo":{"full_name":"owner/new"}},
+            "base":{"repo":{"full_name":"owner/new"}}
+        });
+        let pulls = serde_json::from_value::<Vec<GithubPullRequest>>(serde_json::json!([pull])).unwrap();
+        store_pull_requests(&mut connection, "github.com", "owner/old", &pulls, Some("shared")).unwrap();
+        let older_pulls = serde_json::from_value::<Vec<GithubPullRequest>>(serde_json::json!([{
+            "number":2,"title":"Older merged PR","state":"closed","draft":false,"updated_at":"2025-01-01T00:00:00Z",
+            "merged_at":"2025-01-01T00:00:00Z","merge_commit_sha":"merged",
+            "head":{"ref":"older-feature","sha":"b","repo":{"full_name":"owner/new"}}
+        }])).unwrap();
+        store_pull_requests(&mut connection, "github.com", "owner/old", &older_pulls, None).unwrap();
+        migrate_pull_request_database(&mut connection).unwrap();
+        connection.execute("DELETE FROM schema_migrations WHERE version = 6", []).unwrap();
+        connection.execute("DROP TABLE repository_renames", []).unwrap();
+        migrate_pull_request_database(&mut connection).unwrap();
+        assert_eq!(stored_etag(&connection, "github.com", "owner/old").unwrap(), None);
+
+        let mut endpoints = Vec::new();
+        sync_pull_requests_with(&mut connection, "github.com", "owner/old", |_, endpoint, _| {
+            endpoints.push(endpoint.to_string());
+            Ok(GithubResponse {
+                status: 200,
+                etag: Some("shared".to_string()),
+                rate_limit: None,
+                retry_after: None,
+                body: serde_json::to_vec(&serde_json::json!([pull])).unwrap(),
+            })
+        }).unwrap();
+
+        assert_eq!(endpoints.first(), Some(&pulls_endpoint("owner/old", "all", 1)));
+        assert_eq!(endpoints.last(), Some(&pulls_endpoint("owner/new", "all", 1)));
+        assert!(!has_synchronized(&connection, "github.com", "owner/old").unwrap());
+        assert!(has_synchronized(&connection, "github.com", "owner/new").unwrap());
+        assert_eq!(
+            github_repositories(&connection, &repo_path),
+            vec![GithubRepository { host: "github.com".to_string(), repository: "owner/new".to_string() }]
+        );
+        connection.close().unwrap();
+
+        let entries = pull_requests_by_branch(&repo_path, database_path).unwrap();
+        let mut identities = entries.iter().map(|entry| (entry.remote.as_str(), entry.repository.as_str(), entry.number)).collect::<Vec<_>>();
+        identities.sort();
+        assert_eq!(identities, vec![("origin", "owner/new", 1), ("origin", "owner/new", 2), ("stale", "owner/new", 1), ("stale", "owner/new", 2)]);
+        remove_scratch_repository(&repo_path);
+    }
+
+    #[test]
+    fn repository_rename_keeps_the_latest_cached_pull_request() {
+        for old_updated_at in ["2025-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z"] {
+            let mut connection = Connection::open_in_memory().unwrap();
+            migrate_pull_request_database(&mut connection).unwrap();
+            for (repository, title, updated_at) in [
+                ("owner/old", "Old cache", old_updated_at),
+                ("owner/new", "New cache", "2026-01-01T00:00:00Z"),
+            ] {
+                let pulls = serde_json::from_value::<Vec<GithubPullRequest>>(serde_json::json!([{
+                    "number":1,"title":title,"state":"open","draft":false,"updated_at":updated_at,
+                    "head":{"ref":"feature","sha":title,"repo":{"full_name":"owner/new"}}
+                }])).unwrap();
+                store_pull_requests(&mut connection, "github.com", repository, &pulls, None).unwrap();
+            }
+
+            record_repository_rename(&mut connection, "github.com", "owner/old", "owner/new").unwrap();
+
+            let expected_title = if old_updated_at >= "2026-01-01T00:00:00Z" { "Old cache" } else { "New cache" };
+            let rows = connection.prepare("SELECT repository, title, head_sha FROM pull_requests").unwrap()
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(rows, vec![("owner/new".to_string(), expected_title.to_string(), expected_title.to_string())]);
+        }
+    }
+
+    #[test]
+    fn follows_a_repository_renamed_more_than_once() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate_pull_request_database(&mut connection).unwrap();
+
+        record_repository_rename(&mut connection, "github.com", "owner/first", "owner/second").unwrap();
+        record_repository_rename(&mut connection, "github.com", "owner/second", "owner/third").unwrap();
+
+        assert_eq!(renamed_repository(&connection, "github.com", "owner/first").unwrap().as_deref(), Some("owner/third"));
+        assert_eq!(renamed_repository(&connection, "github.com", "owner/second").unwrap().as_deref(), Some("owner/third"));
+
+        record_repository_rename(&mut connection, "github.com", "owner/third", "owner/first").unwrap();
+
+        assert_eq!(renamed_repository(&connection, "github.com", "owner/first").unwrap(), None);
+        assert_eq!(renamed_repository(&connection, "github.com", "owner/second").unwrap().as_deref(), Some("owner/first"));
     }
 
     #[test]
