@@ -456,11 +456,6 @@ fn fetch_remote(repo_path: &str, remote: &str, is_manual: bool) -> Result<(), St
 }
 
 fn sync_github(repo_path: &str) -> Outcome {
-    let repositories = github_repositories(repo_path);
-    // A repository hosted elsewhere has nothing to sync, which is not a failure worth reporting every minute.
-    if repositories.is_empty() {
-        return Outcome::default();
-    }
     let database_path = match pull_request_database_path() {
         Ok(path) => path,
         Err(error) => return Outcome::failed(error),
@@ -469,6 +464,11 @@ fn sync_github(repo_path: &str) -> Outcome {
         Ok(connection) => connection,
         Err(error) => return Outcome::failed(error),
     };
+    let repositories = github_repositories(&connection, repo_path);
+    // A repository hosted elsewhere has nothing to sync, which is not a failure worth reporting every minute.
+    if repositories.is_empty() {
+        return Outcome::default();
+    }
     sync_github_repositories(&repositories, |host, repository| sync_pull_requests(&mut connection, host, repository))
 }
 

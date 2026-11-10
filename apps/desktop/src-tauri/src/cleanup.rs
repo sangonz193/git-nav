@@ -457,7 +457,10 @@ fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
 fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(String, String)> {
     let mut edges: HashSet<_> = local_squash_merges(repo_path).into_iter().collect();
     // Pull requests still cover squashes whose conflict resolution changed the content on the way in.
-    let repositories = github_repositories(repo_path);
+    let Ok(connection) = pull_request_database(database_path) else {
+        return edges.into_iter().collect();
+    };
+    let repositories = github_repositories(&connection, repo_path);
     if repositories.is_empty() {
         return edges.into_iter().collect();
     }
@@ -465,9 +468,6 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
         return edges.into_iter().collect();
     };
     let Some(refs) = git_output(repo_path, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]) else {
-        return edges.into_iter().collect();
-    };
-    let Ok(connection) = pull_request_database(database_path) else {
         return edges.into_iter().collect();
     };
     let ref_hashes: HashSet<_> = refs.lines().collect();
@@ -511,12 +511,12 @@ fn checked_out_branches(repo_path: &str) -> Result<HashSet<String>, String> {
 }
 
 fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<Vec<String>, String> {
-    let repositories = github_repositories(repo_path);
+    let connection = pull_request_database(database_path)?;
+    let repositories = github_repositories(&connection, repo_path);
     if repositories.is_empty() {
         return Err("Only GitHub remotes are supported.".to_string());
     }
     let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
-    let connection = pull_request_database(database_path)?;
     let mut statement = connection
         .prepare(
             "

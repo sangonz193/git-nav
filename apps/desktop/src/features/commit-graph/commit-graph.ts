@@ -780,7 +780,18 @@ function branchPullRequests(
     const matches = remotes
       .map((remote) => pullRequests?.get(`${remote}/${branch}`))
       .filter((requests) => requests !== undefined)
-    return matches.length === 1 ? matches[0] : []
+    const first = matches[0] ?? []
+    return (
+        matches.every(
+          (requests) =>
+            requests.length === first.length &&
+            requests.every((request) =>
+              first.some((candidate) => candidate.url === request.url),
+            ),
+        )
+      ) ?
+        first
+      : []
   }
   const remote = remoteOf(upstream, remotes)
   return remote ? (pullRequests?.get(upstream) ?? []) : []
