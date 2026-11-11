@@ -893,6 +893,17 @@ button.commit-ref {
   font-variant-numeric: tabular-nums;
 }
 
+/* Chips are shown only while their names fit, so the one that takes what is left of the row is the only one
+   that gives up width. */
+.commit-graph-refs > .commit-ref {
+  flex-shrink: 0;
+}
+
+.commit-graph-refs > .commit-ref:not(.commit-ref-more):last-child,
+.commit-graph-refs > .commit-ref:has(+ .commit-ref-more) {
+  flex-shrink: 1;
+}
+
 .commit-ref[aria-expanded="true"] {
   background: color-mix(in srgb, var(--foreground) 14%, transparent);
 }
