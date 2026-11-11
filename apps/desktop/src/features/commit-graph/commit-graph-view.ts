@@ -5,6 +5,7 @@ import {
   displayRefs,
   isCurrentCheckout,
   rowChips,
+  startsLane,
   type BranchPullRequest,
   type BranchSync,
   type Commit,
@@ -517,9 +518,13 @@ export function isMarkedCommit(commit: Commit, context: ChipContext) {
 
 // A revealed run keeps a row of its own above its commits, so the run can be folded again from where it was
 // opened. That row carries the count and shares its index with the commit under it.
+// A branch line can open or end on a commit folded into a run, so the run carries that join for the lines
+// on either side of it to meet at. `opens` tells which end of the join is the branch, which it is drawn in.
+export type LaneJoin = { from: number; opens: boolean; to: number }
 export type GraphRow = {
   hidden: number
   index: number
+  joins?: LaneJoin[]
   lanes: number
   revealed?: number
 }
@@ -528,8 +533,6 @@ export type GraphRows = {
   revealedRow: number | null
   rows: GraphRow[]
 }
-
-const ALL_LANES = -1
 
 // Beyond the width a graph can show there is nothing left to draw, so the mask stops at the bits a number holds.
 function activeLaneMask(activeLanes: boolean[]) {
@@ -540,6 +543,108 @@ function activeLaneMask(activeLanes: boolean[]) {
     }
   }
   return mask
+}
+
+function closeRun(rows: GraphRow[], commits: Commit[]) {
+  const run = rows[rows.length - 1]
+  if (!run || run.hidden === 0) {
+    return
+  }
+  const first = run.index
+  const last = run.index + run.hidden - 1
+  const above = first > 0 ? commits[first - 1].activeLanes : []
+  const below = commits[last].activeLanes
+  const origins = new Map(
+    above.flatMap((active, lane) => {
+      const origin = { lane, opened: false }
+      return active ? [[lane, origin] as const] : []
+    }),
+  )
+  for (let index = first; index <= last; index += 1) {
+    const commit = commits[index]
+    // A line that starts inside the run has no origin, so the commit continues whichever incoming line has one.
+    const origin = commit.incomingLanes
+      .map((lane) => origins.get(lane))
+      .find(Boolean)
+    for (const lane of commit.incomingLanes) {
+      if (lane !== commit.lane) {
+        origins.delete(lane)
+      }
+    }
+    if (origin) {
+      origins.set(commit.lane, origin)
+    } else {
+      origins.delete(commit.lane)
+    }
+    for (const lane of commit.parentLanes) {
+      if (lane !== commit.lane && startsLane(commits, index, lane)) {
+        if (origin) {
+          origins.set(lane, { lane: origin.lane, opened: true })
+        } else {
+          origins.delete(lane)
+        }
+      }
+    }
+    if (commit.parentLanes.length === 0) {
+      origins.delete(commit.lane)
+    }
+  }
+  const destinations = new Map(
+    below.flatMap((active, lane) => {
+      const destination = { lane, closed: false }
+      return active ? [[lane, destination] as const] : []
+    }),
+  )
+  for (let index = last; index >= first; index -= 1) {
+    const commit = commits[index]
+    for (const lane of commit.parentLanes) {
+      if (lane !== commit.lane && startsLane(commits, index, lane)) {
+        destinations.delete(lane)
+      }
+    }
+    // A line that ends inside the run has no destination, so the commit continues into whichever line it
+    // merged that has one.
+    const destination = commit.parentLanes
+      .map((lane) => destinations.get(lane))
+      .find(Boolean)
+    for (const lane of commit.incomingLanes) {
+      if (lane !== commit.lane || !destinations.has(lane)) {
+        if (destination) {
+          destinations.set(lane, { lane: destination.lane, closed: true })
+        } else {
+          destinations.delete(lane)
+        }
+      }
+    }
+    if (!commit.incomingLanes.includes(commit.lane)) {
+      destinations.delete(commit.lane)
+    }
+  }
+  const joins = [
+    ...[...destinations].flatMap(([lane, destination]) =>
+      above[lane] && destination.closed ?
+        [{ from: lane, opens: false, to: destination.lane }]
+      : [],
+    ),
+    ...[...origins].flatMap(([lane, origin]) =>
+      below[lane] && origin.opened ?
+        [{ from: origin.lane, opens: true, to: lane }]
+      : [],
+    ),
+  ]
+  // A lane crosses the run only when the line it carries below the run is the one it carried above it, so a
+  // line that ends inside the run is not drawn as one with whichever line takes its lane over.
+  const lanes = activeLaneMask(
+    below.map((_, lane) => {
+      const origin = origins.get(lane)
+      return origin?.lane === lane && !origin.opened
+    }),
+  )
+  rows[rows.length - 1] = {
+    ...run,
+    ...(joins.length > 0 ? { joins } : {}),
+    lanes,
+  }
 }
 
 // Commits arrive in batches, so the rows already built are kept and only the new tail is scanned. A run at the
@@ -568,6 +673,7 @@ export function appendGraphRows(
   for (; index < commits.length; index += 1) {
     const commit = commits[index]
     if (isMarked(commit)) {
+      closeRun(rows, commits)
       revealedRow = null
       rows.push({ hidden: 0, index, lanes: 0 })
       continue
@@ -575,6 +681,7 @@ export function appendGraphRows(
     // Only a commit that would otherwise be folded counts as revealed, so a reveal left on a commit that
     // has since been marked is not one.
     if (revealedRow === null && isRevealed(commit.hash)) {
+      closeRun(rows, commits)
       revealedRow = rows.length
       hasRevealedRuns = true
       rows.push({ hidden: 0, index, lanes: 0, revealed: 0 })
@@ -588,19 +695,11 @@ export function appendGraphRows(
     const run = rows[rows.length - 1]
     if (run && run.hidden > 0) {
       run.hidden += 1
-      run.lanes &= activeLaneMask(commit.activeLanes)
       continue
     }
-    // A lane crosses the run when it is carrying a line on both sides of it, which is what the commit above
-    // the run reports alongside the commits inside it.
-    const above =
-      index > 0 ? activeLaneMask(commits[index - 1].activeLanes) : ALL_LANES
-    rows.push({
-      hidden: 1,
-      index,
-      lanes: activeLaneMask(commit.activeLanes) & above,
-    })
+    rows.push({ hidden: 1, index, lanes: 0 })
   }
+  closeRun(rows, commits)
 
   return { hasRevealedRuns, revealedRow, rows }
 }

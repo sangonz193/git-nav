@@ -39,9 +39,9 @@ function commit(
     refs,
     subject: `subject ${hash}`,
     lane: 0,
-    parentLanes: [],
-    laneCount: 1,
-    incomingLanes: [],
+    parentLanes: activeLanes[0] ? [0] : [],
+    laneCount: activeLanes.length,
+    incomingLanes: [0],
     activeLanes,
   }
 }
@@ -674,6 +674,440 @@ describe("isMarkedCommit", () => {
 describe("appendGraphRows", () => {
   const marked = (commit: Commit) => commit.refs.length > 0
   const nothingRevealed = () => false
+
+  test("a branch opened by a folded merge joins the lane that merged it", () => {
+    const commits = [
+      commit("a", ["main"]),
+      { ...commit("merge", [], [true, true]), parentLanes: [0, 1] },
+      {
+        ...commit("branch", ["topic"], [true, true]),
+        incomingLanes: [1],
+        lane: 1,
+        parentLanes: [1],
+      },
+    ]
+    expect(
+      appendGraphRows(null, commits, marked, nothingRevealed).rows,
+    ).toEqual([
+      { hidden: 0, index: 0, lanes: 0 },
+      {
+        hidden: 1,
+        index: 1,
+        joins: [{ from: 0, opens: true, to: 1 }],
+        lanes: 1,
+      },
+      { hidden: 0, index: 2, lanes: 0 },
+    ])
+  })
+
+  test("a branch forked from a folded commit joins the lane it forked from", () => {
+    const commits = [
+      commit("a", ["main"], [true, true]),
+      { ...commit("fork"), incomingLanes: [0, 1], parentLanes: [0] },
+      commit("b", ["old"]),
+    ]
+    expect(
+      appendGraphRows(null, commits, marked, nothingRevealed).rows,
+    ).toEqual([
+      { hidden: 0, index: 0, lanes: 0 },
+      {
+        hidden: 1,
+        index: 1,
+        joins: [{ from: 1, opens: false, to: 0 }],
+        lanes: 1,
+      },
+      { hidden: 0, index: 2, lanes: 0 },
+    ])
+  })
+
+  test("a branch that opens and ends inside a run joins nothing", () => {
+    const commits = [
+      commit("a", ["main"]),
+      { ...commit("merge", [], [true, true]), parentLanes: [0, 1] },
+      {
+        ...commit("branch", [], [true, true]),
+        incomingLanes: [1],
+        lane: 1,
+        parentLanes: [1],
+      },
+      { ...commit("fork"), incomingLanes: [0, 1], parentLanes: [0] },
+      commit("b", ["old"]),
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({ hidden: 3, index: 1, lanes: 1 })
+  })
+
+  test("a folded tip reusing a merged branch lane has no opening join", () => {
+    const commits = [
+      { ...commit("above", ["main"]), parents: ["merge"] },
+      {
+        ...commit("merge", [], [true, true]),
+        parents: ["fork", "branch"],
+        parentLanes: [0, 1],
+      },
+      {
+        ...commit("branch", [], [true, true]),
+        parents: ["fork"],
+        lane: 1,
+        incomingLanes: [1],
+        parentLanes: [1],
+      },
+      { ...commit("fork"), parents: ["below"], incomingLanes: [0, 1] },
+      {
+        ...commit("tip", [], [true, true]),
+        parents: ["unrelated"],
+        lane: 1,
+        incomingLanes: [],
+        parentLanes: [1],
+      },
+      { ...commit("below", ["old"], [true, true]), parents: ["older"] },
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({ hidden: 4, index: 1, lanes: 1 })
+  })
+
+  test("a closing follows the reused line to its destination below the run", () => {
+    const commits = [
+      {
+        ...commit("above", ["main"], [true, true, true, true]),
+        parents: ["first-fork"],
+      },
+      {
+        ...commit("first-fork", [], [true, true, false, true]),
+        parents: ["merge"],
+        incomingLanes: [0, 2],
+      },
+      {
+        ...commit("merge", [], [true, true, true, true]),
+        parents: ["below", "branch"],
+        parentLanes: [0, 2],
+      },
+      {
+        ...commit("branch", [], [true, true, true, true]),
+        parents: ["inner-fork"],
+        lane: 2,
+        incomingLanes: [2],
+        parentLanes: [2],
+      },
+      {
+        ...commit("inner-fork", [], [true, true, true]),
+        parents: ["last-fork"],
+        lane: 2,
+        incomingLanes: [2, 3],
+        parentLanes: [2],
+      },
+      {
+        ...commit("last-fork", [], [true, true]),
+        parents: ["branch-parent"],
+        lane: 1,
+        incomingLanes: [1, 2],
+        parentLanes: [1],
+      },
+      { ...commit("below", ["old"], [true, true]), parents: ["older"] },
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({
+      hidden: 5,
+      index: 1,
+      joins: [
+        { from: 3, opens: false, to: 1 },
+        { from: 2, opens: false, to: 0 },
+      ],
+      lanes: 3,
+    })
+  })
+
+  test("a root followed by a tip in the same lane does not draw a straight line", () => {
+    const commits = [
+      { ...commit("above", ["main"]), parents: ["root"] },
+      { ...commit("root", [], []), parentLanes: [] },
+      { ...commit("tip"), parents: ["below"], incomingLanes: [] },
+      { ...commit("below", ["old"]), parents: ["older"] },
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({ hidden: 2, index: 1, lanes: 0 })
+  })
+
+  test("chained forks join the outer lane below the run", () => {
+    const commits = [
+      commit("above", ["main"], [true, true, true]),
+      {
+        ...commit("inner", [], [true, true]),
+        lane: 1,
+        incomingLanes: [1, 2],
+        parentLanes: [1],
+      },
+      { ...commit("outer"), incomingLanes: [0, 1], parentLanes: [0] },
+      commit("below", ["old"]),
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({
+      hidden: 2,
+      index: 1,
+      joins: [
+        { from: 1, opens: false, to: 0 },
+        { from: 2, opens: false, to: 0 },
+      ],
+      lanes: 1,
+    })
+  })
+
+  test("chained merges join the outer lane even after the intermediate lane closes", () => {
+    const commits = [
+      commit("above", ["main"]),
+      { ...commit("outer", [], [true, true]), parentLanes: [0, 1] },
+      {
+        ...commit("inner", [], [true, true, true]),
+        lane: 1,
+        incomingLanes: [1],
+        parentLanes: [1, 2],
+      },
+      {
+        ...commit("fork", [], [true, false, true]),
+        incomingLanes: [0, 1],
+        parentLanes: [0],
+      },
+      commit("below", ["old"], [true, false, true]),
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({
+      hidden: 3,
+      index: 1,
+      joins: [{ from: 0, opens: true, to: 2 }],
+      lanes: 1,
+    })
+  })
+
+  test("a lane closed and reopened by the same merge gets both joins", () => {
+    const commits = [
+      commit("above", ["main"], [true, true]),
+      {
+        ...commit("merge", [], [true, true]),
+        incomingLanes: [0, 1],
+        parentLanes: [0, 1],
+      },
+      commit("below", ["old"], [true, true]),
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({
+      hidden: 1,
+      index: 1,
+      joins: [
+        { from: 1, opens: false, to: 0 },
+        { from: 0, opens: true, to: 1 },
+      ],
+      lanes: 1,
+    })
+  })
+
+  test("drops a closing with no active destination below the run", () => {
+    const commits = [
+      commit("above", ["main"], [true, true]),
+      { ...commit("fork", [], []), incomingLanes: [0, 1] },
+      commit("below", ["old"], []),
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({ hidden: 1, index: 1, lanes: 0 })
+  })
+
+  test("a branch opened by the folded default branch tip joins the line that reached the tip", () => {
+    const commits = [
+      {
+        ...commit("feature", ["topic"], [false, true]),
+        parents: ["tip"],
+        lane: 1,
+        incomingLanes: [],
+        parentLanes: [1],
+      },
+      {
+        ...commit("tip", [], [true, true]),
+        parents: ["main-parent", "branch"],
+        incomingLanes: [1],
+        parentLanes: [0, 1],
+      },
+      {
+        ...commit("branch", ["old"], [true, true]),
+        parents: ["main-parent"],
+        lane: 1,
+        incomingLanes: [1],
+        parentLanes: [1],
+      },
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({
+      hidden: 1,
+      index: 1,
+      joins: [
+        { from: 1, opens: false, to: 0 },
+        { from: 1, opens: true, to: 1 },
+      ],
+      lanes: 0,
+    })
+  })
+
+  test("a branch opened below the folded default branch tip joins the line that reached the tip", () => {
+    const commits = [
+      {
+        ...commit("feature", ["topic"], [false, true]),
+        parents: ["tip"],
+        lane: 1,
+        incomingLanes: [],
+        parentLanes: [1],
+      },
+      { ...commit("tip"), parents: ["merge"], incomingLanes: [1] },
+      {
+        ...commit("merge", [], [true, true]),
+        parents: ["main-parent", "branch"],
+        parentLanes: [0, 1],
+      },
+      {
+        ...commit("branch", ["old"], [true, true]),
+        parents: ["main-parent"],
+        lane: 1,
+        incomingLanes: [1],
+        parentLanes: [1],
+      },
+    ]
+    const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
+    expect(run).toEqual({
+      hidden: 2,
+      index: 1,
+      joins: [
+        { from: 1, opens: false, to: 0 },
+        { from: 1, opens: true, to: 1 },
+      ],
+      lanes: 0,
+    })
+  })
+
+  test("a fork that also takes in a folded tip passes the line above it on to the branch it merges", () => {
+    const commits = [
+      {
+        ...commit("feature", ["feature"], [true, true, true]),
+        parents: ["fork"],
+        lane: 2,
+        incomingLanes: [],
+        parentLanes: [2],
+      },
+      {
+        ...commit("old-root", ["old"], [true, false, true]),
+        lane: 1,
+        incomingLanes: [1],
+        parentLanes: [],
+      },
+      {
+        ...commit("tip", [], [true, true, true]),
+        parents: ["fork"],
+        lane: 1,
+        incomingLanes: [],
+        parentLanes: [1],
+      },
+      {
+        ...commit("fork", [], [true, true]),
+        parents: ["merge"],
+        lane: 1,
+        incomingLanes: [1, 2],
+        parentLanes: [1],
+      },
+      {
+        ...commit("merge", [], [true, true, true]),
+        parents: ["main-parent", "branch"],
+        lane: 1,
+        incomingLanes: [1],
+        parentLanes: [1, 2],
+      },
+      {
+        ...commit("branch", ["topic"], [true, true, true]),
+        parents: ["main-parent"],
+        lane: 2,
+        incomingLanes: [2],
+        parentLanes: [2],
+      },
+    ]
+    const [, , run] = appendGraphRows(
+      null,
+      commits,
+      marked,
+      nothingRevealed,
+    ).rows
+    expect(run).toEqual({
+      hidden: 3,
+      index: 2,
+      joins: [
+        { from: 2, opens: false, to: 1 },
+        { from: 2, opens: true, to: 2 },
+      ],
+      lanes: 1,
+    })
+  })
+
+  test("a merge whose own line ends inside the run joins the line it merged", () => {
+    const commits = [
+      { ...commit("above", ["main"]), parents: ["merge"], incomingLanes: [] },
+      {
+        ...commit("topic", ["topic"], [true, true]),
+        parents: ["branch"],
+        lane: 1,
+        incomingLanes: [],
+        parentLanes: [1],
+      },
+      {
+        ...commit("merge", [], [true, true]),
+        parents: ["root", "branch"],
+        parentLanes: [0, 1],
+      },
+      commit("root", [], [false, true]),
+      {
+        ...commit("branch", ["old"], [false, true]),
+        parents: ["older"],
+        lane: 1,
+        incomingLanes: [1],
+        parentLanes: [1],
+      },
+    ]
+    const [, , run] = appendGraphRows(
+      null,
+      commits,
+      marked,
+      nothingRevealed,
+    ).rows
+    expect(run).toEqual({
+      hidden: 2,
+      index: 2,
+      joins: [{ from: 0, opens: false, to: 1 }],
+      lanes: 2,
+    })
+  })
+
+  test.each([31, 32, 33])(
+    "joining lane %i preserves the lower lane mask",
+    (lane) => {
+      const active = Array.from(
+        { length: lane + 1 },
+        (_, index) => index === 0 || index === 1 || index === lane,
+      )
+      const commits = [
+        commit("above", ["main"], active),
+        {
+          ...commit("merge", [], active),
+          incomingLanes: [0, lane],
+          parentLanes: [0, lane],
+        },
+        commit("below", ["old"], active),
+      ]
+      const [, run] = appendGraphRows(
+        null,
+        commits,
+        marked,
+        nothingRevealed,
+      ).rows
+      expect(run.lanes).toBe(3)
+      expect(run.joins).toEqual([
+        { from: lane, opens: false, to: 0 },
+        { from: 0, opens: true, to: lane },
+      ])
+    },
+  )
 
   test("gathers the commits between two refs into one run", () => {
     const commits = [

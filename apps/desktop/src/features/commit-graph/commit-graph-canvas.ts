@@ -177,6 +177,26 @@ export function drawCommitGraph({
         target.stroke()
         target.setLineDash([])
       }
+      const lastIndex = commitIndex + row.hidden - 1
+      const footY = startY + rowHeight / 2
+      const middleY = (startY + footY) / 2
+      for (const { from, opens, to } of row.joins ?? []) {
+        const branchLane = opens ? to : from
+        const branchLanes =
+          unpushedLanes?.[opens ? lastIndex : commitIndex - 1] ?? 0
+        const target = layerFor(
+          branchLane < 31 && Boolean(branchLanes & (1 << branchLane)),
+        )
+        const fromX = GRAPH_GUTTER + from * LANE_WIDTH
+        const toX = GRAPH_GUTTER + to * LANE_WIDTH
+        target.setLineDash(COLLAPSED_DASH)
+        target.strokeStyle = laneColor(branchLane)
+        target.beginPath()
+        target.moveTo(fromX, startY)
+        target.bezierCurveTo(fromX, middleY, toX, middleY, toX, footY)
+        target.stroke()
+        target.setLineDash([])
+      }
       continue
     }
 
