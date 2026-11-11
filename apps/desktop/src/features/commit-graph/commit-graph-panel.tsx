@@ -56,7 +56,6 @@ import { BranchFastForwardDialog } from "./branch-fast-forward-dialog"
 import { drawCommitGraph } from "./commit-graph-canvas"
 import {
   ancestryPath,
-  chipLabel,
   chipName,
   clampGraphWidth,
   displayRefs,
@@ -115,6 +114,7 @@ import { NARROW_SHEET_PANEL_WIDTH, SelectionSheet } from "./selection-sheet"
 import {
   chipMenuEntry,
   dropdownMenuComponents,
+  overflowTooltip,
   rowChip,
   type ChipMenuContext,
 } from "./row-chips"
@@ -1356,7 +1356,7 @@ function CommitGraphPanelContent({
                                 </TooltipTrigger>
                               </DropdownMenuTrigger>
                               <TooltipContent>
-                                {overflowChips.map(chipLabel).join("\n")}
+                                {overflowTooltip(overflowChips)}
                               </TooltipContent>
                             </Tooltip>
                             <DropdownMenuContent>
