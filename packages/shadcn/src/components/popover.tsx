@@ -27,8 +27,9 @@ function PopoverContent({
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}
+        collisionPadding={8}
         className={cn(
-          "z-50 w-72 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-(--overlay-shadow) outline-hidden data-[state=open]:animate-in data-[state=open]:fade-in-0",
+          "z-50 max-h-[var(--radix-popover-content-available-height)] w-72 overflow-x-hidden overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-(--overlay-shadow) outline-hidden data-[state=open]:animate-in data-[state=open]:fade-in-0",
           className,
         )}
         {...props}
