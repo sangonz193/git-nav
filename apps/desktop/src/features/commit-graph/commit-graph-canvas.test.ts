@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 
 import { GRAPH_GUTTER, LANE_WIDTH, type Commit } from "./commit-graph"
 import { drawCommitGraph } from "./commit-graph-canvas"
+import type { GraphRow } from "./commit-graph-view"
 
 type Path = { command: string; values: number[] }
 
@@ -22,7 +23,7 @@ function commit(overrides: Partial<Commit>): Commit {
   }
 }
 
-function pathsFor(commits: Commit[]) {
+function pathsFor(commits: Commit[], rows: GraphRow[] | null = null) {
   const paths: Path[][] = []
   let path: Path[] = []
   const context = {
@@ -70,9 +71,12 @@ function pathsFor(commits: Commit[]) {
     drawCommitGraph({
       canvas,
       commits,
-      height: commits.length * 32,
-      items: commits.map((_, index) => ({ index, start: index * 32 })),
-      rows: null,
+      height: (rows ?? commits).length * 32,
+      items: (rows ?? commits).map((_, index) => ({
+        index,
+        start: index * 32,
+      })),
+      rows,
       scrollTop: 0,
       squashMergeEdges: [],
     })
@@ -147,4 +151,112 @@ test("does not redraw a newly opened lane when it continues on the same lane", (
       (path) => JSON.stringify(path) === JSON.stringify(continuation),
     ),
   ).toHaveLength(1)
+})
+
+test("opens a lane above a collapsed run without a second line beside it", () => {
+  const paths = pathsFor(
+    [
+      commit({
+        hash: "merge",
+        lane: 0,
+        parentLanes: [0, 1],
+        activeLanes: [true, true],
+      }),
+      commit({
+        hash: "hidden",
+        lane: 0,
+        parentLanes: [0],
+        incomingLanes: [0],
+        activeLanes: [true, true],
+      }),
+      commit({
+        hash: "below",
+        lane: 1,
+        incomingLanes: [1],
+        activeLanes: [true],
+      }),
+    ],
+    [
+      { hidden: 0, index: 0, lanes: 0 },
+      { hidden: 1, index: 1, lanes: 3 },
+      { hidden: 0, index: 2, lanes: 0 },
+    ],
+  )
+
+  const mainX = GRAPH_GUTTER
+  const branchX = GRAPH_GUTTER + LANE_WIDTH
+  expect(paths).toEqual([
+    [
+      { command: "moveTo", values: [mainX, 16] },
+      { command: "lineTo", values: [mainX, 48] },
+    ],
+    [
+      { command: "moveTo", values: [mainX, 16] },
+      {
+        command: "bezierCurveTo",
+        values: [mainX, 32, branchX, 32, branchX, 48],
+      },
+    ],
+    [
+      { command: "moveTo", values: [mainX, 48] },
+      { command: "lineTo", values: [mainX, 64] },
+    ],
+    [
+      { command: "moveTo", values: [branchX, 48] },
+      { command: "lineTo", values: [branchX, 64] },
+    ],
+    [
+      { command: "moveTo", values: [mainX, 64] },
+      { command: "lineTo", values: [mainX, 80] },
+    ],
+    [
+      { command: "moveTo", values: [branchX, 64] },
+      { command: "lineTo", values: [branchX, 80] },
+    ],
+    [
+      { command: "moveTo", values: [mainX, 80] },
+      { command: "lineTo", values: [mainX, 112] },
+    ],
+  ])
+})
+
+test("draws straight through the header of a revealed run", () => {
+  const paths = pathsFor(
+    [
+      commit({
+        hash: "above",
+        lane: 0,
+        parentLanes: [0],
+        activeLanes: [true, true],
+      }),
+      commit({
+        hash: "revealed",
+        lane: 1,
+        incomingLanes: [1],
+        activeLanes: [true],
+      }),
+    ],
+    [
+      { hidden: 0, index: 0, lanes: 0 },
+      { hidden: 0, index: 1, lanes: 0, revealed: 1 },
+      { hidden: 0, index: 1, lanes: 0 },
+    ],
+  )
+
+  const mainX = GRAPH_GUTTER
+  const branchX = GRAPH_GUTTER + LANE_WIDTH
+  expect(paths).toEqual([
+    [
+      { command: "moveTo", values: [mainX, 16] },
+      { command: "lineTo", values: [mainX, 80] },
+    ],
+    [
+      { command: "moveTo", values: [branchX, 16] },
+      { command: "lineTo", values: [branchX, 80] },
+    ],
+    [
+      { command: "moveTo", values: [mainX, 80] },
+      { command: "lineTo", values: [mainX, 112] },
+    ],
+  ])
 })
