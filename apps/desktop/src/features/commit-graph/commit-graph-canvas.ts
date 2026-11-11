@@ -9,7 +9,7 @@ import {
   startsLane,
   type Commit,
 } from "./commit-graph"
-import type { GraphRow } from "./commit-graph-view"
+import { isRunHeader, type GraphRow } from "./commit-graph-view"
 
 // Unpushed work keeps the colour of the branch it belongs to and gives up some of its weight instead.
 const UNPUSHED_ALPHA = 0.45
@@ -150,17 +150,17 @@ export function drawCommitGraph({
     const row = rows?.[item.index]
     const commitIndex = row ? row.index : item.index
     const commit = commits[commitIndex]
-    if (!commit || (rows && !row)) {
+    if (!commit || (rows && !row) || isRunHeader(row)) {
       continue
     }
 
     const startY = item.start - scrollTop + rowHeight / 2
-    const endY = startY + rowHeight
     const startX = GRAPH_GUTTER + commit.lane * LANE_WIDTH
     const isLocal = unpushed?.has(commit.hash) ?? false
 
     // A collapsed run draws only the lines that reach across it, so the branches on either side stay joined
-    // while the commits between them keep no place of their own.
+    // while the commits between them keep no place of their own. The row above ends its lines at the middle
+    // of the run and the row below picks them up at its foot, which leaves the half between for the break.
     if (row && row.hidden > 0) {
       const localLanes = unpushedLanes?.[commitIndex] ?? 0
       for (let lane = 0; lane < 31; lane += 1) {
@@ -172,23 +172,42 @@ export function drawCommitGraph({
         target.setLineDash(COLLAPSED_DASH)
         target.strokeStyle = laneColor(lane)
         target.beginPath()
-        target.moveTo(x, startY - rowHeight / 2)
-        target.lineTo(x, endY - rowHeight / 2)
+        target.moveTo(x, startY)
+        target.lineTo(x, startY + rowHeight / 2)
         target.stroke()
         target.setLineDash([])
       }
       continue
     }
 
+    // The header of a revealed run sits between two commits that are next to each other in the history, so
+    // the lines joining them are drawn straight through it.
+    const aboveHeader = rows !== null && isRunHeader(rows[item.index - 1])
+    const belowHeader = rows !== null && isRunHeader(rows[item.index + 1])
+    const aboveRun =
+      (rows?.[item.index - (aboveHeader ? 2 : 1)]?.hidden ?? 0) > 0
+    const belowRun = (rows?.[item.index + 1]?.hidden ?? 0) > 0
+    const topY =
+      startY -
+      rowHeight * (aboveHeader ? 2 : 1) +
+      (aboveRun ? rowHeight / 2 : 0)
+    const endY = startY + rowHeight * (belowHeader ? 2 : 1)
+    const topMiddleY = (topY + startY) / 2
+    const bottomMiddleY = (startY + endY) / 2
+
     const previousCommit = commits[commitIndex - 1]
     const previousActiveLanes = previousCommit?.activeLanes ?? []
 
     const previousLanes = unpushedLanes?.[commitIndex - 1] ?? 0
     for (let lane = 0; lane < previousActiveLanes.length; lane += 1) {
+      if (!previousActiveLanes[lane]) {
+        continue
+      }
+      const incoming = commit.incomingLanes.includes(lane)
+      // The last commit of a run draws nothing, so the row under it carries every line that commit left.
       if (
-        !previousActiveLanes[lane] ||
-        startsLane(commits, commitIndex - 1, lane) ||
-        !commit.incomingLanes.includes(lane)
+        !aboveRun &&
+        (!incoming || startsLane(commits, commitIndex - 1, lane))
       ) {
         continue
       }
@@ -196,16 +215,9 @@ export function drawCommitGraph({
       const x = GRAPH_GUTTER + lane * LANE_WIDTH
       target.strokeStyle = laneColor(lane)
       target.beginPath()
-      target.moveTo(x, startY - rowHeight)
-      if (x !== startX) {
-        target.bezierCurveTo(
-          x,
-          startY - rowHeight / 2,
-          startX,
-          startY - rowHeight / 2,
-          startX,
-          startY,
-        )
+      target.moveTo(x, topY)
+      if (incoming && x !== startX) {
+        target.bezierCurveTo(x, topMiddleY, startX, topMiddleY, startX, startY)
       } else {
         target.lineTo(x, startY)
       }
@@ -213,7 +225,8 @@ export function drawCommitGraph({
     }
 
     const activeLanes = unpushedLanes?.[commitIndex] ?? 0
-    const nextCommit = commits[commitIndex + 1]
+    // The first commit of a run has no place to be joined at, so the lines heading for it run straight down.
+    const nextCommit = belowRun ? undefined : commits[commitIndex + 1]
     for (let lane = 0; lane < commit.activeLanes.length; lane += 1) {
       if (
         !commit.activeLanes[lane] ||
@@ -246,9 +259,9 @@ export function drawCommitGraph({
       } else {
         own.bezierCurveTo(
           startX,
-          startY + rowHeight / 2,
+          bottomMiddleY,
           endX,
-          endY - rowHeight / 2,
+          bottomMiddleY,
           endX,
           endY,
         )

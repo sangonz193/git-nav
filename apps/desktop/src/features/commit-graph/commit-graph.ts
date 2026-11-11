@@ -154,6 +154,8 @@ const CHIP_PULL_REQUEST_WIDTH = 21
 // A pull request number and a sync label are both drawn a size below the ref name they follow.
 const CHIP_MARKER_CHARACTER_WIDTH = 5.2
 const CHIP_MORE_WIDTH = 28
+// A name cut shorter than this no longer tells one branch from another.
+const CHIP_READABLE_CHARACTERS = REF_TAIL_LENGTH * 2
 export const CHIP_GAP = 3
 // Refs share the commit column with the subject, which keeps the rest of it.
 export const REF_BUDGET_SHARE = 0.5
@@ -561,8 +563,8 @@ function chipPriority(chip: RowChip) {
     : refPriority(chip.ref)
 }
 
-// A local branch, a checkout and a stash are what the graph is navigated by, so they keep their place even
-// when the row runs out of width.
+// A local branch, a checkout and a stash are what the graph is navigated by, so the last of them on a row is
+// cut short rather than folded away while enough of its name is left to read.
 function isProtectedChip(chip: RowChip) {
   return (
     chip.kind === "stash" ||
@@ -636,7 +638,16 @@ function chipsWidth(chips: RowChip[], maxWidth: number) {
   )
 }
 
-// How many of the chips fit in the budget, with the lowest priority ones collapsing into a count.
+function readableChipWidth(chip: RowChip) {
+  return (
+    chipWidth(chip, Infinity) -
+    Math.max(0, chipLabel(chip).length - CHIP_READABLE_CHARACTERS) *
+      CHIP_CHARACTER_WIDTH
+  )
+}
+
+// How many of the chips fit in the budget, with the lowest priority ones collapsing into a count. Only the
+// last chip shown gives up width, so the ones before it are counted whole.
 export function visibleChipCount(chips: RowChip[], budget: number) {
   if (chipsWidth(chips, budget) <= budget) {
     return chips.length
@@ -645,8 +656,15 @@ export function visibleChipCount(chips: RowChip[], budget: number) {
   let used = 0
   let count = 0
   for (const chip of chips) {
-    used += chipWidth(chip, budget) + (count > 0 ? CHIP_GAP : 0)
-    if (used > remaining && !isProtectedChip(chip)) {
+    const start = used + (count > 0 ? CHIP_GAP : 0)
+    used = start + chipWidth(chip, budget)
+    if (used > remaining) {
+      if (
+        isProtectedChip(chip) &&
+        start + readableChipWidth(chip) <= remaining
+      ) {
+        count += 1
+      }
       break
     }
     count += 1

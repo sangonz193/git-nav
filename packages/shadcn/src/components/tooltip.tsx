@@ -18,8 +18,7 @@ function TooltipContent({
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
         className={cn(
-          // The text is assembled from several facts joined by newlines, so the lines have to survive.
-          "z-50 max-w-80 rounded-md border bg-popover px-2 py-1 text-xs whitespace-pre-line text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0",
+          "z-50 max-h-[var(--radix-tooltip-content-available-height)] max-w-80 overflow-hidden rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0",
           className,
         )}
         collisionPadding={8}

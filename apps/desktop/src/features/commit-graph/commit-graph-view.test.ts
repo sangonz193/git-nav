@@ -758,11 +758,13 @@ describe("appendGraphRows", () => {
     )
     expect(rows).toEqual([
       { hidden: 0, index: 0, lanes: 0 },
+      { hidden: 0, index: 1, lanes: 0, revealed: 2 },
       { hidden: 0, index: 1, lanes: 0 },
       { hidden: 0, index: 2, lanes: 0 },
       { hidden: 0, index: 3, lanes: 0 },
       { hidden: 2, index: 4, lanes: 1 },
     ])
+    expect(rowIndexOfCommit(rows, 1)).toBe(2)
   })
 
   test("a revealed run carries across the batch that splits it", () => {
@@ -784,7 +786,19 @@ describe("appendGraphRows", () => {
       marked,
       (hash) => hash === "b",
     )
-    expect(continued.rows.map((row) => row.hidden)).toEqual([0, 0, 0, 0])
+    expect(first.rows[1]).toEqual({
+      hidden: 0,
+      index: 1,
+      lanes: 0,
+      revealed: 2,
+    })
+    expect(continued.rows).toEqual([
+      { hidden: 0, index: 0, lanes: 0 },
+      { hidden: 0, index: 1, lanes: 0, revealed: 3 },
+      { hidden: 0, index: 1, lanes: 0 },
+      { hidden: 0, index: 2, lanes: 0 },
+      { hidden: 0, index: 3, lanes: 0 },
+    ])
   })
 
   test("nothing revealed leaves the graph fully folded", () => {

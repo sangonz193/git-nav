@@ -1,4 +1,5 @@
 import { type WorktreeTarget } from "@/lib/navigation"
+import type { ReactNode } from "react"
 import { cn } from "@workspace/shadcn/lib/utils"
 import {
   ContextMenu,
@@ -26,6 +27,9 @@ import {
 } from "@workspace/shadcn/components/tooltip"
 import {
   AppWindow,
+  Archive,
+  Cloud,
+  CloudOff,
   CodeXml,
   Copy,
   ExternalLink,
@@ -42,7 +46,7 @@ import {
 
 import {
   chipLabel,
-  pullRequestDescription,
+  PULL_REQUEST_STATE_LABELS,
   refName,
   refSelection,
   refSyncLabel,
@@ -507,27 +511,109 @@ function chipAriaLabel(chip: RowChip) {
   )
 }
 
-function chipTitle(chip: RowChip) {
+function tooltipFact(icon: ReactNode, children: ReactNode, key?: string) {
+  return (
+    <div
+      className="flex items-start gap-1.5 text-muted-foreground [&_svg]:mt-0.5 [&_svg]:size-3 [&_svg]:shrink-0"
+      key={key}
+    >
+      {icon}
+      <span className="flex min-w-0 flex-col">{children}</span>
+    </div>
+  )
+}
+
+function worktreeFact(worktree: RowWorktree) {
+  const [status, ...details] = worktreeDescription(worktree).split("\n")
+  return tooltipFact(
+    <AppWindow />,
+    <>
+      <span>{status}</span>
+      {details.length > 0 && <span>{details.join(" · ")}</span>}
+    </>,
+    worktree.path,
+  )
+}
+
+function chipTooltip(chip: RowChip) {
   if (chip.kind === "stash") {
-    return [
-      chip.entry.name,
-      chip.entry.message,
-      chip.entry.branch && `On ${chip.entry.branch}`,
-    ]
-      .filter(Boolean)
-      .join("\n")
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="font-medium break-words">
+          {chip.entry.message || chip.entry.name}
+        </div>
+        {tooltipFact(
+          <Archive />,
+          [chip.entry.name, chip.entry.branch && `on ${chip.entry.branch}`]
+            .filter(Boolean)
+            .join(" · "),
+        )}
+      </div>
+    )
   }
   if (chip.kind === "worktree") {
-    return worktreeDescription(chip.worktree)
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="font-medium break-words">{chip.worktree.name}</div>
+        {worktreeFact(chip.worktree)}
+      </div>
+    )
   }
-  return [
-    chip.ref.label,
-    ...chip.ref.pullRequests.map(pullRequestDescription),
-    syncDescription(chip.ref),
-    ...chip.ref.worktrees.map(worktreeDescription),
-  ]
-    .filter(Boolean)
-    .join("\n")
+  const { ref } = chip
+  const sync = syncDescription(ref)
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="font-medium break-words">{ref.label}</div>
+      {sync &&
+        tooltipFact(
+          ref.sync?.upstream && !ref.sync.isGone ? <Cloud /> : <CloudOff />,
+          sync,
+        )}
+      {ref.pullRequests.map((pullRequest) =>
+        tooltipFact(
+          pullRequestIcon(pullRequest.state),
+          <>
+            <span className="text-popover-foreground">
+              {`${ref.pullRequests.length > 1 ? pullRequest.repository : ""}#${pullRequest.number} ${PULL_REQUEST_STATE_LABELS[pullRequest.state]}`}
+            </span>
+            <span className="line-clamp-2">{pullRequest.title}</span>
+          </>,
+          pullRequest.url,
+        ),
+      )}
+      {ref.worktrees.map(worktreeFact)}
+    </div>
+  )
+}
+
+const OVERFLOW_TOOLTIP_LIMIT = 8
+
+// A crowded row can fold away dozens of refs, so the tooltip names the first few and leaves the rest to the
+// menu the chip opens.
+export function overflowTooltip(chips: RowChip[]) {
+  const listed =
+    chips.length <= OVERFLOW_TOOLTIP_LIMIT + 1 ?
+      chips
+    : chips.slice(0, OVERFLOW_TOOLTIP_LIMIT)
+  return (
+    <div className="flex flex-col gap-1">
+      {listed.map((chip, index) => {
+        const Icon = CHIP_ICONS[chip.kind]
+        return tooltipFact(
+          <Icon />,
+          <span className="break-words text-popover-foreground">
+            {chipLabel(chip)}
+          </span>,
+          `${chipLabel(chip)}-${index}`,
+        )
+      })}
+      {chips.length > listed.length && (
+        <div className="text-muted-foreground">
+          {`and ${chips.length - listed.length} more`}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function rowChip(
@@ -626,7 +712,7 @@ export function rowChip(
             </button>
           </TooltipTrigger>
         </ContextMenuTrigger>
-        <TooltipContent>{chipTitle(chip)}</TooltipContent>
+        <TooltipContent>{chipTooltip(chip)}</TooltipContent>
       </Tooltip>
       <ContextMenuContent>
         {chipMenuItems(menus, chip, sha, contextMenuComponents)}

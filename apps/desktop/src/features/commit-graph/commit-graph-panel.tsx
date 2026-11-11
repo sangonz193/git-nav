@@ -32,7 +32,12 @@ import {
   TooltipTrigger,
 } from "@workspace/shadcn/components/tooltip"
 import type { IDockviewPanelProps } from "dockview-react"
-import { ArrowDown, ArrowUp, ChevronsDownUp } from "lucide-react"
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronsDownUp,
+  ChevronsUpDown,
+} from "lucide-react"
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -51,7 +56,6 @@ import { BranchFastForwardDialog } from "./branch-fast-forward-dialog"
 import { drawCommitGraph } from "./commit-graph-canvas"
 import {
   ancestryPath,
-  chipLabel,
   chipName,
   clampGraphWidth,
   displayRefs,
@@ -82,6 +86,7 @@ import {
   commitChips,
   DEFAULT_BRANCH_FILTERS,
   isMarkedCommit,
+  isRunHeader,
   rowIndexOfCommit,
   useViewConfig,
   type BranchFilters,
@@ -109,6 +114,7 @@ import { NARROW_SHEET_PANEL_WIDTH, SelectionSheet } from "./selection-sheet"
 import {
   chipMenuEntry,
   dropdownMenuComponents,
+  overflowTooltip,
   rowChip,
   type ChipMenuContext,
 } from "./row-chips"
@@ -229,16 +235,18 @@ function CommitGraphPanelContent({
     const scrollTop =
       element?.isConnected ? element.scrollTop : savedScrollTop.current
     const row = Math.floor(scrollTop / rowHeight)
+    const rowData = rowsRef.current?.[row]
+    const anchorRow = isRunHeader(rowData) ? row + 1 : row
     const commit =
       commitsRef.current[
-        rowsRef.current ? (rowsRef.current[row]?.index ?? -1) : row
+        rowsRef.current ? (rowsRef.current[anchorRow]?.index ?? -1) : anchorRow
       ]
     refreshAnchor.current =
       commit ?
         {
           commits: commitsRef.current,
           hash: commit.hash,
-          offset: scrollTop - row * rowHeight,
+          offset: scrollTop - anchorRow * rowHeight,
         }
       : null
   }, [rowHeight, savedScrollTop])
@@ -781,8 +789,16 @@ function CommitGraphPanelContent({
     setFilters(next)
   }
 
-  function revealRun(startHash: string) {
-    setRevealed((current) => new Set(current).add(startHash))
+  function toggleRun(hashes: string[], reveal: boolean) {
+    setRevealed((current) => {
+      const next = new Set(current)
+      if (reveal) {
+        hashes.forEach((hash) => next.add(hash))
+      } else {
+        hashes.forEach((hash) => next.delete(hash))
+      }
+      return next
+    })
   }
 
   function onPanelKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
@@ -1211,12 +1227,14 @@ function CommitGraphPanelContent({
             if (!commit) {
               return null
             }
-            if (graphRow && graphRow.hidden > 0) {
+            if (graphRow && (graphRow.hidden > 0 || isRunHeader(graphRow))) {
+              const collapsed = graphRow.hidden > 0
+              const count = collapsed ? graphRow.hidden : graphRow.revealed
               return (
                 <div
                   aria-rowindex={row.index + 2}
                   className="commit-graph-row commit-graph-row-collapsed"
-                  key={commit.hash}
+                  key={`run-${commit.hash}`}
                   role="row"
                   style={{
                     gridTemplateColumns: `${graphWidth}px ${columnTemplate}`,
@@ -1226,12 +1244,24 @@ function CommitGraphPanelContent({
                   <div className="commit-graph-graph-cell" />
                   <div role="gridcell">
                     <button
+                      aria-expanded={!collapsed}
                       className="commit-graph-collapsed-label"
-                      onClick={() => revealRun(commit.hash)}
+                      onClick={() =>
+                        toggleRun(
+                          graphRow.revealed === undefined ?
+                            [commit.hash]
+                          : commits
+                              .slice(index, index + graphRow.revealed)
+                              .map(({ hash }) => hash),
+                          collapsed,
+                        )
+                      }
                       type="button"
                     >
-                      <ChevronsDownUp />
-                      {`${graphRow.hidden} commit${graphRow.hidden === 1 ? "" : "s"}`}
+                      {collapsed ?
+                        <ChevronsUpDown />
+                      : <ChevronsDownUp />}
+                      {`${count} commit${count === 1 ? "" : "s"}`}
                     </button>
                   </div>
                 </div>
@@ -1326,7 +1356,7 @@ function CommitGraphPanelContent({
                                 </TooltipTrigger>
                               </DropdownMenuTrigger>
                               <TooltipContent>
-                                {overflowChips.map(chipLabel).join("\n")}
+                                {overflowTooltip(overflowChips)}
                               </TooltipContent>
                             </Tooltip>
                             <DropdownMenuContent>

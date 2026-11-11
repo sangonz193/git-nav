@@ -515,10 +515,17 @@ export function isMarkedCommit(commit: Commit, context: ChipContext) {
   return commitChips(commit, context).length > 0
 }
 
-export type GraphRow = { hidden: number; index: number; lanes: number }
+// A revealed run keeps a row of its own above its commits, so the run can be folded again from where it was
+// opened. That row carries the count and shares its index with the commit under it.
+export type GraphRow = {
+  hidden: number
+  index: number
+  lanes: number
+  revealed?: number
+}
 export type GraphRows = {
   hasRevealedRuns: boolean
-  revealing: boolean
+  revealedRow: number | null
   rows: GraphRow[]
 }
 
@@ -547,13 +554,13 @@ export function appendGraphRows(
   // A reopened run holds no revealed commit, or it would not have been a run, so what the earlier batches
   // found revealed stands.
   let hasRevealedRuns = previous?.hasRevealedRuns ?? false
-  let revealing = previous?.revealing ?? false
+  let revealedRow = previous?.revealedRow ?? null
   let index = 0
   const last = rows[rows.length - 1]
   if (last && last.hidden > 0) {
     rows.pop()
     index = last.index
-    revealing = false
+    revealedRow = null
   } else if (last) {
     index = last.index + 1
   }
@@ -561,17 +568,20 @@ export function appendGraphRows(
   for (; index < commits.length; index += 1) {
     const commit = commits[index]
     if (isMarked(commit)) {
-      revealing = false
+      revealedRow = null
       rows.push({ hidden: 0, index, lanes: 0 })
       continue
     }
     // Only a commit that would otherwise be folded counts as revealed, so a reveal left on a commit that
     // has since been marked is not one.
-    if (!revealing && isRevealed(commit.hash)) {
-      revealing = true
+    if (revealedRow === null && isRevealed(commit.hash)) {
+      revealedRow = rows.length
       hasRevealedRuns = true
+      rows.push({ hidden: 0, index, lanes: 0, revealed: 0 })
     }
-    if (revealing) {
+    if (revealedRow !== null) {
+      const header = rows[revealedRow]
+      rows[revealedRow] = { ...header, revealed: (header.revealed ?? 0) + 1 }
       rows.push({ hidden: 0, index, lanes: 0 })
       continue
     }
@@ -592,7 +602,11 @@ export function appendGraphRows(
     })
   }
 
-  return { hasRevealedRuns, revealing, rows }
+  return { hasRevealedRuns, revealedRow, rows }
+}
+
+export function isRunHeader(row: GraphRow | undefined) {
+  return row?.revealed !== undefined
 }
 
 // Rows are ordered by the commit they start at, so the row holding a commit is the last one starting at or

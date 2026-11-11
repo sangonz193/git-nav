@@ -568,13 +568,21 @@ describe("visibleChipCount", () => {
     expect(shown.map((chip) => chip.kind)).toEqual(["branch", "branch"])
   })
 
-  test("keeps every local branch even when they overflow on their own", () => {
+  test("cuts the last local branch short while its name still reads", () => {
     const all = chips([
       "a-long-branch-name",
       "another-long-branch-name",
       "a-third-long-branch-name",
     ])
-    expect(visibleChipCount(all, 40)).toBe(3)
+    expect(visibleChipCount(all, 330)).toBe(2)
+  })
+
+  test("folds the local branches a row has no room to name", () => {
+    const all = chips(
+      Array.from({ length: 25 }, (_, index) => `a-long-branch-name-${index}`),
+    )
+    expect(visibleChipCount(all, 380)).toBe(2)
+    expect(visibleChipCount(all, 40)).toBe(1)
   })
 
   test("keeps a stash rather than folding it away", () => {
