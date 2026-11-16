@@ -168,7 +168,7 @@ fn commit(repo_path: &str, message: &str, amend: bool, head_sha: Option<&str>, b
     }
     let output = git_result_with_stdin(&worktree, &arguments, message.as_bytes())?;
     if !output.status.success() {
-        return Ok(failed_operation(&worktree, &output));
+        return Ok(failed_operation(&output, Vec::new()));
     }
     let head = git_output(&worktree, &["log", "-1", "--format=%h %s"]).unwrap_or_default();
     let summary = if amend { format!("Amended {head}.") } else { format!("Committed {head}.") };

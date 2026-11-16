@@ -276,16 +276,24 @@ pub(crate) fn changed_refs(before: &HashMap<String, String>, after: &HashMap<Str
     updates
 }
 
-fn conflicted_files(worktree: &str) -> Vec<String> {
+pub(crate) fn conflicted_files(worktree: &str) -> Vec<String> {
     git_output_allow_empty(worktree, &["diff", "--name-only", "--diff-filter=U"])
         .map(|output| output.lines().map(str::to_string).collect())
         .unwrap_or_default()
 }
 
-pub(crate) fn failed_operation(worktree: &str, output: &Output) -> OperationResult {
+pub(crate) fn failed_operation(output: &Output, files: Vec<String>) -> OperationResult {
     OperationResult::Failed(FailedOperation {
-        files: conflicted_files(worktree),
+        files,
         message: git_error_message(output),
+    })
+}
+
+// Hints advise command-line next steps, such as `git rebase --abort`, that are wrong once the app has undone the operation.
+pub(crate) fn undone_operation(output: &Output, files: Vec<String>) -> OperationResult {
+    OperationResult::Failed(FailedOperation {
+        files,
+        message: readable_git_message(output, false),
     })
 }
 
@@ -297,16 +305,27 @@ pub(crate) fn completed_operation(repo_path: &str, summary: String, before: &Has
 }
 
 pub(crate) fn git_error_message(output: &Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !stderr.is_empty() {
-        return stderr;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        "Git exited without a message.".to_string()
-    } else {
-        stdout
-    }
+    readable_git_message(output, true)
+}
+
+fn readable_git_message(output: &Output, keep_hints: bool) -> String {
+    [&output.stderr, &output.stdout]
+        .into_iter()
+        .map(|bytes| readable_git_output(&String::from_utf8_lossy(bytes), keep_hints))
+        .find(|message| !message.is_empty())
+        .unwrap_or_else(|| "Git exited without a message.".to_string())
+}
+
+// Progress lines are redrawn in place with carriage returns, so only the last redraw of each line is real output.
+fn readable_git_output(output: &str, keep_hints: bool) -> String {
+    output
+        .lines()
+        .filter_map(|line| line.split('\r').rfind(|part| !part.is_empty()))
+        .filter(|line| keep_hints || !line.starts_with("hint:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 pub(crate) fn is_ancestor(repo_path: &str, ancestor: &str, descendant: &str) -> bool {
@@ -323,6 +342,35 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     use crate::graph::walk_commit_graph_page;
     use crate::test_support::scratch_repository;
+
+    fn git_failure(stderr: &str, stdout: &str) -> Output {
+        Output { status: std::process::ExitStatus::default(), stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec() }
+    }
+
+    fn failure_message(result: OperationResult) -> String {
+        let OperationResult::Failed(failure) = result else {
+            panic!("expected a failed operation");
+        };
+        failure.message
+    }
+
+    #[test]
+    fn drops_hints_and_progress_redraws_from_an_undone_operation() {
+        let stderr = "Rebasing (1/1)\rerror: could not apply ea49862... feat: scrim\nhint: Resolve all conflicts manually\nhint: run \"git rebase --continue\".\nCould not apply ea49862... # feat: scrim\n";
+        assert_eq!(
+            failure_message(undone_operation(&git_failure(stderr, ""), Vec::new())),
+            "error: could not apply ea49862... feat: scrim\nCould not apply ea49862... # feat: scrim"
+        );
+        assert_eq!(failure_message(undone_operation(&git_failure("hint: only advice\n", "CONFLICT (content)\n"), Vec::new())), "CONFLICT (content)");
+    }
+
+    #[test]
+    fn keeps_hints_and_drops_progress_redraws_from_other_failures() {
+        let stderr = "Enumerating objects: 1\rEnumerating objects: 3, done.\nTo origin\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to 'origin'\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally.\n";
+        let expected = "Enumerating objects: 3, done.\nTo origin\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to 'origin'\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally.";
+        assert_eq!(failure_message(failed_operation(&git_failure(stderr, ""), Vec::new())), expected);
+        assert_eq!(git_error_message(&git_failure(stderr, "")), expected);
+    }
 
     #[test]
     fn reads_the_major_and_minor_git_version() {
