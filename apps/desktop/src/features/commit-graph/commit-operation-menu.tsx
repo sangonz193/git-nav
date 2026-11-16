@@ -190,7 +190,11 @@ export function OperationDialog({
       invoke<OperationResult>(plan.command, { repoPath, ...plan.args }),
     onSuccess: (result) => {
       if (result.outcome === "failed") {
-        fail([result.message, ...result.files].join("\n"))
+        fail(
+          result.files.length > 0 ?
+            `Conflicts in:\n${result.files.join("\n")}`
+          : result.message,
+        )
         return
       }
       onCompleted(result)

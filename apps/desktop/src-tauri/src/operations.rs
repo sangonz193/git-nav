@@ -1,9 +1,9 @@
 use serde::Deserialize;
 use std::{env, fs, time::SystemTime, time::UNIX_EPOCH};
 use crate::git::{
-    CompletedOperation, FailedOperation, OperationResult, RefUpdate, completed_operation,
+    CompletedOperation, FailedOperation, OperationResult, RefUpdate, completed_operation, conflicted_files,
     failed_operation, git_error_message, git_output, git_output_allow_empty, git_result, ref_shas,
-    resolve_commit, worktree_path,
+    resolve_commit, undone_operation, worktree_path,
 };
 use crate::worktrees::{
     idle_worktree, pending_operation, pending_operation_label, worktree_for_branch,
@@ -59,7 +59,7 @@ pub(crate) fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, br
         if output.status.success() {
             return completed_operation(repo_path, summary, &before);
         }
-        let failure = failed_operation(&worktree, &output);
+        let failure = undone_operation(&output, conflicted_files(&worktree));
         let _ = git_result(&worktree, &["rebase", "--abort"]);
         return Ok(failure);
     }
@@ -71,7 +71,7 @@ pub(crate) fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, br
         if output.status.success() {
             completed_operation(repo_path, summary, &before)
         } else {
-            Ok(failed_operation(&worktree, &output))
+            Ok(undone_operation(&output, conflicted_files(&worktree)))
         }
     });
     discard_temporary_worktree(repo_path, &worktree);
@@ -151,14 +151,20 @@ pub(crate) fn run_worktree_operation(
     abort: Option<&[&str]>,
 ) -> Result<OperationResult, String> {
     let before = ref_shas(repo_path)?;
+    let existing_conflicts = conflicted_files(worktree);
     let output = git_result(worktree, arguments)?;
     if output.status.success() {
         return completed_operation(repo_path, summary, &before);
     }
-    let failure = failed_operation(worktree, &output);
-    if let Some(abort) = abort {
-        let _ = git_result(worktree, abort);
-    }
+    let files = conflicted_files(worktree)
+        .into_iter()
+        .filter(|file| !existing_conflicts.contains(file))
+        .collect();
+    let Some(abort) = abort else {
+        return Ok(failed_operation(&output, files));
+    };
+    let failure = undone_operation(&output, files);
+    let _ = git_result(worktree, abort);
     Ok(failure)
 }
 
@@ -197,7 +203,7 @@ fn checkout_reference(repo_path: &str, reference: &str, options: &CheckoutOption
     if options.stash {
         let stashed = git_result(&worktree, &["stash", "push", "--include-untracked", "--message", CHECKOUT_STASH_MESSAGE])?;
         if !stashed.status.success() {
-            return Ok(failed_operation(&worktree, &stashed));
+            return Ok(failed_operation(&stashed, Vec::new()));
         }
     }
 
@@ -206,7 +212,7 @@ fn checkout_reference(repo_path: &str, reference: &str, options: &CheckoutOption
         if options.stash {
             let _ = git_result(&worktree, &["stash", "pop"]);
         }
-        return Ok(failed_operation(&worktree, &output));
+        return Ok(failed_operation(&output, Vec::new()));
     }
 
     let landed = options.create.clone().unwrap_or_else(|| reference.to_string());
@@ -252,7 +258,7 @@ fn push_reference(repo_path: &str, reference: &str, options: &PushOptions) -> Re
     let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
     let output = git_result(&worktree, &arguments)?;
     if !output.status.success() {
-        return Ok(failed_operation(&worktree, &output));
+        return Ok(failed_operation(&output, Vec::new()));
     }
     let summary = if options.delete {
         format!("Deleted {reference} from {}.", options.remote)
@@ -294,7 +300,7 @@ fn fast_forward_branch(repo_path: &str, branch: &str) -> Result<OperationResult,
         }
         let output = git_result(&worktree, &["merge", "--ff-only", &upstream])?;
         if !output.status.success() {
-            return Ok(failed_operation(&worktree, &output));
+            return Ok(failed_operation(&output, Vec::new()));
         }
         return completed_operation(repo_path, summary, &before);
     }
@@ -332,7 +338,7 @@ fn squash_into_branch(repo_path: &str, worktree: &str, source: &str, into: &str,
     let before = ref_shas(repo_path)?;
     let merged = git_result(worktree, &["merge", "--squash", source])?;
     if !merged.status.success() {
-        let failure = failed_operation(worktree, &merged);
+        let failure = undone_operation(&merged, conflicted_files(worktree));
         let _ = git_result(worktree, &["reset", "--merge"]);
         return Ok(failure);
     }
@@ -342,7 +348,7 @@ fn squash_into_branch(repo_path: &str, worktree: &str, source: &str, into: &str,
     }
     let committed = git_result(worktree, &["commit", "--message", message])?;
     if !committed.status.success() {
-        let failure = failed_operation(worktree, &committed);
+        let failure = undone_operation(&committed, Vec::new());
         let _ = git_result(worktree, &["reset", "--merge"]);
         return Ok(failure);
     }
@@ -540,6 +546,67 @@ mod tests {
     use std::path::Path;
     use crate::worktrees::existing_git_path;
     use crate::test_support::scratch_repository;
+
+    #[test]
+    fn unrelated_failures_do_not_report_existing_conflicts() {
+        let (path, run) = scratch_repository("failure-existing-conflicts");
+        let write = |contents: &str| fs::write(Path::new(&path).join("shared.txt"), contents).unwrap();
+        write("base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "topic"]);
+        write("topic\n");
+        run(&["commit", "--quiet", "--all", "--message", "topic"]);
+        run(&["checkout", "--quiet", "main"]);
+        write("main\n");
+        run(&["commit", "--quiet", "--all", "--message", "main"]);
+        let merge = git_result(&path, &["merge", "topic"]).unwrap();
+        assert!(!merge.status.success());
+        assert_eq!(conflicted_files(&path), vec!["shared.txt"]);
+
+        let remote = Path::new(&path).join("unavailable.git").to_string_lossy().into_owned();
+        run(&["remote", "add", "origin", &remote]);
+        let push = push_reference(
+            &path,
+            "main",
+            &PushOptions { remote: "origin".to_string(), force: false, set_upstream: false, delete: false },
+        ).unwrap();
+        let branch = create_branch_at(&path, "topic", "main", &BranchOptions { checkout: false, track: false }).unwrap();
+        assert_eq!(conflicted_files(&path), vec!["shared.txt"]);
+        fs::remove_dir_all(&path).unwrap();
+
+        let OperationResult::Failed(push) = push else {
+            panic!("pushing to an unavailable remote should fail");
+        };
+        assert!(push.files.is_empty());
+        assert!(push.message.contains(&remote), "{}", push.message);
+        let OperationResult::Failed(branch) = branch else {
+            panic!("creating an existing branch should fail");
+        };
+        assert!(branch.files.is_empty());
+        assert!(branch.message.contains("topic"), "{}", branch.message);
+    }
+
+    #[test]
+    fn reports_conflicts_created_by_applying_a_stash() {
+        let (path, run) = scratch_repository("stash-apply-conflicts");
+        let write = |contents: &str| fs::write(Path::new(&path).join("shared.txt"), contents).unwrap();
+        write("base\n");
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        write("stashed\n");
+        run(&["stash", "push"]);
+        write("main\n");
+        run(&["commit", "--quiet", "--all", "--message", "main"]);
+
+        let result = run_worktree_operation(&path, &path, "Applied stash.".to_string(), &["stash", "apply"], None).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        let OperationResult::Failed(failure) = result else {
+            panic!("applying the stash should conflict");
+        };
+        assert_eq!(failure.files, vec!["shared.txt"]);
+    }
 
     #[test]
     fn carries_uncommitted_work_across_a_stashed_checkout() {
