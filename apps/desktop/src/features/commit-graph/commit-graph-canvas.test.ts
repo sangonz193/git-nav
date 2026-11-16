@@ -23,7 +23,11 @@ function commit(overrides: Partial<Commit>): Commit {
   }
 }
 
-function pathsFor(commits: Commit[], rows: GraphRow[] | null = null) {
+function pathsFor(
+  commits: Commit[],
+  rows: GraphRow[] | null = null,
+  unpushedLanes: number[] = [],
+) {
   const paths: Path[][] = []
   let path: Path[] = []
   const context = {
@@ -38,6 +42,9 @@ function pathsFor(commits: Commit[], rows: GraphRow[] | null = null) {
     },
     bezierCurveTo(...values: number[]) {
       path.push({ command: "bezierCurveTo", values })
+    },
+    drawImage() {
+      paths.push([{ command: "drawImage", values: [] }])
     },
     arc() {},
     clearRect() {},
@@ -79,6 +86,7 @@ function pathsFor(commits: Commit[], rows: GraphRow[] | null = null) {
       rows,
       scrollTop: 0,
       squashMergeEdges: [],
+      unpushedLanes,
     })
   } finally {
     Object.defineProperty(globalThis, "window", {
@@ -260,3 +268,115 @@ test("draws straight through the header of a revealed run", () => {
     ],
   ])
 })
+
+test("joins a branch opened inside a collapsed run to the lane that merged it", () => {
+  const paths = pathsFor(
+    [
+      commit({ hash: "above", lane: 0, parentLanes: [0], activeLanes: [true] }),
+      commit({
+        hash: "merge",
+        lane: 0,
+        parentLanes: [0, 1],
+        incomingLanes: [0],
+        activeLanes: [true, true],
+      }),
+      commit({
+        hash: "branch",
+        lane: 1,
+        incomingLanes: [1],
+        activeLanes: [true],
+      }),
+    ],
+    [
+      { hidden: 0, index: 0, lanes: 0 },
+      {
+        hidden: 1,
+        index: 1,
+        joins: [{ from: 0, opens: true, to: 1 }],
+        lanes: 1,
+      },
+      { hidden: 0, index: 2, lanes: 0 },
+    ],
+  )
+
+  const mainX = GRAPH_GUTTER
+  const branchX = GRAPH_GUTTER + LANE_WIDTH
+  expect(paths).toContainEqual([
+    { command: "moveTo", values: [mainX, 48] },
+    { command: "bezierCurveTo", values: [mainX, 56, branchX, 56, branchX, 64] },
+  ])
+  expect(paths).toContainEqual([
+    { command: "moveTo", values: [branchX, 64] },
+    { command: "lineTo", values: [branchX, 80] },
+  ])
+})
+
+test("joins a branch closed inside a collapsed run to the lane it forked from", () => {
+  const paths = pathsFor(
+    [
+      commit({ hash: "above", activeLanes: [true, true] }),
+      commit({
+        hash: "fork",
+        incomingLanes: [0, 1],
+        parentLanes: [0],
+        activeLanes: [true],
+      }),
+      commit({ hash: "below", activeLanes: [true] }),
+    ],
+    [
+      { hidden: 0, index: 0, lanes: 0 },
+      {
+        hidden: 1,
+        index: 1,
+        joins: [{ from: 1, opens: false, to: 0 }],
+        lanes: 1,
+      },
+      { hidden: 0, index: 2, lanes: 0 },
+    ],
+  )
+
+  const mainX = GRAPH_GUTTER
+  const branchX = GRAPH_GUTTER + LANE_WIDTH
+  expect(paths).toContainEqual([
+    { command: "moveTo", values: [branchX, 48] },
+    { command: "bezierCurveTo", values: [branchX, 56, mainX, 56, mainX, 64] },
+  ])
+  expect(paths).not.toContainEqual([
+    { command: "moveTo", values: [branchX, 48] },
+    { command: "lineTo", values: [branchX, 64] },
+  ])
+})
+
+test.each([31, 32, 33])(
+  "a join on lane %i does not wrap into the unpushed mask",
+  (lane) => {
+    const paths = pathsFor(
+      [commit({ hash: "above" }), commit({ hash: "hidden" })],
+      [
+        {
+          hidden: 1,
+          index: 1,
+          joins: [{ from: lane, opens: false, to: 0 }],
+          lanes: 0,
+        },
+      ],
+      [-1, 0],
+    )
+
+    expect(paths).not.toContainEqual([{ command: "drawImage", values: [] }])
+    expect(paths).toContainEqual([
+      { command: "moveTo", values: [GRAPH_GUTTER + lane * LANE_WIDTH, 16] },
+      {
+        command: "bezierCurveTo",
+        values: [
+          GRAPH_GUTTER + lane * LANE_WIDTH,
+          24,
+          GRAPH_GUTTER,
+          24,
+          GRAPH_GUTTER,
+          32,
+        ],
+      },
+    ])
+  },
+)
