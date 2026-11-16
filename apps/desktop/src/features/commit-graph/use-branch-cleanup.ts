@@ -36,7 +36,7 @@ export function useBranchCleanup({
   pullRequestVersion: number
   refreshGraph: () => void
   repoPath: string
-  worktreeState: string
+  worktreeState: string | null
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
   const cleanMutation = useMutation({
@@ -93,6 +93,7 @@ export function useBranchCleanup({
         options: cleanOptions,
       }),
     // The count stands until a newer one replaces it, so a refresh does not blank the badge on its way through.
+    enabled: worktreeState !== null,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     retry: false,

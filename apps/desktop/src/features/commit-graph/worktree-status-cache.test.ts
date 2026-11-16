@@ -93,6 +93,16 @@ function deferred<T>() {
 }
 
 describe("worktree status cache", () => {
+  test("is loaded only once every worktree has been read", async () => {
+    const path = "/cache/loaded"
+    transport(path)
+    const cache = getWorktreeStatusCache(path)
+    await cache.refresh("current")
+    expect(cache.getSnapshot().isLoaded).toBe(false)
+    await cache.refresh("all")
+    expect(cache.getSnapshot().isLoaded).toBe(true)
+  })
+
   test("retains all four datasets across remounts and isolates repository paths", async () => {
     const path = "/cache/remount"
     const { data } = transport(path)
@@ -106,13 +116,15 @@ describe("worktree status cache", () => {
     const remounted = getWorktreeStatusCache(path)
     expect(remounted).toBe(cache)
     expect(remounted.getSnapshot()).toEqual({
+      isLoaded: true,
       projectWorktrees: [data.project_snapshot.worktrees[0]],
       worktreeStatuses: data.worktree_status,
       repository: data.repository_state,
       stashes: data.stash_list,
     })
-    expect(updates).toBe(4)
+    expect(updates).toBe(5)
     expect(getWorktreeStatusCache("/cache/other").getSnapshot()).toEqual({
+      isLoaded: false,
       projectWorktrees: [],
       worktreeStatuses: [],
       repository: null,
@@ -178,6 +190,7 @@ describe("worktree status cache", () => {
     await completed
     expect(requests).toHaveLength(8)
     expect(cache.getSnapshot()).toEqual({
+      isLoaded: true,
       projectWorktrees: [data.project_snapshot.worktrees[0]],
       worktreeStatuses: data.worktree_status,
       repository: data.repository_state,

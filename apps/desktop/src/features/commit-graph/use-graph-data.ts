@@ -50,7 +50,7 @@ export function useGraphData({
   const [hasOlderCommits, setHasOlderCommits] = useState(false)
   const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(true)
   const worktreeStatusCache = getWorktreeStatusCache(repoPath)
-  const { projectWorktrees, worktreeStatuses, repository, stashes } =
+  const { isLoaded, projectWorktrees, worktreeStatuses, repository, stashes } =
     useSyncExternalStore(
       worktreeStatusCache.subscribe,
       worktreeStatusCache.getSnapshot,
@@ -147,9 +147,11 @@ export function useGraphData({
     }
     return byHead
   }, [worktrees])
+  // Until every worktree has been read once, the state would pass through partial values on its way in, and
+  // each would start a cleanup and fast-forward computation of its own.
   const worktreeState = useMemo(
-    () => worktreeBranchState(worktrees),
-    [worktrees],
+    () => (isLoaded ? worktreeBranchState(worktrees) : null),
+    [isLoaded, worktrees],
   )
   // A stash is drawn on the commit it was made from, which is the only place in the graph it belongs to.
   const stashesByBase = useMemo(() => {
