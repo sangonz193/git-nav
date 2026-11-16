@@ -10,7 +10,8 @@ import {
 import { Button } from "@workspace/shadcn/components/button"
 
 import type { CleanOptions, ViewConfigChange } from "./commit-graph-view"
-import type { CleanupReason, useBranchCleanup } from "./use-branch-cleanup"
+import { cleanupSections } from "./cleanup-sections"
+import type { useBranchCleanup } from "./use-branch-cleanup"
 
 export function BranchCleanupDialog({
   cleanOptions,
@@ -103,39 +104,27 @@ export function BranchCleanupDialog({
           )}
           {preview && preview.length > 0 && (
             <div className="grid gap-3">
-              {[
-                ["Squash-merged pull requests", "squashMergedPullRequest"],
-                ["Merged into the default branch", "mergedIntoDefaultBranch"],
-                [
-                  "Squashed into the default branch",
-                  "squashedIntoDefaultBranch",
-                ],
-              ].map(([label, reason]) => {
-                const candidates = preview.filter((candidate) =>
-                  candidate.reasons.includes(reason as CleanupReason),
-                )
-                return candidates.length === 0 ?
-                    null
-                  : <section className="grid gap-1" key={reason}>
-                      <h3 className="font-medium">{label}</h3>
-                      <ul className="font-mono text-xs text-muted-foreground">
-                        {candidates.map((candidate) => (
-                          <li key={candidate.branch}>
-                            {candidate.branch}
-                            {candidate.missingWorktrees.length > 0 && (
-                              <span
-                                className="font-sans"
-                                title={candidate.missingWorktrees.join("\n")}
-                              >
-                                {" "}
-                                · worktree folder missing
-                              </span>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-              })}
+              {cleanupSections(preview).map(({ candidates, label, reason }) => (
+                <section className="grid gap-1" key={reason}>
+                  <h3 className="font-medium">{label}</h3>
+                  <ul className="font-mono text-xs text-muted-foreground">
+                    {candidates.map((candidate) => (
+                      <li key={candidate.branch}>
+                        {candidate.branch}
+                        {candidate.missingWorktrees.length > 0 && (
+                          <span
+                            className="font-sans"
+                            title={candidate.missingWorktrees.join("\n")}
+                          >
+                            {" "}
+                            · worktree folder missing
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
             </div>
           )}
         </div>

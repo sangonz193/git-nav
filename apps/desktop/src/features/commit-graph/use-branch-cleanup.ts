@@ -11,7 +11,7 @@ type BranchCleanup = {
   failed: string[]
 }
 type CleanResult = { report: string } | { result: BranchCleanup }
-type CleanupCandidate = {
+export type CleanupCandidate = {
   branch: string
   missingWorktrees: string[]
   reasons: CleanupReason[]
