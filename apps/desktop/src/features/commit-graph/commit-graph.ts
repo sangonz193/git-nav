@@ -686,6 +686,31 @@ export function visibleChipCount(chips: RowChip[], budget: number) {
   return Math.max(1, count)
 }
 
+export function sameRef(left: DisplayRef, right: DisplayRef) {
+  return (
+    left.kind === right.kind &&
+    refName(left) === refName(right) &&
+    (left.kind !== "remote" || left.remote === right.remote)
+  )
+}
+
+export function overflowHasSelectedRef(
+  chips: RowChip[],
+  sha: string,
+  selectedRef: { ref: DisplayRef; sha: string } | null,
+) {
+  return (
+    selectedRef !== null &&
+    selectedRef.sha === sha &&
+    chips.some(
+      (chip) =>
+        chip.kind !== "stash" &&
+        chip.kind !== "worktree" &&
+        sameRef(chip.ref, selectedRef.ref),
+    )
+  )
+}
+
 export function chipName(chip: RowChip) {
   if (chip.kind === "stash") {
     return chip.entry.name

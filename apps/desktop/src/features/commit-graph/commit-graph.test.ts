@@ -18,6 +18,7 @@ import {
   indexPullRequests,
   isCurrentCheckout,
   laneColor,
+  overflowHasSelectedRef,
   parentEdgeColor,
   persistedGraphPanelParams,
   persistedSelectionHashes,
@@ -1343,5 +1344,66 @@ describe("startsLane", () => {
 
     expect(masks[1] & 0b1000).toBe(0)
     expect(masks[1] & 0b10000).not.toBe(0)
+  })
+})
+
+describe("overflowHasSelectedRef", () => {
+  const [shown, hidden] = displayRefs(["main", "feature"])
+  const overflow = rowChips([hidden])
+
+  test("matches a selected ref in the overflow by identity", () => {
+    expect(
+      overflowHasSelectedRef(overflow, "a", { ref: { ...hidden }, sha: "a" }),
+    ).toBe(true)
+  })
+
+  test("does not mark overflow when the selected ref is shown", () => {
+    expect(
+      overflowHasSelectedRef(overflow, "a", { ref: shown, sha: "a" }),
+    ).toBe(false)
+  })
+
+  test("does not match a selected ref on another commit", () => {
+    expect(
+      overflowHasSelectedRef(overflow, "a", { ref: hidden, sha: "b" }),
+    ).toBe(false)
+  })
+
+  test("does not mark overflow without a selected ref", () => {
+    expect(overflowHasSelectedRef(overflow, "a", null)).toBe(false)
+  })
+
+  test("ignores stash and worktree chips", () => {
+    const overflow = rowChips(
+      [],
+      [
+        {
+          base: "a",
+          branch: hidden.branch,
+          date: "",
+          message: hidden.label,
+          name: hidden.label,
+          sha: "a",
+        },
+      ],
+      [worktree({ name: hidden.label })],
+    )
+    expect(
+      overflowHasSelectedRef(overflow, "a", { ref: hidden, sha: "a" }),
+    ).toBe(false)
+  })
+
+  test("distinguishes ref kinds and remotes", () => {
+    const [tag] = displayRefs(["tag: feature"])
+    expect(overflowHasSelectedRef(overflow, "a", { ref: tag, sha: "a" })).toBe(
+      false,
+    )
+    const [remote] = displayRefs(["origin/feature"], { remotes: ["origin"] })
+    expect(
+      overflowHasSelectedRef(rowChips([remote]), "a", {
+        ref: { ...remote, remote: "upstream" },
+        sha: "a",
+      }),
+    ).toBe(false)
   })
 })

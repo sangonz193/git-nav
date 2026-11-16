@@ -50,6 +50,7 @@ import {
   refName,
   refSelection,
   refSyncLabel,
+  sameRef,
   splitRefLabel,
   syncDescription,
   worktreeChanges,
@@ -62,7 +63,6 @@ import {
   type StashEntry,
 } from "./commit-graph"
 import { LabelText, OperationMenuItems } from "./commit-operation-menu"
-import { sameRef } from "./use-graph-selection"
 import {
   CHIP_ICONS,
   OPERATION_GROUPS,
