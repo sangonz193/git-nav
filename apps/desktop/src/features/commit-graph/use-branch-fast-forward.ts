@@ -33,7 +33,7 @@ export function useBranchFastForward({
   onCompleted: (result: CompletedOperation) => void
   onError: (message: string | null) => void
   repoPath: string
-  worktreeState: string
+  worktreeState: string | null
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
   const fastForwardMutation = useMutation({
@@ -83,6 +83,7 @@ export function useBranchFastForward({
         repoPath,
         options: cleanOptions,
       }),
+    enabled: worktreeState !== null,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     retry: false,

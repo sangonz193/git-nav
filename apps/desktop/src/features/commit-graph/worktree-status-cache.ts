@@ -15,6 +15,7 @@ type WorktreeStatus = {
 }
 export type WorktreeStatusScope = "all" | "current"
 type Snapshot = {
+  isLoaded: boolean
   projectWorktrees: Worktree[]
   worktreeStatuses: WorktreeStatus[]
   repository: RepositoryState | null
@@ -23,6 +24,7 @@ type Snapshot = {
 
 function createWorktreeStatusCache(repoPath: string) {
   let snapshot: Snapshot = {
+    isLoaded: false,
     projectWorktrees: [],
     worktreeStatuses: [],
     repository: null,
@@ -76,6 +78,9 @@ function createWorktreeStatusCache(repoPath: string) {
         .then((stashes) => publish({ stashes }))
         .catch(() => undefined),
     ])
+    if (scope === "all" && !snapshot.isLoaded) {
+      publish({ isLoaded: true })
+    }
     return error
   }
 
