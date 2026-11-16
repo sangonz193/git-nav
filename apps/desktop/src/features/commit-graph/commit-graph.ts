@@ -142,7 +142,7 @@ export const GRAPH_COLORS = [
 const REF_TAIL_LENGTH = 8
 const DEFAULT_REMOTES = ["origin"]
 // Local branches and stashes are what the graph is navigated by; remotes usually restate a local branch and
-// tags are archival, so those are the ones that give up their place when a row runs out of width.
+// tags are archival, so those are the first to fold into the overflow count when a row runs out of width.
 const CHIP_PRIORITY = { worktree: 2, branch: 3, stash: 4, remote: 5, tag: 6 }
 // Border, padding, the kind icon and the gaps around it, none of which depend on the label.
 const CHIP_FIXED_WIDTH = 32
@@ -669,14 +669,13 @@ export function visibleChipCount(chips: RowChip[], budget: number) {
   const remaining = budget - CHIP_MORE_WIDTH - CHIP_GAP
   let used = 0
   let count = 0
-  for (const chip of chips) {
+  for (const [index, chip] of chips.entries()) {
     const start = used + (count > 0 ? CHIP_GAP : 0)
     used = start + chipWidth(chip, budget)
     if (used > remaining) {
-      if (
-        isProtectedChip(chip) &&
-        start + readableChipWidth(chip) <= remaining
-      ) {
+      // The last chip leaves nothing behind to count, so it can use the room the count would have taken.
+      const room = index === chips.length - 1 ? budget : remaining
+      if (isProtectedChip(chip) && start + readableChipWidth(chip) <= room) {
         count += 1
       }
       break

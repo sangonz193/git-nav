@@ -735,8 +735,8 @@ body {
   overflow: hidden;
 }
 
-/* The group is what the row can spare for refs, and the chips inside it share that width rather than each
-   being clipped to a constant, so a lone branch name renders whole however long it is. */
+/* The group is what the row can spare for refs. Chips are not clipped to a constant width, so a lone branch
+   name renders whole however long it is, and the chips that do not fit fold into the overflow count. */
 .commit-graph-refs {
   display: flex;
   flex: none;

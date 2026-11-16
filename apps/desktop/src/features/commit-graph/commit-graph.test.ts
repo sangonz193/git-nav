@@ -536,7 +536,7 @@ describe("detachedWorktrees", () => {
     ])
   })
 
-  test("never collapses a worktree into the overflow count", () => {
+  test("keeps a worktree ahead of the remotes and tags it outranks", () => {
     const parked = worktree({ name: "wt-rebase", path: "/wt-rebase" })
     const chips = rowChips(
       displayRefs(["main", "origin/other", "tag: v1.0.0"]),
@@ -608,7 +608,11 @@ describe("visibleChipCount", () => {
     expect(visibleChipCount(all, 40)).toBe(1)
   })
 
-  test("keeps a stash rather than folding it away", () => {
+  test("cuts the last chip short rather than counting it alone", () => {
+    expect(visibleChipCount(chips(["main", "x".repeat(40)]), 210)).toBe(2)
+  })
+
+  test("keeps a stash ahead of the remotes and tags it outranks", () => {
     const refs = displayRefs(["main", "origin/staging", "tag: v1.0.0"])
     const all = rowChips(refs, [
       {
