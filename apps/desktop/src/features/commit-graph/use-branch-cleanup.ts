@@ -11,7 +11,11 @@ type BranchCleanup = {
   failed: string[]
 }
 type CleanResult = { report: string } | { result: BranchCleanup }
-type CleanupCandidate = { branch: string; reasons: CleanupReason[] }
+type CleanupCandidate = {
+  branch: string
+  missingWorktrees: string[]
+  reasons: CleanupReason[]
+}
 export type CleanupReason =
   | "squashMergedPullRequest"
   | "mergedIntoDefaultBranch"

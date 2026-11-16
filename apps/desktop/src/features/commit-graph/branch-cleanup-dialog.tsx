@@ -68,7 +68,7 @@ export function BranchCleanupDialog({
             />
             <span>
               Delete branches with no commits ahead of the default branch that
-              are not checked out in any worktree.
+              are not checked out in a worktree that still exists.
             </span>
           </label>
           <label className="flex items-start gap-2">
@@ -120,7 +120,18 @@ export function BranchCleanupDialog({
                       <h3 className="font-medium">{label}</h3>
                       <ul className="font-mono text-xs text-muted-foreground">
                         {candidates.map((candidate) => (
-                          <li key={candidate.branch}>{candidate.branch}</li>
+                          <li key={candidate.branch}>
+                            {candidate.branch}
+                            {candidate.missingWorktrees.length > 0 && (
+                              <span
+                                className="font-sans"
+                                title={candidate.missingWorktrees.join("\n")}
+                              >
+                                {" "}
+                                · worktree folder missing
+                              </span>
+                            )}
+                          </li>
                         ))}
                       </ul>
                     </section>
