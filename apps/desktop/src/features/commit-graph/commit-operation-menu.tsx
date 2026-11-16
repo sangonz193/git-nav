@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query"
+import { showErrorToast } from "@/lib/error-toast"
 import { invoke } from "@/lib/ipc"
 import {
   AlertDialog,
@@ -12,7 +13,7 @@ import {
 import { Button } from "@workspace/shadcn/components/button"
 import { cn } from "@workspace/shadcn/lib/utils"
 import { TriangleAlert } from "lucide-react"
-import { Fragment, useEffect, useMemo, useState } from "react"
+import { Fragment, useEffect, useEffectEvent, useMemo, useState } from "react"
 
 import { splitRefLabel, type Selection } from "./commit-graph"
 import {
@@ -151,17 +152,20 @@ export function OperationMenuItems({
 export function OperationDialog({
   onClose,
   onCompleted,
-  onFailed,
   repoPath,
   request,
 }: {
   onClose: () => void
   onCompleted: (completed: CompletedOperation) => void
-  onFailed: (message: string) => void
   repoPath: string
   request: OperationRequest
 }) {
   const operation = operationById(request.id)
+  const fail = (reason: unknown) => {
+    showErrorToast(`${operationTitle(operation, request)} failed`, reason)
+    onClose()
+  }
+  const failMergeBase = useEffectEvent(fail)
   const [entered, setEntered] = useState<Values>({})
   const [state, setState] = useState<OperationState>({
     branch: null,
@@ -186,12 +190,12 @@ export function OperationDialog({
       invoke<OperationResult>(plan.command, { repoPath, ...plan.args }),
     onSuccess: (result) => {
       if (result.outcome === "failed") {
-        onFailed([result.message, ...result.files].join("\n"))
+        fail([result.message, ...result.files].join("\n"))
         return
       }
       onCompleted(result)
     },
-    onError: (message) => onFailed(String(message)),
+    onError: fail,
   })
 
   useEffect(() => {
@@ -224,11 +228,11 @@ export function OperationDialog({
         (mergeBase) =>
           !disposed && setState((current) => ({ ...current, mergeBase })),
       )
-      .catch((message: unknown) => !disposed && onFailed(String(message)))
+      .catch((message: unknown) => !disposed && failMergeBase(message))
     return () => {
       disposed = true
     }
-  }, [needs.mergeBase, onFailed, repoPath])
+  }, [needs.mergeBase, repoPath])
 
   useEffect(() => {
     const { prediction } = needs

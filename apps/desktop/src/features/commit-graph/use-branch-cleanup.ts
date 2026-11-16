@@ -1,4 +1,5 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
+import { showErrorToast } from "@/lib/error-toast"
 import { invoke } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
 import { useState } from "react"
@@ -24,7 +25,6 @@ export type CleanupReason =
 export function useBranchCleanup({
   cleanOptions,
   graphVersion,
-  onError,
   pullRequestVersion,
   refreshGraph,
   repoPath,
@@ -32,7 +32,6 @@ export function useBranchCleanup({
 }: {
   cleanOptions: CleanOptions
   graphVersion: number
-  onError: (message: string | null) => void
   pullRequestVersion: number
   refreshGraph: () => void
   repoPath: string
@@ -51,7 +50,6 @@ export function useBranchCleanup({
         }),
       }
     },
-    onMutate: () => onError(null),
     onSuccess: (outcome) => {
       setIsConfirmationOpen(false)
       if ("report" in outcome) {
@@ -74,7 +72,7 @@ export function useBranchCleanup({
       toast(title, { description: description.join("\n") })
       refreshGraph()
     },
-    onError: (message) => onError(String(message)),
+    onError: (message) => showErrorToast("Could not delete branches.", message),
   })
   // The badge counts what the dialog would delete, so the candidates are read for the options in force and
   // re-read when the repository changes rather than on a timer of their own.

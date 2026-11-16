@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
+import { showErrorToast } from "@/lib/error-toast"
 import { invoke } from "@/lib/ipc"
 import {
   openPullRequest,
@@ -535,11 +536,13 @@ function CommitGraphPanelContent({
   const { mutate: mutateWorktree } = useMutation({
     mutationFn: ({ path, target }: { path: string; target: WorktreeTarget }) =>
       openWorktree(path, target),
-    onError: (message) => setError(String(message)),
+    onError: (message) =>
+      showErrorToast("Could not open the worktree.", message),
   })
   const { mutate: mutatePullRequest } = useMutation({
     mutationFn: (url: string) => openPullRequest(url),
-    onError: (message) => setError(String(message)),
+    onError: (message) =>
+      showErrorToast("Could not open the pull request.", message),
   })
   const undoMutation = useMutation({
     mutationFn: (updates: RefUpdate[]) =>
@@ -551,7 +554,7 @@ function CommitGraphPanelContent({
     },
     onError: (message) => {
       undoInFlight.current = false
-      setError(String(message))
+      showErrorToast("Could not undo.", message)
     },
   })
   const {
@@ -566,7 +569,6 @@ function CommitGraphPanelContent({
       diffTabs({
         containerApi,
         name: params.name,
-        onError: setError,
         panel: api.id,
         repoPath: params.path,
       }),
@@ -575,7 +577,6 @@ function CommitGraphPanelContent({
   const cleanup = useBranchCleanup({
     cleanOptions,
     graphVersion,
-    onError: setError,
     pullRequestVersion,
     refreshGraph,
     repoPath: params.path,
@@ -586,7 +587,6 @@ function CommitGraphPanelContent({
     graphVersion,
     pullRequestVersion,
     onCompleted: onOperationCompleted,
-    onError: setError,
     repoPath: params.path,
     worktreeState,
   })
@@ -881,7 +881,7 @@ function CommitGraphPanelContent({
     try {
       await navigator.clipboard.writeText(value)
     } catch (message) {
-      setError(String(message))
+      showErrorToast("Could not copy to the clipboard.", message)
     }
   }, [])
 
@@ -1483,10 +1483,6 @@ function CommitGraphPanelContent({
         <OperationDialog
           onClose={() => setRequest(null)}
           onCompleted={onOperationCompleted}
-          onFailed={(message) => {
-            setRequest(null)
-            setError(message)
-          }}
           repoPath={params.path}
           request={request}
         />

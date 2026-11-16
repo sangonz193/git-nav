@@ -1,3 +1,4 @@
+import { showErrorToast } from "@/lib/error-toast"
 import { invoke } from "@/lib/ipc"
 import { panelId } from "@/lib/panel-id"
 import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
@@ -17,13 +18,11 @@ type BranchSelection = { baseRef: string; headRef: string }
 export function diffTabs({
   containerApi,
   name,
-  onError,
   panel,
   repoPath,
 }: {
   containerApi: DockviewApi
   name: string
-  onError: (message: string) => void
   panel: string
   repoPath: string
 }) {
@@ -37,7 +36,7 @@ export function diffTabs({
       })
       const referencePanel = containerApi.getPanel(panel)
       if (!referencePanel) {
-        throw new Error("Could not open a diff tab.")
+        throw new Error("The graph tab is no longer open.")
       }
       containerApi.addPanel({
         component: "diff",
@@ -55,7 +54,7 @@ export function diffTabs({
         ),
       })
     } catch (message) {
-      onError(String(message))
+      showErrorToast("Could not open a diff tab.", message)
     }
   }
 
@@ -63,7 +62,7 @@ export function diffTabs({
     const baseRef = commit.parents[0] ?? EMPTY_TREE_REF
     const referencePanel = containerApi.getPanel(panel)
     if (!referencePanel) {
-      onError("Could not open a commit diff.")
+      showErrorToast("Could not open a commit diff.")
       return
     }
     containerApi.addPanel({
@@ -86,7 +85,7 @@ export function diffTabs({
   function openWorktreeDiff(worktree: RowWorktree) {
     const referencePanel = containerApi.getPanel(panel)
     if (!referencePanel) {
-      onError("Could not open a working tree diff.")
+      showErrorToast("Could not open a working tree diff.")
       return
     }
     containerApi.addPanel({
@@ -108,7 +107,7 @@ export function diffTabs({
   function openWorkingTree(worktree: RowWorktree) {
     const referencePanel = containerApi.getPanel(panel)
     if (!referencePanel) {
-      onError("Could not open a working tree tab.")
+      showErrorToast("Could not open a working tree tab.")
       return
     }
     containerApi.addPanel({
@@ -125,7 +124,7 @@ export function diffTabs({
   function openStashDiff(entry: StashEntry) {
     const referencePanel = containerApi.getPanel(panel)
     if (!referencePanel) {
-      onError("Could not open a stash diff.")
+      showErrorToast("Could not open a stash diff.")
       return
     }
     containerApi.addPanel({
@@ -150,7 +149,7 @@ export function diffTabs({
     const baseRef = rangeBaseHash(selection)
     const referencePanel = containerApi.getPanel(panel)
     if (!baseRef || !referencePanel) {
-      onError("Could not open a range diff.")
+      showErrorToast("Could not open a range diff.")
       return
     }
     containerApi.addPanel({
