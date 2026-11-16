@@ -1,7 +1,7 @@
-import { useMutation } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
 import { invoke } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 
 import type { CompletedOperation } from "./commit-operations"
 import type { CleanOptions } from "./commit-graph-view"
@@ -25,6 +25,7 @@ export function useBranchFastForward({
   onCompleted,
   onError,
   repoPath,
+  worktreeState,
 }: {
   cleanOptions: CleanOptions
   graphVersion: number
@@ -32,10 +33,9 @@ export function useBranchFastForward({
   onCompleted: (result: CompletedOperation) => void
   onError: (message: string | null) => void
   repoPath: string
+  worktreeState: string
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
-  const [preview, setPreview] = useState<FastForwardCandidate[] | null>(null)
-  const [previewError, setPreviewError] = useState<string | null>(null)
   const fastForwardMutation = useMutation({
     mutationFn: () =>
       invoke<BranchFastForward>("fast_forward_merged_branches", {
@@ -68,30 +68,35 @@ export function useBranchFastForward({
     },
     onError: (message) => onError(String(message)),
   })
-  const { isPending: isPreviewPending, mutate: previewCandidates } =
-    useMutation({
-      mutationFn: (options: CleanOptions) =>
-        invoke<FastForwardCandidate[]>("preview_fast_forward_candidates", {
-          repoPath,
-          options,
-        }),
-      onMutate: () => setPreviewError(null),
-      onSuccess: setPreview,
-      onError: (message) => setPreviewError(String(message)),
-    })
   // Cleanup candidates are excluded, so the set depends on the cleanup options in force.
-  useEffect(() => {
-    previewCandidates(cleanOptions)
-  }, [cleanOptions, graphVersion, pullRequestVersion, previewCandidates])
+  const previewQuery = useQuery({
+    queryKey: [
+      "fastForwardCandidates",
+      repoPath,
+      cleanOptions,
+      graphVersion,
+      pullRequestVersion,
+      worktreeState,
+    ],
+    queryFn: () =>
+      invoke<FastForwardCandidate[]>("preview_fast_forward_candidates", {
+        repoPath,
+        options: cleanOptions,
+      }),
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
+  const preview = previewQuery.data ?? null
   return {
     candidateCount:
       preview?.filter((candidate) => !candidate.blocker).length ?? 0,
     fastForward: () => fastForwardMutation.mutate(),
     isConfirmationOpen,
     isPending: fastForwardMutation.isPending,
-    isPreviewPending,
+    isPreviewPending: previewQuery.isFetching,
     preview,
-    previewError,
+    previewError: previewQuery.error && String(previewQuery.error),
     setIsConfirmationOpen,
   }
 }
