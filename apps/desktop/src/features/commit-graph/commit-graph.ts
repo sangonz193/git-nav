@@ -745,6 +745,16 @@ export function worktreeDescription(worktree: RowWorktree) {
     .join("\n")
 }
 
+export function worktreeTooltipFacts(worktree: RowWorktree) {
+  const [, ...details] = worktreeDescription(worktree).split("\n")
+  return [
+    worktree.isCurrent ? "Shown here"
+    : worktree.isOpen ? "Open in Git Nav"
+    : null,
+    ...details,
+  ].filter(Boolean)
+}
+
 export function splitRefLabel(label: string) {
   return label.length <= REF_TAIL_LENGTH ?
       { start: label, end: "" }

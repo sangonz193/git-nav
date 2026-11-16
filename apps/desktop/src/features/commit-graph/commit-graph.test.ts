@@ -38,6 +38,7 @@ import {
   unpushedLanes,
   visibleChipCount,
   worktreeChanges,
+  worktreeTooltipFacts,
   type BranchPullRequest,
   type BranchSync,
   type RowWorktree,
@@ -1405,5 +1406,46 @@ describe("overflowHasSelectedRef", () => {
         sha: "a",
       }),
     ).toBe(false)
+  })
+})
+
+describe("worktreeTooltipFacts", () => {
+  test("shows the current worktree status ahead of its open status", () => {
+    expect(
+      worktreeTooltipFacts(
+        worktree({ branch: "main", isCurrent: true, isOpen: true }),
+      ),
+    ).toEqual(["Shown here"])
+  })
+
+  test("shows when a worktree is open in Git Nav", () => {
+    expect(
+      worktreeTooltipFacts(worktree({ branch: "main", isOpen: true })),
+    ).toEqual(["Open in Git Nav"])
+  })
+
+  test("omits status for a worktree that is neither current nor open", () => {
+    expect(worktreeTooltipFacts(worktree({ branch: "main" }))).toEqual([])
+  })
+
+  test("keeps change counts after the status", () => {
+    expect(
+      worktreeTooltipFacts(
+        worktree({
+          branch: "main",
+          isCurrent: true,
+          changedFiles: 2,
+          untrackedFiles: 3,
+        }),
+      ),
+    ).toEqual(["Shown here", "2 changed, 3 untracked"])
+  })
+
+  test("keeps detached and pending operation details in order", () => {
+    expect(
+      worktreeTooltipFacts(
+        worktree({ pendingOperation: "rebase", changedFiles: 1 }),
+      ),
+    ).toEqual(["Not on a branch", "Currently rebasing", "1 changed"])
   })
 })

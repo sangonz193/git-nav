@@ -55,6 +55,7 @@ import {
   syncDescription,
   worktreeChanges,
   worktreeDescription,
+  worktreeTooltipFacts,
   type DisplayRef,
   type PullRequestState,
   type RowChip,
@@ -552,10 +553,13 @@ function chipTooltip(chip: RowChip) {
     )
   }
   if (chip.kind === "worktree") {
+    const { worktree } = chip
+    const facts = worktreeTooltipFacts(worktree)
     return (
       <div className="flex flex-col gap-1">
-        <div className="font-medium break-words">{chip.worktree.name}</div>
-        {worktreeFact(chip.worktree)}
+        <div className="font-medium break-words">{worktree.name}</div>
+        {facts.length > 0 &&
+          tooltipFact(<AppWindow />, <span>{facts.join(" · ")}</span>)}
       </div>
     )
   }
