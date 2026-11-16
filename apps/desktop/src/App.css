@@ -1494,3 +1494,17 @@ button.commit-ref-selected:hover {
   gap: 6px;
   user-select: none;
 }
+
+/* Outranks Sonner's injected theme rules, which land in an unlayered stylesheet added at runtime. */
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"][data-type="error"] {
+  border-color: color-mix(in srgb, var(--destructive) 55%, transparent);
+  color: var(--destructive);
+}
+
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"][data-type="error"]
+  :is([data-description], [data-close-button]) {
+  border-color: color-mix(in srgb, var(--destructive) 55%, transparent);
+  color: inherit;
+}
