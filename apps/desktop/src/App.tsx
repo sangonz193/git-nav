@@ -15,7 +15,15 @@ export function App() {
     <TooltipProvider delayDuration={400}>
       <AppKeyboardShortcuts />
       <WorkspaceWindow />
-      <Toaster theme={theme} />
+      <Toaster
+        theme={theme}
+        toastOptions={{
+          classNames: {
+            description:
+              "max-h-60 overflow-y-auto break-words whitespace-pre-line",
+          },
+        }}
+      />
       <UpdateCheck />
     </TooltipProvider>
   )

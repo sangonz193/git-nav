@@ -1,4 +1,5 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
+import { showErrorToast } from "@/lib/error-toast"
 import { invoke } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
 import { useState } from "react"
@@ -23,7 +24,6 @@ export function useBranchFastForward({
   graphVersion,
   pullRequestVersion,
   onCompleted,
-  onError,
   repoPath,
   worktreeState,
 }: {
@@ -31,7 +31,6 @@ export function useBranchFastForward({
   graphVersion: number
   pullRequestVersion: number
   onCompleted: (result: CompletedOperation) => void
-  onError: (message: string | null) => void
   repoPath: string
   worktreeState: string | null
 }) {
@@ -42,7 +41,6 @@ export function useBranchFastForward({
         repoPath,
         options: cleanOptions,
       }),
-    onMutate: () => onError(null),
     onSuccess: (result) => {
       setIsConfirmationOpen(false)
       if (result.failed.length) {
@@ -66,7 +64,8 @@ export function useBranchFastForward({
         updates: result.updates,
       })
     },
-    onError: (message) => onError(String(message)),
+    onError: (message) =>
+      showErrorToast("Could not fast-forward branches.", message),
   })
   // Cleanup candidates are excluded, so the set depends on the cleanup options in force.
   const previewQuery = useQuery({
