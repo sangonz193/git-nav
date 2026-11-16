@@ -503,27 +503,30 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
 // git refuses to delete a branch that a worktree has checked out, so offering one would only end in a
 // failure toast. A worktree whose folder is gone still holds its branch, but its record is removed
 // before the branch is deleted, so it does not block cleanup.
-fn checked_out_branches(repo_path: &str) -> Result<HashSet<String>, String> {
-    let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
-    Ok(parse_worktree_records(&worktrees)
-        .into_iter()
-        .filter(|worktree| !worktree.is_detached && !worktree.is_prunable)
-        .map(|worktree| worktree.branch)
-        .collect())
+#[derive(Default)]
+struct BranchWorktrees {
+    checked_out: HashSet<String>,
+    missing: HashMap<String, Vec<String>>,
 }
 
-fn missing_worktrees_by_branch(repo_path: &str) -> Result<HashMap<String, Vec<String>>, String> {
+fn branch_worktrees(repo_path: &str) -> Result<BranchWorktrees, String> {
     let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
-    let mut missing = HashMap::<String, Vec<String>>::new();
-    for worktree in parse_worktree_records(&worktrees) {
-        if !worktree.is_detached && worktree.is_prunable {
-            missing.entry(worktree.branch).or_default().push(worktree.path);
+    let mut branches = BranchWorktrees::default();
+    for worktree in parse_worktree_records(&worktrees).into_iter().filter(|worktree| !worktree.is_detached) {
+        if worktree.is_prunable {
+            branches.missing.entry(worktree.branch).or_default().push(worktree.path);
+        } else {
+            branches.checked_out.insert(worktree.branch);
         }
     }
-    Ok(missing)
+    Ok(branches)
 }
 
-fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<Vec<String>, String> {
+fn merged_branch_candidates(
+    repo_path: &str,
+    database_path: PathBuf,
+    checked_out: &HashSet<String>,
+) -> Result<Vec<String>, String> {
     let connection = pull_request_database(database_path)?;
     let repositories = github_repositories(&connection, repo_path);
     if repositories.is_empty() {
@@ -553,7 +556,6 @@ fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<V
         .into_iter()
         .chain(primary.as_deref())
         .collect::<HashSet<_>>();
-    let checked_out = checked_out_branches(repo_path)?;
 
     Ok(refs
         .split('\n')
@@ -563,7 +565,7 @@ fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<V
         .collect())
 }
 
-fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String> {
+fn merged_local_branch_candidates(repo_path: &str, checked_out: &HashSet<String>) -> Result<Vec<String>, String> {
     let primary = primary_reference(repo_path)?;
     let primary_branch = primary.strip_prefix("origin/").unwrap_or(&primary);
     let protected = ["main", "master", primary_branch]
@@ -581,7 +583,6 @@ fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String
             "refs/heads",
         ],
     )?;
-    let checked_out = checked_out_branches(repo_path)?;
 
     Ok(refs
         .lines()
@@ -593,7 +594,7 @@ fn merged_local_branch_candidates(repo_path: &str) -> Result<Vec<String>, String
 // A squash merge leaves no ancestry and needs no pull request, so the branch it replaced is only
 // recognisable by the content that landed. That is an inference rather than a record, which is why it is
 // offered separately from the rules git and GitHub can prove.
-fn squash_merged_branch_candidates(repo_path: &str) -> Result<Vec<String>, String> {
+fn squash_merged_branch_candidates(repo_path: &str, checked_out: &HashSet<String>) -> Result<Vec<String>, String> {
     let primary = squash_search_reference(repo_path)?;
     let primary_branch = primary
         .strip_prefix("refs/heads/")
@@ -602,7 +603,6 @@ fn squash_merged_branch_candidates(repo_path: &str) -> Result<Vec<String>, Strin
     let protected = ["main", "master", primary_branch].into_iter().collect::<HashSet<_>>();
     let squashed = local_squash_merges(repo_path).into_iter().map(|(tip, _)| tip).collect::<HashSet<_>>();
     let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
-    let checked_out = checked_out_branches(repo_path)?;
 
     Ok(refs
         .split('\n')
@@ -617,9 +617,10 @@ pub(crate) fn cleanup_candidates(
     options: &CleanupOptions,
     database_path: Option<PathBuf>,
 ) -> Result<Vec<CleanupCandidate>, String> {
+    let BranchWorktrees { checked_out, mut missing } = branch_worktrees(repo_path)?;
     let mut candidates = HashMap::new();
     if let Some(database_path) = database_path {
-        for branch in merged_branch_candidates(repo_path, database_path)? {
+        for branch in merged_branch_candidates(repo_path, database_path, &checked_out)? {
             candidates
                 .entry(branch)
                 .or_insert_with(Vec::new)
@@ -627,7 +628,7 @@ pub(crate) fn cleanup_candidates(
         }
     }
     if options.delete_merged_branches {
-        for branch in merged_local_branch_candidates(repo_path)? {
+        for branch in merged_local_branch_candidates(repo_path, &checked_out)? {
             candidates
                 .entry(branch)
                 .or_insert_with(Vec::new)
@@ -635,18 +636,17 @@ pub(crate) fn cleanup_candidates(
         }
     }
     if options.delete_squash_merged_branches {
-        for branch in squash_merged_branch_candidates(repo_path)? {
+        for branch in squash_merged_branch_candidates(repo_path, &checked_out)? {
             candidates
                 .entry(branch)
                 .or_insert_with(Vec::new)
                 .push(CleanupReason::SquashedIntoDefaultBranch);
         }
     }
-    let mut missing_worktrees = missing_worktrees_by_branch(repo_path)?;
     let mut candidates = candidates
         .into_iter()
         .map(|(branch, reasons)| CleanupCandidate {
-            missing_worktrees: missing_worktrees.remove(&branch).unwrap_or_default(),
+            missing_worktrees: missing.remove(&branch).unwrap_or_default(),
             branch,
             reasons,
         })
@@ -702,7 +702,9 @@ pub(crate) async fn inferred_squash_merge_edges(repo_path: String) -> Vec<(Strin
 #[tauri::command]
 pub(crate) async fn squashed_branch_candidates(repo_path: String) -> Result<Vec<String>, String> {
     let database_path = pull_request_database_path()?;
-    tauri::async_runtime::spawn_blocking(move || merged_branch_candidates(&repo_path, database_path))
+    tauri::async_runtime::spawn_blocking(move || {
+        merged_branch_candidates(&repo_path, database_path, &branch_worktrees(&repo_path)?.checked_out)
+    })
         .await
         .map_err(|error| error.to_string())?
 }
@@ -1203,7 +1205,7 @@ mod tests {
         }
         drop(connection);
 
-        let candidates = merged_branch_candidates(&path, database_path).unwrap();
+        let candidates = merged_branch_candidates(&path, database_path, &branch_worktrees(&path).unwrap().checked_out).unwrap();
         let _ = fs::remove_dir_all(&worktree);
         remove_scratch_repository(&path);
 
