@@ -31,6 +31,7 @@ pub(crate) enum CleanupReason {
 pub(crate) struct CleanupCandidate {
     pub(crate) branch: String,
     reasons: Vec<CleanupReason>,
+    missing_worktrees: Vec<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -500,14 +501,26 @@ fn inferred_squash_merges(repo_path: &str, database_path: PathBuf) -> Vec<(Strin
 }
 
 // git refuses to delete a branch that a worktree has checked out, so offering one would only end in a
-// failure toast.
+// failure toast. A worktree whose folder is gone still holds its branch, but its record is removed
+// before the branch is deleted, so it does not block cleanup.
 fn checked_out_branches(repo_path: &str) -> Result<HashSet<String>, String> {
     let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
     Ok(parse_worktree_records(&worktrees)
         .into_iter()
-        .filter(|worktree| !worktree.is_detached)
+        .filter(|worktree| !worktree.is_detached && !worktree.is_prunable)
         .map(|worktree| worktree.branch)
         .collect())
+}
+
+fn missing_worktrees_by_branch(repo_path: &str) -> Result<HashMap<String, Vec<String>>, String> {
+    let worktrees = git_output_allow_empty(repo_path, &["worktree", "list", "--porcelain", "-z"])?;
+    let mut missing = HashMap::<String, Vec<String>>::new();
+    for worktree in parse_worktree_records(&worktrees) {
+        if !worktree.is_detached && worktree.is_prunable {
+            missing.entry(worktree.branch).or_default().push(worktree.path);
+        }
+    }
+    Ok(missing)
 }
 
 fn merged_branch_candidates(repo_path: &str, database_path: PathBuf) -> Result<Vec<String>, String> {
@@ -629,9 +642,14 @@ pub(crate) fn cleanup_candidates(
                 .push(CleanupReason::SquashedIntoDefaultBranch);
         }
     }
+    let mut missing_worktrees = missing_worktrees_by_branch(repo_path)?;
     let mut candidates = candidates
         .into_iter()
-        .map(|(branch, reasons)| CleanupCandidate { branch, reasons })
+        .map(|(branch, reasons)| CleanupCandidate {
+            missing_worktrees: missing_worktrees.remove(&branch).unwrap_or_default(),
+            branch,
+            reasons,
+        })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.branch.cmp(&right.branch));
     Ok(candidates)
@@ -649,21 +667,21 @@ fn delete_cleanup_candidates(
     options: &CleanupOptions,
     database_path: Option<PathBuf>,
 ) -> Result<BranchCleanup, String> {
-    let candidates = cleanup_candidates(repo_path, options, database_path)?
-        .into_iter()
-        .map(|candidate| candidate.branch)
-        .collect::<Vec<_>>();
+    let candidates = cleanup_candidates(repo_path, options, database_path)?;
     let mut deleted = Vec::new();
     let mut failed = Vec::new();
-    for branch in &candidates {
-        if git_succeeds(repo_path, &["branch", "-D", "--", branch]) {
+    for CleanupCandidate { branch, missing_worktrees, .. } in &candidates {
+        let released = missing_worktrees
+            .iter()
+            .all(|worktree| git_succeeds(repo_path, &["worktree", "remove", "--", worktree]));
+        if released && git_succeeds(repo_path, &["branch", "-D", "--", branch]) {
             deleted.push(branch.clone());
         } else {
             failed.push(branch.clone());
         }
     }
     Ok(BranchCleanup {
-        candidates,
+        candidates: candidates.into_iter().map(|candidate| candidate.branch).collect(),
         deleted,
         failed,
     })
@@ -1190,6 +1208,39 @@ mod tests {
         remove_scratch_repository(&path);
 
         assert_eq!(candidates, ["merged"]);
+    }
+
+    #[test]
+    fn releases_a_merged_branch_whose_worktree_folder_is_gone() {
+        let (path, run) = scratch_repository("cleanup-missing-worktree");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        let worktree = |branch: &str| env::temp_dir().join(format!("git-nav-cleanup-missing-{branch}-{}", std::process::id()));
+        for branch in ["missing", "locked"] {
+            run(&["branch", branch]);
+            let _ = fs::remove_dir_all(worktree(branch));
+            run(&["worktree", "add", "--quiet", &worktree(branch).to_string_lossy(), branch]);
+        }
+        run(&["worktree", "lock", &worktree("locked").to_string_lossy()]);
+        for branch in ["missing", "locked"] {
+            fs::remove_dir_all(worktree(branch)).unwrap();
+        }
+
+        let options = CleanupOptions { delete_merged_pull_request_branches: false, delete_merged_branches: true, delete_squash_merged_branches: false };
+        let candidates = cleanup_candidates(&path, &options, None).unwrap();
+        let cleanup = delete_cleanup_candidates(&path, &options, None).unwrap();
+        let branches = git_output(&path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).unwrap();
+        let worktrees = git_output(&path, &["worktree", "list", "--porcelain"]).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].branch, "missing");
+        assert_eq!(candidates[0].missing_worktrees.len(), 1);
+        assert!(candidates[0].missing_worktrees[0].ends_with(&format!("git-nav-cleanup-missing-missing-{}", std::process::id())));
+        assert_eq!(cleanup.deleted, ["missing"]);
+        assert!(cleanup.failed.is_empty());
+        assert_eq!(branches.lines().collect::<Vec<_>>(), ["locked", "main"]);
+        assert!(!worktrees.contains("refs/heads/missing"));
+        assert!(worktrees.contains("refs/heads/locked"), "a locked worktree is kept even when its folder is gone");
     }
 
     #[test]
