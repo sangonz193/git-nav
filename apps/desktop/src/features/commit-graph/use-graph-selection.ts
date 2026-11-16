@@ -13,7 +13,7 @@ import {
   displayRefs,
   persistedSelectionHashes,
   persistedSelectionRestore,
-  refName,
+  sameRef,
   refSelection,
   type BranchPullRequest,
   type BranchSync,
@@ -26,14 +26,6 @@ import {
 type RangeDrag = { anchorIndex: number; focusIndex: number }
 type SelectedRef = { ref: DisplayRef; sha: string }
 type SelectionRange = { anchorHash: string; focusHash: string }
-
-export function sameRef(left: DisplayRef, right: DisplayRef) {
-  return (
-    left.kind === right.kind &&
-    refName(left) === refName(right) &&
-    (left.kind !== "remote" || left.remote === right.remote)
-  )
-}
 
 export function findSelectedRef(
   ref: DisplayRef,

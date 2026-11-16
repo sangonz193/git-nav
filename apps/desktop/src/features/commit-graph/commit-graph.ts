@@ -142,7 +142,7 @@ export const GRAPH_COLORS = [
 const REF_TAIL_LENGTH = 8
 const DEFAULT_REMOTES = ["origin"]
 // Local branches and stashes are what the graph is navigated by; remotes usually restate a local branch and
-// tags are archival, so those are the ones that give up their place when a row runs out of width.
+// tags are archival, so those are the first to fold into the overflow count when a row runs out of width.
 const CHIP_PRIORITY = { worktree: 2, branch: 3, stash: 4, remote: 5, tag: 6 }
 // Border, padding, the kind icon and the gaps around it, none of which depend on the label.
 const CHIP_FIXED_WIDTH = 32
@@ -669,14 +669,13 @@ export function visibleChipCount(chips: RowChip[], budget: number) {
   const remaining = budget - CHIP_MORE_WIDTH - CHIP_GAP
   let used = 0
   let count = 0
-  for (const chip of chips) {
+  for (const [index, chip] of chips.entries()) {
     const start = used + (count > 0 ? CHIP_GAP : 0)
     used = start + chipWidth(chip, budget)
     if (used > remaining) {
-      if (
-        isProtectedChip(chip) &&
-        start + readableChipWidth(chip) <= remaining
-      ) {
+      // The last chip leaves nothing behind to count, so it can use the room the count would have taken.
+      const room = index === chips.length - 1 ? budget : remaining
+      if (isProtectedChip(chip) && start + readableChipWidth(chip) <= room) {
         count += 1
       }
       break
@@ -685,6 +684,31 @@ export function visibleChipCount(chips: RowChip[], budget: number) {
   }
   // A row always shows something, even when its first chip alone is wider than the column allows.
   return Math.max(1, count)
+}
+
+export function sameRef(left: DisplayRef, right: DisplayRef) {
+  return (
+    left.kind === right.kind &&
+    refName(left) === refName(right) &&
+    (left.kind !== "remote" || left.remote === right.remote)
+  )
+}
+
+export function overflowHasSelectedRef(
+  chips: RowChip[],
+  sha: string,
+  selectedRef: { ref: DisplayRef; sha: string } | null,
+) {
+  return (
+    selectedRef !== null &&
+    selectedRef.sha === sha &&
+    chips.some(
+      (chip) =>
+        chip.kind !== "stash" &&
+        chip.kind !== "worktree" &&
+        sameRef(chip.ref, selectedRef.ref),
+    )
+  )
 }
 
 export function chipName(chip: RowChip) {
@@ -719,6 +743,16 @@ export function worktreeDescription(worktree: RowWorktree) {
   ]
     .filter(Boolean)
     .join("\n")
+}
+
+export function worktreeTooltipFacts(worktree: RowWorktree) {
+  const [, ...details] = worktreeDescription(worktree).split("\n")
+  return [
+    worktree.isCurrent ? "Shown here"
+    : worktree.isOpen ? "Open in Git Nav"
+    : null,
+    ...details,
+  ].filter(Boolean)
 }
 
 export function splitRefLabel(label: string) {

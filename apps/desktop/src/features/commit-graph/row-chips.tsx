@@ -50,10 +50,12 @@ import {
   refName,
   refSelection,
   refSyncLabel,
+  sameRef,
   splitRefLabel,
   syncDescription,
   worktreeChanges,
   worktreeDescription,
+  worktreeTooltipFacts,
   type DisplayRef,
   type PullRequestState,
   type RowChip,
@@ -62,7 +64,6 @@ import {
   type StashEntry,
 } from "./commit-graph"
 import { LabelText, OperationMenuItems } from "./commit-operation-menu"
-import { sameRef } from "./use-graph-selection"
 import {
   CHIP_ICONS,
   OPERATION_GROUPS,
@@ -552,10 +553,13 @@ function chipTooltip(chip: RowChip) {
     )
   }
   if (chip.kind === "worktree") {
+    const { worktree } = chip
+    const facts = worktreeTooltipFacts(worktree)
     return (
       <div className="flex flex-col gap-1">
-        <div className="font-medium break-words">{chip.worktree.name}</div>
-        {worktreeFact(chip.worktree)}
+        <div className="font-medium break-words">{worktree.name}</div>
+        {facts.length > 0 &&
+          tooltipFact(<AppWindow />, <span>{facts.join(" · ")}</span>)}
       </div>
     )
   }

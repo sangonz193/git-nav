@@ -66,6 +66,7 @@ import {
   graphCanvasTop,
   isCurrentCheckout,
   laneColor,
+  overflowHasSelectedRef,
   persistedGraphPanelParams,
   REF_BUDGET_SHARE,
   refName,
@@ -1277,6 +1278,11 @@ function CommitGraphPanelContent({
             const chips = commitChips(commit, chipContext)
             const shown = visibleChipCount(chips, refBudget)
             const overflowChips = chips.slice(shown)
+            const overflowSelected = overflowHasSelectedRef(
+              overflowChips,
+              commit.hash,
+              selectedRef,
+            )
             return (
               <ContextMenu key={commit.hash}>
                 <ContextMenuTrigger asChild>
@@ -1348,7 +1354,10 @@ function CommitGraphPanelContent({
                                 <TooltipTrigger asChild>
                                   <button
                                     aria-label={`Show ${overflowChips.length} more ref${overflowChips.length === 1 ? "" : "s"}`}
-                                    className="commit-ref commit-ref-more"
+                                    className={cn(
+                                      "commit-ref commit-ref-more",
+                                      overflowSelected && "commit-ref-selected",
+                                    )}
                                     onPointerDown={(event) =>
                                       event.stopPropagation()
                                     }
