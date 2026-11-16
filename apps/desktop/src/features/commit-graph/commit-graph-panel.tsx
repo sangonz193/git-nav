@@ -269,6 +269,7 @@ function CommitGraphPanelContent({
     stashes,
     stashesByBase,
     sync,
+    worktreeState,
     worktreesByHead,
   } = useGraphData({
     onBeforeReload: captureScrollAnchor,
@@ -577,6 +578,7 @@ function CommitGraphPanelContent({
     pullRequestVersion,
     refreshGraph,
     repoPath: params.path,
+    worktreeState,
   })
   const fastForward = useBranchFastForward({
     cleanOptions,
@@ -585,6 +587,7 @@ function CommitGraphPanelContent({
     onCompleted: onOperationCompleted,
     onError: setError,
     repoPath: params.path,
+    worktreeState,
   })
 
   const updateScroll = useCallback(() => {

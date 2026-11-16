@@ -1,7 +1,7 @@
-import { useMutation } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
 import { invoke } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 
 import type { CleanOptions } from "./commit-graph-view"
 
@@ -28,6 +28,7 @@ export function useBranchCleanup({
   pullRequestVersion,
   refreshGraph,
   repoPath,
+  worktreeState,
 }: {
   cleanOptions: CleanOptions
   graphVersion: number
@@ -35,14 +36,9 @@ export function useBranchCleanup({
   pullRequestVersion: number
   refreshGraph: () => void
   repoPath: string
+  worktreeState: string
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
-  const [cleanPreview, setCleanPreview] = useState<CleanupCandidate[] | null>(
-    null,
-  )
-  const [cleanPreviewError, setCleanPreviewError] = useState<string | null>(
-    null,
-  )
   const cleanMutation = useMutation({
     mutationFn: async (): Promise<CleanResult> => {
       if (!Object.values(cleanOptions).some(Boolean)) {
@@ -80,31 +76,36 @@ export function useBranchCleanup({
     },
     onError: (message) => onError(String(message)),
   })
-  const { isPending: isCleanPreviewPending, mutate: previewCleanCandidates } =
-    useMutation({
-      mutationFn: (options: CleanOptions) =>
-        invoke<CleanupCandidate[]>("preview_cleanup_candidates", {
-          repoPath,
-          options,
-        }),
-      // The count stands until a newer one replaces it, so a refresh does not blank the badge on its way through.
-      onMutate: () => setCleanPreviewError(null),
-      onSuccess: setCleanPreview,
-      onError: (message) => setCleanPreviewError(String(message)),
-    })
   // The badge counts what the dialog would delete, so the candidates are read for the options in force and
   // re-read when the repository changes rather than on a timer of their own.
-  useEffect(() => {
-    previewCleanCandidates(cleanOptions)
-  }, [cleanOptions, graphVersion, previewCleanCandidates, pullRequestVersion])
+  const previewQuery = useQuery({
+    queryKey: [
+      "cleanupCandidates",
+      repoPath,
+      cleanOptions,
+      graphVersion,
+      pullRequestVersion,
+      worktreeState,
+    ],
+    queryFn: () =>
+      invoke<CleanupCandidate[]>("preview_cleanup_candidates", {
+        repoPath,
+        options: cleanOptions,
+      }),
+    // The count stands until a newer one replaces it, so a refresh does not blank the badge on its way through.
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
+  const cleanPreview = previewQuery.data ?? null
   return {
     candidateCount: cleanPreview?.length ?? 0,
     clean: () => cleanMutation.mutate(),
     isConfirmationOpen,
     isPending: cleanMutation.isPending,
-    isPreviewPending: isCleanPreviewPending,
+    isPreviewPending: previewQuery.isFetching,
     preview: cleanPreview,
-    previewError: cleanPreviewError,
+    previewError: previewQuery.error && String(previewQuery.error),
     setIsConfirmationOpen,
   }
 }

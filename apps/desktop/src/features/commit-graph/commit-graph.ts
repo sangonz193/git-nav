@@ -528,6 +528,20 @@ export function worktreeChanges({ changedFiles, untrackedFiles }: RowWorktree) {
   return changedFiles + untrackedFiles
 }
 
+// A worktree's branch gates cleanup and its dirtiness or pending operation gates fast-forward, none of which moves a ref; untracked files never block.
+export function worktreeBranchState(worktrees: RowWorktree[]) {
+  return worktrees
+    .map((worktree) =>
+      [
+        worktree.path,
+        worktree.branch ?? "",
+        worktree.changedFiles > 0,
+        worktree.pendingOperation ?? "",
+      ].join("\0"),
+    )
+    .join("\n")
+}
+
 // A worktree is drawn inside the chip naming the branch it holds. One that holds no branch, which is what a
 // rebase or a bisect leaves behind, has no such chip and becomes one of its own.
 export function detachedWorktrees(

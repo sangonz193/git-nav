@@ -41,7 +41,23 @@ import {
   type BranchSync,
   type RowWorktree,
   type StashEntry,
+  worktreeBranchState,
 } from "./commit-graph"
+
+function worktree(overrides: Partial<RowWorktree>) {
+  return {
+    branch: null,
+    changedFiles: 0,
+    head: "a",
+    isCurrent: false,
+    isOpen: false,
+    name: "wt",
+    path: "/wt",
+    pendingOperation: null,
+    untrackedFiles: 0,
+    ...overrides,
+  }
+}
 
 function commit(hash: string, parents: string[] = [], refs: string[] = []) {
   return {
@@ -163,17 +179,7 @@ describe("commitSelection", () => {
 
 describe("displayRefs", () => {
   const worktrees = [
-    {
-      branch: "main",
-      changedFiles: 0,
-      head: "a",
-      isCurrent: false,
-      isOpen: false,
-      name: "main",
-      path: "/repos/main",
-      pendingOperation: null,
-      untrackedFiles: 0,
-    },
+    worktree({ branch: "main", name: "main", path: "/repos/main" }),
   ]
 
   test("orders the current checkout, other worktrees, locals, remotes and tags", () => {
@@ -491,19 +497,6 @@ describe("rowChips", () => {
 })
 
 describe("detachedWorktrees", () => {
-  const worktree = (overrides: Partial<RowWorktree>): RowWorktree => ({
-    branch: null,
-    changedFiles: 0,
-    head: "a",
-    isCurrent: false,
-    isOpen: false,
-    name: "wt",
-    path: "/wt",
-    pendingOperation: null,
-    untrackedFiles: 0,
-    ...overrides,
-  })
-
   test("leaves out a worktree already drawn inside a branch chip", () => {
     const held = worktree({ branch: "main", name: "main", path: "/repos/main" })
     const refs = displayRefs(["main"], { worktrees: [held] })
@@ -552,6 +545,36 @@ describe("detachedWorktrees", () => {
     )
     const shown = chips.slice(0, visibleChipCount(chips, 200))
     expect(shown.map((chip) => chip.kind)).toEqual(["worktree", "branch"])
+  })
+})
+
+describe("worktreeBranchState", () => {
+  const state = worktreeBranchState([worktree({ branch: "feature" })])
+
+  test("changes when a worktree is removed, switches branch, gains edits or starts an operation", () => {
+    expect(worktreeBranchState([])).not.toBe(state)
+    expect(worktreeBranchState([worktree({ branch: "other" })])).not.toBe(state)
+    expect(
+      worktreeBranchState([worktree({ branch: "feature", changedFiles: 1 })]),
+    ).not.toBe(state)
+    expect(
+      worktreeBranchState([
+        worktree({ branch: "feature", pendingOperation: "rebase" }),
+      ]),
+    ).not.toBe(state)
+  })
+
+  test("ignores commits, untracked files and further edits", () => {
+    expect(
+      worktreeBranchState([
+        worktree({ branch: "feature", head: "b", untrackedFiles: 3 }),
+      ]),
+    ).toBe(state)
+    expect(
+      worktreeBranchState([worktree({ branch: "feature", changedFiles: 4 })]),
+    ).toBe(
+      worktreeBranchState([worktree({ branch: "feature", changedFiles: 1 })]),
+    )
   })
 })
 

@@ -18,6 +18,7 @@ import {
   type RowWorktree,
   type SquashMergeInference,
   type StashEntry,
+  worktreeBranchState,
 } from "./commit-graph"
 import type { SyncKind } from "./repository-sync"
 import { useRepositorySync } from "./use-repository-sync"
@@ -146,6 +147,10 @@ export function useGraphData({
     }
     return byHead
   }, [worktrees])
+  const worktreeState = useMemo(
+    () => worktreeBranchState(worktrees),
+    [worktrees],
+  )
   // A stash is drawn on the commit it was made from, which is the only place in the graph it belongs to.
   const stashesByBase = useMemo(() => {
     const byBase = new Map<string, StashEntry[]>()
@@ -412,6 +417,7 @@ export function useGraphData({
     stashes,
     stashesByBase,
     sync,
+    worktreeState,
     worktreesByHead,
   }
 }
