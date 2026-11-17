@@ -325,6 +325,12 @@ fn theme_background(theme: Theme) -> Color {
     }
 }
 
+fn set_theme_background(window: &WebviewWindow, theme: Theme) -> Result<(), String> {
+    window
+        .set_background_color(Some(theme_background(theme)))
+        .map_err(|error| error.to_string())
+}
+
 fn reveal_window(window: &WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     window
@@ -332,9 +338,7 @@ fn reveal_window(window: &WebviewWindow) -> Result<(), String> {
         .set_activation_policy(tauri::ActivationPolicy::Regular)
         .map_err(|error| error.to_string())?;
     let theme = window.theme().unwrap_or(Theme::Light);
-    window
-        .set_background_color(Some(theme_background(theme)))
-        .map_err(|error| error.to_string())?;
+    set_theme_background(window, theme)?;
     #[cfg(all(target_os = "windows", not(debug_assertions)))]
     if let Err(error) = disable_browser_accelerator_keys(window) {
         log::error!("Could not disable browser accelerator keys: {error}");
@@ -350,6 +354,21 @@ fn reveal_window(window: &WebviewWindow) -> Result<(), String> {
     }
     window.set_focus().map_err(|error| error.to_string())
 }
+
+#[cfg(target_os = "macos")]
+fn watch_window_theme(window: &WebviewWindow) {
+    let window = window.clone();
+    window.clone().on_window_event(move |event| {
+        if let WindowEvent::ThemeChanged(theme) = event {
+            if let Err(error) = set_theme_background(&window, theme.clone()) {
+                log::error!("Could not update the window background for the system theme: {error}");
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn watch_window_theme(_: &WebviewWindow) {}
 
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
 fn disable_browser_accelerator_keys(window: &WebviewWindow) -> Result<(), String> {
@@ -531,6 +550,7 @@ fn create_window(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> 
         .map_err(|error| error.to_string())?
         .build()
         .map_err(|error| error.to_string())?;
+    watch_window_theme(&window);
     watch_sharing_close(&window);
     watch_window_session(&window);
     Ok(window)
