@@ -536,6 +536,10 @@ export function refName(ref: DisplayRef) {
   return ref.branch ?? ref.label
 }
 
+export function refRevision(ref: DisplayRef) {
+  return ref.kind === "remote" ? `refs/remotes/${ref.label}` : refName(ref)
+}
+
 export function remoteBranchName(ref: DisplayRef) {
   return ref.remote && ref.label.startsWith(`${ref.remote}/`) ?
       ref.label.slice(ref.remote.length + 1)

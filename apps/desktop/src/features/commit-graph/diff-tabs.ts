@@ -4,11 +4,13 @@ import { panelId } from "@/lib/panel-id"
 import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
 import type { DockviewApi } from "dockview-react"
 
-import type {
-  Commit,
-  CommitSelection,
-  RowWorktree,
-  StashEntry,
+import {
+  refRevision,
+  type Commit,
+  type CommitSelection,
+  type DisplayRef,
+  type RowWorktree,
+  type StashEntry,
 } from "./commit-graph"
 import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
 import { rangeBaseHash } from "./selection-diff"
@@ -28,11 +30,11 @@ export function diffTabs({
 }) {
   const repositoryPanelParams = { name, path: repoPath }
 
-  async function openRefDiff(reference: string) {
+  async function openRefDiff(ref: DisplayRef) {
     try {
       const selection = await invoke<BranchSelection>("select_branch_range", {
         repoPath,
-        reference,
+        reference: refRevision(ref),
       })
       const referencePanel = containerApi.getPanel(panel)
       if (!referencePanel) {

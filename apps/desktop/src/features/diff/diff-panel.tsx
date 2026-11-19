@@ -661,7 +661,7 @@ export function DiffPanel({
           ) ?
             undefined
           : {
-              hint: `Changes on ${hit.branch} since it forked from ${forkBase || "the default branch"}`,
+              hint: `Changes on ${hit.label} since it forked from ${forkBase || "the default branch"}`,
               icon: GitCompareArrows,
               label: forkBase ? `vs ${forkBase}` : "vs default",
               onSelect: () => selectAheadRange(hit.branch as string),

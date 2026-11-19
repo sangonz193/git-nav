@@ -473,6 +473,57 @@ describe("creating a local branch from a remote ref", () => {
   )
 })
 
+test("plans operations against the remote ref when a local branch shares its name", () => {
+  const name = "origin/main"
+  const revision = `refs/remotes/${name}`
+  const local = ref([`refs/heads/${name}`], "a")
+  const target = ref([revision], "b")
+  const state = { ...repository, currentBranch: name }
+  const merge = applicableOperations(state, null, target).find(
+    ({ operation }) => operation.id === "mergeIntoCurrent",
+  )!
+
+  expect(merge.operation.plan(merge.request, {}, IDLE)).toMatchObject({
+    argv: ["git", "merge", "--no-edit", revision],
+    args: { source: revision, into: name },
+  })
+  expect(merge.operation.blocks(merge.request, IDLE, {})).toEqual([])
+  expect(operationTitle(merge.operation, merge.request)).toBe(
+    `Merge ${name} into ${name}`,
+  )
+
+  const mergeHere = entryFor(target, local, "mergeSelectedHere")
+  expect(mergeHere.operation.plan(mergeHere.request, {}, IDLE)).toMatchObject({
+    argv: ["git", "merge", "--no-edit", revision],
+    args: { source: revision, into: name },
+  })
+  expect(mergeHere.operation.blocks(mergeHere.request, IDLE, {})).toEqual([])
+
+  const rebase = entryFor(local, target, "rebaseOnto")
+  expect(
+    rebase.operation.plan(rebase.request, {}, { ...IDLE, mergeBase: "c" }),
+  ).toMatchObject({
+    argv: ["git", "rebase", "--onto", revision, "c", name],
+    args: { onto: revision },
+  })
+
+  const reset = entryFor(null, target, "resetCurrent")
+  expect(
+    reset.operation.plan(reset.request, { mode: "soft" }, IDLE),
+  ).toMatchObject({
+    argv: ["git", "reset", "--soft", revision],
+    args: { target: revision },
+  })
+
+  const tag = entryFor(null, target, "createTag")
+  expect(
+    tag.operation.plan(tag.request, { name: "v2", message: "" }, IDLE),
+  ).toMatchObject({
+    argv: ["git", "tag", "v2", revision],
+    args: { target: revision },
+  })
+})
+
 test("warns before deleting an ahead branch named like its upstream", () => {
   const target = ref(
     ["refs/heads/origin/main", "refs/remotes/origin/main"],

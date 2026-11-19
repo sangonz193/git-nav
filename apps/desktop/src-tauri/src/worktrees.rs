@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::{collections::HashMap, fs, path::Path, path::PathBuf, thread};
 use crate::projects::parse_worktree_records;
 use crate::git::{
-    git_output, git_output_allow_empty, primary_reference, resolve_commit, worktree_path,
+    git_output, git_output_allow_empty, primary_revision, resolve_commit, worktree_path,
 };
 
 #[derive(Clone, Copy, Serialize)]
@@ -284,7 +284,7 @@ pub(crate) fn repository_state(repo_path: String) -> Result<RepositoryState, Str
         is_detached: current_branch.is_none(),
         is_dirty: worktree_is_dirty(&worktree)?,
         pending_operation: pending_operation(&worktree),
-        default_branch: primary_reference(&repo_path).ok(),
+        default_branch: primary_revision(&repo_path).ok(),
         current_branch,
         remote,
         remotes: remotes.lines().map(str::to_string).collect(),

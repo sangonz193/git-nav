@@ -2,8 +2,8 @@ use serde::Deserialize;
 use std::{env, fs, time::SystemTime, time::UNIX_EPOCH};
 use crate::git::{
     CompletedOperation, OperationResult, RefUpdate, completed_operation, conflicted_files,
-    failed_operation, git_output_allow_empty, git_result, ref_shas,
-    resolve_commit, undone_operation, worktree_path,
+    failed_operation, git_error_message, git_output_allow_empty, git_result, git_result_with_stdin, ref_shas,
+    ref_label, resolve_commit, undone_operation, worktree_path,
 };
 use crate::worktrees::{
     idle_worktree, pending_operation, pending_operation_label, worktree_for_branch,
@@ -45,7 +45,7 @@ pub(crate) fn rebase_branch_onto(repo_path: &str, onto: &str, upstream: &str, br
     resolve_commit(repo_path, &reference)?;
     resolve_commit(repo_path, onto)?;
     resolve_commit(repo_path, upstream)?;
-    let summary = format!("Rebased {branch} onto {onto}.");
+    let summary = format!("Rebased {branch} onto {}.", ref_label(onto));
     let before = ref_shas(repo_path)?;
 
     if let Some(worktree) = worktree_for_branch(repo_path, branch)? {
@@ -358,7 +358,7 @@ fn squash_into_branch(repo_path: &str, worktree: &str, source: &str, into: &str,
     }
     if !worktree_is_dirty(worktree)? {
         let _ = git_result(worktree, &["reset", "--merge"]);
-        return completed_operation(repo_path, format!("{into} already has every change in {source}."), &before);
+        return completed_operation(repo_path, format!("{into} already has every change in {}.", ref_label(source)), &before);
     }
     let committed = git_result(worktree, &["commit", "--message", message])?;
     if !committed.status.success() {
@@ -366,11 +366,11 @@ fn squash_into_branch(repo_path: &str, worktree: &str, source: &str, into: &str,
         let _ = git_result(worktree, &["reset", "--merge"]);
         return Ok(failure);
     }
-    completed_operation(repo_path, format!("Squashed {source} into a single commit on {into}."), &before)
+    completed_operation(repo_path, format!("Squashed {} into a single commit on {into}.", ref_label(source)), &before)
 }
 
 fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeOptions) -> Result<OperationResult, String> {
-    resolve_commit(repo_path, source)?;
+    let source_sha = resolve_commit(repo_path, source)?;
     let worktree = worktree_for_branch(repo_path, into)?
         .ok_or_else(|| format!("{into} is not checked out in any worktree."))?;
     if let Some(operation) = pending_operation(&worktree) {
@@ -392,10 +392,23 @@ fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeO
     if let Some(message) = options.message.as_ref().filter(|message| !message.trim().is_empty()) {
         arguments.push("--message".to_string());
         arguments.push(message.clone());
+    } else if let Some(short) = source.strip_prefix("refs/remotes/") {
+        let input = format!("{source_sha}\t\tremote-tracking branch '{short}' of .\n");
+        let output = git_result_with_stdin(&worktree, &["fmt-merge-msg"], input.as_bytes())?;
+        // The formatter needs a current commit, but merging into an unborn branch does not.
+        if !output.status.success() && resolve_commit(&worktree, "HEAD").is_ok() {
+            return Err(git_error_message(&output));
+        }
+        let message = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
+        if !message.trim_end().is_empty() {
+            arguments.push("--no-log".to_string());
+            arguments.push("--message".to_string());
+            arguments.push(message.trim_end().to_string());
+        }
     }
     arguments.push(source.to_string());
     let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
-    let summary = format!("Merged {source} into {into}.");
+    let summary = format!("Merged {} into {into}.", ref_label(source));
     run_worktree_operation(repo_path, &worktree, summary, &arguments, Some(&["merge", "--abort"]))
 }
 
@@ -430,7 +443,7 @@ fn create_branch_at(repo_path: &str, name: &str, start_point: &str, options: &Br
     }
     arguments.push(name);
     arguments.push(start_point);
-    run_worktree_operation(repo_path, repo_path, format!("Created {name} at {start_point}."), &arguments, None)
+    run_worktree_operation(repo_path, repo_path, format!("Created {name} at {}.", ref_label(start_point)), &arguments, None)
 }
 
 #[git_nav_macros::http_command]
@@ -473,7 +486,7 @@ pub(crate) async fn create_tag(repo_path: String, name: String, target: String, 
         }
         arguments.push(&name);
         arguments.push(&target);
-        run_worktree_operation(&repo_path, &repo_path, format!("Tagged {target} as {name}."), &arguments, None)
+        run_worktree_operation(&repo_path, &repo_path, format!("Tagged {} as {name}.", ref_label(&target)), &arguments, None)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -817,6 +830,50 @@ mod tests {
             assert_eq!(local_tip, tip);
             assert_eq!(tracking_tip, tip);
         }
+    }
+
+    #[test]
+    fn names_the_remote_branch_in_the_merge_subject_when_a_local_name_collides() {
+        let (path, run) = scratch_repository("merge-remote-ref");
+        run(&["config", "merge.log", "true"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["branch", "origin/main"]);
+        run(&["branch", "feature"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "remote"]);
+        let source = "refs/remotes/origin/main";
+        run(&["update-ref", source, "HEAD"]);
+        let remote_sha = resolve_commit(&path, source).unwrap();
+        run(&["checkout", "--quiet", "feature"]);
+
+        let options = MergeOptions { mode: "noFastForward".to_string(), message: None };
+        let result = merge_into_branch(&path, source, "feature", &options).unwrap();
+        let subject = git_output(&path, &["log", "-1", "--format=%s"]);
+        let body = git_output(&path, &["log", "-1", "--format=%b"]);
+        let merged_sha = resolve_commit(&path, "HEAD^2");
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(result, OperationResult::Completed(_)));
+        assert_eq!(subject.as_deref(), Some("Merge remote-tracking branch 'origin/main' into feature"));
+        assert_eq!(body.as_deref(), Some("* origin/main:\n  remote"));
+        assert_eq!(merged_sha.unwrap(), remote_sha);
+    }
+
+    #[test]
+    fn merges_a_remote_ref_into_an_unborn_branch() {
+        let (path, run) = scratch_repository("merge-remote-unborn");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        let source = "refs/remotes/origin/main";
+        run(&["update-ref", source, "HEAD"]);
+        let remote_sha = resolve_commit(&path, source).unwrap();
+        run(&["symbolic-ref", "HEAD", "refs/heads/feature"]);
+
+        let options = MergeOptions { mode: "default".to_string(), message: None };
+        let result = merge_into_branch(&path, source, "feature", &options).unwrap();
+        let merged_sha = resolve_commit(&path, "HEAD");
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(result, OperationResult::Completed(_)));
+        assert_eq!(merged_sha.unwrap(), remote_sha);
     }
 
     #[test]

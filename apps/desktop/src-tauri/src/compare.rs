@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::{path::PathBuf, time::SystemTime, time::UNIX_EPOCH};
 use crate::storage::data_dir;
 use crate::git::{
-    EMPTY_TREE_REF, WORKTREE_REF, git_output, git_result, primary_reference, project_id, resolve_commit,
+    EMPTY_TREE_REF, WORKTREE_REF, git_output, git_result, primary_revision, project_id, ref_label, resolve_commit,
     resolve_diff_base,
 };
 use crate::diff::{ChangedFile, changed_files, image_source, worktree_changed_files};
@@ -263,12 +263,12 @@ fn merge_base_for_commits(repo_path: &str, base_sha: &str, head_sha: &str, base_
     let sha = String::from_utf8(output.stdout).map_err(|error| error.to_string())?.trim().to_string();
     if !output.status.success() {
         if output.status.code() == Some(1) && sha.is_empty() {
-            return Err(format!("Could not find a merge base for {base_ref} and {head_ref}."));
+            return Err(format!("Could not find a merge base for {} and {}.", ref_label(base_ref), ref_label(head_ref)));
         }
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     if sha.is_empty() {
-        return Err(format!("Could not find a merge base for {base_ref} and {head_ref}."));
+        return Err(format!("Could not find a merge base for {} and {}.", ref_label(base_ref), ref_label(head_ref)));
     }
     Ok(sha)
 }
@@ -276,7 +276,7 @@ fn merge_base_for_commits(repo_path: &str, base_sha: &str, head_sha: &str, base_
 // The range is named by its two refs rather than by where they point now, so the comparison follows
 // the branch as it moves instead of freezing at the moment it was opened.
 fn branch_range(repo_path: &str, reference: &str) -> Result<BranchSelection, String> {
-    let primary = primary_reference(repo_path)?;
+    let primary = primary_revision(repo_path)?;
     merge_base_sha(repo_path, &primary, reference)?;
     Ok(BranchSelection { base_ref: primary, head_ref: reference.to_string() })
 }
@@ -426,19 +426,22 @@ mod tests {
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "base"]);
         run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(&["branch", "origin/main"]);
         run(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
 
         run(&["checkout", "--quiet", "-b", "feature"]);
         write("feature.txt", "one\n");
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "feature"]);
+        run(&["update-ref", "refs/remotes/origin/feature", "HEAD"]);
         run(&["checkout", "--quiet", "main"]);
         write("primary.txt", "later\n");
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "primary"]);
         run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(&["branch", "origin/feature"]);
 
-        let selection = branch_range(&path, "feature").unwrap();
+        let selection = branch_range(&path, "refs/remotes/origin/feature").unwrap();
         let names = |comparison: &Comparison| {
             let mut names: Vec<_> = comparison.files.iter().filter_map(|file| file.new_path.clone().or(file.old_path.clone())).collect();
             names.sort();
@@ -451,10 +454,11 @@ mod tests {
         write("second.txt", "two\n");
         run(&["add", "."]);
         run(&["commit", "--quiet", "--message", "second"]);
+        run(&["update-ref", "refs/remotes/origin/feature", "HEAD"]);
         let after_commit = comparison(&path, &selection.base_ref, &selection.head_ref, true, false).unwrap();
         remove_scratch_repository(&path);
 
-        assert_eq!((selection.base_ref.as_str(), selection.head_ref.as_str()), ("origin/main", "feature"));
+        assert_eq!((selection.base_ref.as_str(), selection.head_ref.as_str()), ("refs/remotes/origin/main", "refs/remotes/origin/feature"));
         assert_eq!(names(&forked), ["feature.txt"]);
         // Without the fork point the primary branch's own commit reads as a deletion on the branch.
         assert_eq!(names(&direct), ["feature.txt", "primary.txt"]);

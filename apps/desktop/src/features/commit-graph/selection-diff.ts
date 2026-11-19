@@ -1,7 +1,9 @@
 import { EMPTY_TREE_REF } from "@/lib/repository-constants"
+import { refLabel } from "../diff/diff-title"
 
 import {
   refName,
+  refRevision,
   type CommitSelection,
   type DisplayRef,
   type Selection,
@@ -19,7 +21,7 @@ export function canDiffSelection(
   defaultBranch: string | null | undefined,
 ) {
   if (selection.kind !== "commits") {
-    return refName(selection.ref) !== defaultBranch
+    return refRevision(selection.ref) !== defaultBranch
   }
   return rangeBaseHash(selection) !== null
 }
@@ -32,16 +34,16 @@ export function divergenceTargets(
   const reference = refName(ref)
   const targets =
     upstream ? [{ label: upstream, reference: `${reference}@{upstream}` }] : []
-  const upstreamIsDefault =
-    upstream === defaultBranch ||
-    (ref.remote !== null && upstream === `${ref.remote}/${defaultBranch}`)
-  if (
-    defaultBranch !== null &&
-    defaultBranch !== undefined &&
-    reference !== defaultBranch &&
-    !upstreamIsDefault
-  ) {
-    targets.push({ label: defaultBranch, reference: defaultBranch })
+  if (defaultBranch != null && refRevision(ref) !== defaultBranch) {
+    const label = refLabel(defaultBranch)
+    const upstreamIsDefault =
+      upstream === label ||
+      (!defaultBranch.startsWith("refs/remotes/") &&
+        ref.remote !== null &&
+        upstream === `${ref.remote}/${label}`)
+    if (!upstreamIsDefault) {
+      targets.push({ label, reference: defaultBranch })
+    }
   }
   return targets
 }
