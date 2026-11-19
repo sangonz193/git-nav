@@ -7,7 +7,7 @@ use std::{
 use std::hash::{Hash, Hasher};
 use crate::diff::{ChangedFile, conflicted_paths, staged_changed_files, unstaged_changed_files};
 use crate::git::{
-    INDEX_REF, WORKTREE_REF, OperationResult, completed_operation, failed_operation, git_error_message, git_output,
+    INDEX_REF, WORKTREE_REF, OperationResult, completed_operation, current_branch, failed_operation, git_error_message, git_output,
     git_output_allow_empty, git_output_bytes, git_result_with_stdin, git_version, ref_shas,
     resolve_commit, worktree_path,
 };
@@ -40,7 +40,7 @@ fn read_working_tree(repo_path: &str) -> Result<WorkingTree, String> {
         .concat(),
     );
     Ok(WorkingTree {
-        branch: git_output(&worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]),
+        branch: current_branch(&worktree),
         head_sha: resolve_commit(&worktree, "HEAD").ok(),
         head_message: git_output(&worktree, &["log", "-1", "--format=%B"]),
         index_fingerprint,
@@ -154,7 +154,7 @@ pub(crate) fn unstage_files(repo_path: String, paths: Vec<String>) -> Result<(),
 
 fn commit(repo_path: &str, message: &str, amend: bool, head_sha: Option<&str>, branch: Option<&str>, expected_index_fingerprint: &str) -> Result<OperationResult, String> {
     let worktree = worktree_path(repo_path)?;
-    let current_branch = git_output(&worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let current_branch = current_branch(&worktree);
     if resolve_commit(&worktree, "HEAD").ok().as_deref() != head_sha
         || current_branch.as_deref() != branch
         || index_fingerprint(&worktree)? != expected_index_fingerprint

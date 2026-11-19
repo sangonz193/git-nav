@@ -537,6 +537,100 @@ test("plans operations against the remote ref when a local branch shares its nam
   })
 })
 
+test.each([
+  ["refs/heads/v1", "b"],
+  ["refs/tags/v1", "c"],
+])(
+  "uses %s for revisions when a branch and tag share the same name",
+  (revision, sha) => {
+    const target = ref([revision], sha)
+
+    const merge = entryFor(null, target, "mergeIntoCurrent")
+    expect(merge.operation.plan(merge.request, {}, IDLE)).toMatchObject({
+      argv: ["git", "merge", "--no-edit", revision],
+      args: { source: revision, into: "main" },
+    })
+    expect(
+      merge.operation.needs?.(merge.request, { mode: "fastForwardOnly" }),
+    ).toMatchObject({
+      mergeBase: ["refs/heads/main", revision],
+      prediction: { into: "refs/heads/main", source: revision },
+    })
+
+    const rebase = entryFor(topic, target, "rebaseOnto")
+    expect(
+      rebase.operation.plan(rebase.request, {}, { ...IDLE, mergeBase: "d" }),
+    ).toMatchObject({
+      argv: ["git", "rebase", "--onto", revision, "d", "topic"],
+      args: { onto: revision, upstream: "d", branch: "topic" },
+    })
+    expect(rebase.operation.needs?.(rebase.request, {})).toMatchObject({
+      mergeBase: ["refs/heads/topic", revision],
+    })
+
+    const reset = entryFor(null, target, "resetCurrent")
+    expect(
+      reset.operation.plan(reset.request, { mode: "soft" }, IDLE),
+    ).toMatchObject({
+      argv: ["git", "reset", "--soft", revision],
+      args: { target: revision },
+    })
+
+    const tag = entryFor(null, target, "createTag")
+    expect(
+      tag.operation.plan(tag.request, { name: "v2", message: "" }, IDLE),
+    ).toMatchObject({
+      argv: ["git", "tag", "v2", revision],
+      args: { target: revision },
+    })
+
+    const branch = entryFor(null, target, "createBranch")
+    expect(
+      branch.operation.plan(branch.request, { name: "next" }, IDLE),
+    ).toMatchObject({
+      argv: ["git", "branch", "next", revision],
+      args: { startPoint: revision },
+    })
+
+    const checkout = entryFor(null, target, "checkout")
+    expect(checkout.operation.plan(checkout.request, {}, IDLE).argv).toEqual(
+      target.kind === "branch" ?
+        ["git", "switch", "v1"]
+      : ["git", "switch", "--detach", revision],
+    )
+  },
+)
+
+test("publishes the branch by full ref when a tag shares its name", () => {
+  const target = ref(["refs/heads/v1", "refs/tags/v1"], "b")
+  const { operation, request } = entryFor(null, target, "push")
+
+  expect(operation.plan(request, {}, IDLE)).toEqual({
+    argv: ["git", "push", "--set-upstream", "origin", "refs/heads/v1"],
+    command: "push_ref",
+    args: {
+      reference: "refs/heads/v1",
+      options: {
+        remote: "origin",
+        force: false,
+        setUpstream: true,
+        delete: false,
+      },
+    },
+  })
+})
+
+test("can merge a tag whose name matches the checked-out branch", () => {
+  const target = ref(["refs/tags/main"], "b")
+  const merge = entryFor(null, target, "mergeIntoCurrent")
+
+  expect(merge.operation.blocks(merge.request, IDLE, {})).toEqual([])
+  expect(merge.operation.plan(merge.request, {}, IDLE).args).toMatchObject({
+    source: "refs/tags/main",
+    into: "main",
+  })
+})
+
 test("warns before deleting an ahead branch named like its upstream", () => {
   const target = ref(
     ["refs/heads/origin/main", "refs/remotes/origin/main"],
@@ -595,7 +689,7 @@ describe("outcome prediction", () => {
       "git",
       "merge",
       "--squash",
-      "topic",
+      "refs/heads/topic",
       "&&",
       "git",
       "commit",

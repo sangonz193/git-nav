@@ -1,8 +1,8 @@
 use serde::Serialize;
-use crate::git::{WORKTREE_REF, git_output_allow_empty, resolve_commit, worktree_path};
+use crate::git::{WORKTREE_REF, git_output_allow_empty, ref_label, resolve_commit, worktree_path};
 use crate::graph::{graph_revisions, parse_commit};
 
-const REFERENCE_FORMAT: &str = "%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(contents:subject)%00%(*contents:subject)%00%(creatordate:iso-strict)";
+const REFERENCE_FORMAT: &str = "%(refname)%00%(objectname)%00%(*objectname)%00%(contents:subject)%00%(*contents:subject)%00%(creatordate:iso-strict)";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +47,7 @@ fn parse_references(output: &str) -> Vec<Reference> {
     output
         .lines()
         .filter_map(|line| {
-            let [full_name, name, object, dereferenced, subject, tagged_subject, date] = line.split('\0').collect::<Vec<_>>()[..] else {
+            let [full_name, object, dereferenced, subject, tagged_subject, date] = line.split('\0').collect::<Vec<_>>()[..] else {
                 return None;
             };
             let kind = if full_name.starts_with("refs/heads/") {
@@ -57,8 +57,7 @@ fn parse_references(output: &str) -> Vec<Reference> {
             } else {
                 "tag"
             };
-            // A remote's HEAD only points at one of its branches, which is already listed on its own. Its
-            // short name is the remote itself, so only the full name gives it away.
+            // A remote's HEAD only points at one of its branches, which is already listed on its own.
             if kind == "remote" && full_name.ends_with("/HEAD") {
                 return None;
             }
@@ -70,8 +69,8 @@ fn parse_references(output: &str) -> Vec<Reference> {
             };
             Some(Reference {
                 kind: kind.to_string(),
-                name: name.to_string(),
-                revision: if kind == "remote" { full_name } else { name }.to_string(),
+                name: ref_label(full_name).to_string(),
+                revision: full_name.to_string(),
                 sha: sha.to_string(),
                 subject: subject.to_string(),
                 date: date.to_string(),
@@ -118,10 +117,10 @@ mod tests {
     #[test]
     fn reads_annotated_tags_through_their_dereference_and_drops_remote_heads() {
         let references = parse_references(&[
-            "refs/heads/main\0main\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
-            "refs/remotes/origin/HEAD\0origin\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
-            "refs/remotes/origin/main\0remotes/origin/main\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
-            "refs/tags/v1\0v1\0tag-sha\0commit-sha\0Tag message\0Tagged commit\02026-08-28T12:00:00+00:00",
+            "refs/heads/v1\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
+            "refs/remotes/origin/HEAD\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
+            "refs/remotes/origin/main\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
+            "refs/tags/v1\0tag-sha\0commit-sha\0Tag message\0Tagged commit\02026-08-28T12:00:00+00:00",
         ]
         .join("\n"));
 
@@ -132,9 +131,9 @@ mod tests {
         assert_eq!(
             described,
             vec![
-                ("branch", "main", "main", "branch-sha", "Ship it"),
-                ("remote", "remotes/origin/main", "refs/remotes/origin/main", "branch-sha", "Ship it"),
-                ("tag", "v1", "v1", "commit-sha", "Tagged commit"),
+                ("branch", "v1", "refs/heads/v1", "branch-sha", "Ship it"),
+                ("remote", "origin/main", "refs/remotes/origin/main", "branch-sha", "Ship it"),
+                ("tag", "v1", "refs/tags/v1", "commit-sha", "Tagged commit"),
             ]
         );
     }

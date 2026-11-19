@@ -68,7 +68,9 @@ describe("canDiffSelection", () => {
   test("disallows a ref on the default branch", () => {
     const [main] = displayRefs(["refs/heads/main"])
 
-    expect(canDiffSelection(refSelection(main, "a"), "main")).toBe(false)
+    expect(canDiffSelection(refSelection(main, "a"), "refs/heads/main")).toBe(
+      false,
+    )
   })
 
   test("allows a ref on another branch", () => {
@@ -107,7 +109,7 @@ test("persists the remote diff revision with its short display label", () => {
     {},
   )
 
-  expect(refRevision(local)).toBe("origin/topic")
+  expect(refRevision(local)).toBe("refs/heads/origin/topic")
   expect(persisted).toMatchObject({
     baseRef: "refs/remotes/origin/main",
     baseLabel: "origin/main",
@@ -162,7 +164,7 @@ describe("divergenceTargets", () => {
       },
     )
 
-    expect(divergenceTargets(topic, "main")).toEqual([
+    expect(divergenceTargets(topic, "refs/heads/main")).toEqual([
       { label: "origin/main", reference: "topic@{upstream}" },
     ])
     expect(divergenceTargets(topic, "refs/remotes/origin/main")).toEqual([
@@ -215,7 +217,7 @@ describe("divergenceTargets", () => {
       },
     )
 
-    expect(divergenceTargets(main, "main")).toEqual([
+    expect(divergenceTargets(main, "refs/heads/main")).toEqual([
       { label: "origin/main", reference: "main@{upstream}" },
     ])
   })
@@ -223,7 +225,7 @@ describe("divergenceTargets", () => {
   test("does not compare the default branch without an upstream", () => {
     const [main] = displayRefs(["refs/heads/main"])
 
-    expect(divergenceTargets(main, "main")).toEqual([])
+    expect(divergenceTargets(main, "refs/heads/main")).toEqual([])
   })
 
   test("uses the default branch for a remote ref", () => {

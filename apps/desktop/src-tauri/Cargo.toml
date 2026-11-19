@@ -32,6 +32,7 @@ axum = "0.8"
 dirs = "6"
 futures-util = "0.3"
 fs2 = "0.4"
+tempfile = "3"
 mime_guess = "2"
 image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "webp"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }

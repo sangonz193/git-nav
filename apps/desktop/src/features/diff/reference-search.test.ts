@@ -28,8 +28,8 @@ function commit(hash: string, subject: string, refs: string[] = []): Commit {
 function reference(
   name: string,
   kind: Reference["kind"],
-  sha = "sha",
-  revision = name,
+  sha: string,
+  revision: string,
 ): Reference {
   return {
     date: "2026-01-01T00:00:00Z",
@@ -87,18 +87,16 @@ describe("searchReferences", () => {
     expect(graphHit.reference).toBe(revision)
   })
 
-  test("recognizes the default remote branch despite its disambiguated picker label", () => {
+  test("recognizes the default remote branch from its picker revision", () => {
     const defaultBranch = "refs/remotes/origin/main"
     const [hit] = searchReferences(
       "origin/main",
       sources({
-        references: [
-          reference("remotes/origin/main", "remote", "aaa", defaultBranch),
-        ],
+        references: [reference("origin/main", "remote", "aaa", defaultBranch)],
       }),
     )
 
-    expect(hit.label).toBe("remotes/origin/main")
+    expect(hit.label).toBe("origin/main")
     expect(isDefaultBranch(hit.branch!, defaultBranch, ["origin"])).toBe(true)
   })
 
@@ -107,12 +105,19 @@ describe("searchReferences", () => {
       "ancient",
       sources({
         commits: [commit("aaa", "recent work")],
-        references: [reference("ancient/branch", "branch", "old-sha")],
+        references: [
+          reference(
+            "ancient/branch",
+            "branch",
+            "old-sha",
+            "refs/heads/ancient/branch",
+          ),
+        ],
       }),
     )
 
     expect(hits.map((hit) => [hit.kind, hit.reference])).toEqual([
-      ["branch", "ancient/branch"],
+      ["branch", "refs/heads/ancient/branch"],
     ])
   })
 
@@ -124,16 +129,56 @@ describe("searchReferences", () => {
           commit("aaa", "start the release", ["refs/heads/release"]),
           commit("bbb", "release notes"),
         ],
-        references: [reference("release", "branch", "aaa")],
+        references: [
+          reference("release", "branch", "aaa", "refs/heads/release"),
+        ],
       }),
     )
 
     expect(hits.map((hit) => [hit.kind, hit.reference])).toEqual([
-      ["branch", "release"],
+      ["branch", "refs/heads/release"],
       ["commit", "aaa"],
       ["commit", "bbb"],
     ])
   })
+
+  test.each([
+    ["v1", "tag", "refs/tags/v1"],
+    ["origin/main", "remote", "refs/remotes/origin/main"],
+  ] as const)(
+    "shows both refs named %s with distinct revisions",
+    (name, kind, other) => {
+      const local = `refs/heads/${name}`
+      const commits = [
+        commit("aaa", "first", [local]),
+        commit("bbb", "second", [other]),
+      ]
+      const expected = [
+        ["branch", name, local],
+        [kind, name, other],
+      ]
+
+      expect(
+        searchReferences(name, sources({ commits })).map((hit) => [
+          hit.kind,
+          hit.label,
+          hit.reference,
+        ]),
+      ).toEqual(expected)
+      expect(
+        searchReferences(
+          name,
+          sources({
+            commits,
+            references: [
+              reference(name, "branch", "aaa", local),
+              reference(name, kind, "bbb", other),
+            ],
+          }),
+        ).map((hit) => [hit.kind, hit.label, hit.reference]),
+      ).toEqual(expected)
+    },
+  )
 
   test("offers the working tree and HEAD before anything typed narrows them away", () => {
     expect(searchReferences("", sources()).map((hit) => hit.reference)).toEqual(

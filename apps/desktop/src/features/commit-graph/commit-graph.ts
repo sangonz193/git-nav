@@ -536,8 +536,17 @@ export function refName(ref: DisplayRef) {
   return ref.branch ?? ref.label
 }
 
-export function refRevision(ref: DisplayRef) {
-  return ref.kind === "remote" ? `refs/remotes/${ref.label}` : refName(ref)
+export function refRevision({
+  kind,
+  label,
+  branch,
+}: {
+  kind: RefKind
+  label: string
+  branch?: string | null
+}) {
+  const [, prefix] = REF_NAMESPACES.find(([candidate]) => candidate === kind)!
+  return `${prefix}${branch ?? label}`
 }
 
 export function remoteBranchName(ref: DisplayRef) {

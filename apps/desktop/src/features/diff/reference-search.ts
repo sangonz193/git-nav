@@ -1,4 +1,9 @@
-import type { Commit, StashEntry } from "../commit-graph/commit-graph"
+import {
+  refRevision,
+  type Commit,
+  type RefKind,
+  type StashEntry,
+} from "../commit-graph/commit-graph"
 import { searchGraph } from "../commit-graph/commit-graph-view"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 
@@ -17,7 +22,6 @@ export type Reference = {
 }
 export type ResolvedRevision = { sha: string; subject: string }
 
-type RefKind = "branch" | "remote" | "tag"
 export type HitKind = RefKind | "commit" | "revision" | "stash" | "worktree"
 
 export type ReferenceHit = {
@@ -114,13 +118,13 @@ export function searchReferences(
     })
   }
 
-  const named = new Set(hits.map((hit) => hit.reference))
+  const revisions = new Set(hits.map((hit) => hit.reference))
   for (const reference of references) {
     if (
       reference.name.toLowerCase().includes(needle) &&
-      !named.has(reference.name)
+      !revisions.has(reference.revision)
     ) {
-      named.add(reference.name)
+      revisions.add(reference.revision)
       hits.push(referenceHit(reference))
     }
   }
@@ -149,17 +153,18 @@ export function searchReferences(
           reference: entry.sha,
         })
       }
-    } else if (!named.has(hit.label)) {
-      named.add(hit.label)
-      const reference =
-        hit.kind === "remote" ? `refs/remotes/${hit.label}` : hit.label
-      hits.push({
-        branch: reference,
-        detail: hit.detail,
-        kind: hit.kind,
-        label: hit.label,
-        reference,
-      })
+    } else {
+      const reference = refRevision({ kind: hit.kind, label: hit.label })
+      if (!revisions.has(reference)) {
+        revisions.add(reference)
+        hits.push({
+          branch: reference,
+          detail: hit.detail,
+          kind: hit.kind,
+          label: hit.label,
+          reference,
+        })
+      }
     }
   }
 

@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, collections::HashSet, path::PathBuf, sync::Mutex, sync::OnceLock};
 use crate::projects::parse_worktree_records;
 use crate::git::{
-    git_output, git_output_allow_empty, git_result, git_succeeds, patch_id, primary_reference,
-    resolve_commit,
+    git_output, git_output_allow_empty, git_result, git_succeeds, patch_id, primary_local_branch,
+    primary_revision, ref_label, resolve_commit,
 };
 use crate::pull_requests::{
     GithubRepository, github_repositories, pull_request_database, pull_request_database_path,
@@ -263,9 +263,11 @@ fn compute_squash_tip_memo(
 // A squash that has not been pushed yet lives only on the local counterpart of the primary branch, so the
 // search reaches through to it whenever that counterpart merely extends the remote.
 fn squash_search_reference(repo_path: &str) -> Result<String, String> {
-    let primary = primary_reference(repo_path)?;
-    let name = primary.split_once('/').map_or(primary.as_str(), |(_, name)| name);
-    let local = format!("refs/heads/{name}");
+    let primary = primary_revision(repo_path)?;
+    if !primary.starts_with("refs/remotes/") {
+        return Ok(primary);
+    }
+    let local = format!("refs/heads/{}", primary_local_branch(&primary));
     if resolve_commit(repo_path, &local).is_ok() && git_succeeds(repo_path, &["merge-base", "--is-ancestor", &primary, &local]) {
         return Ok(local);
     }
@@ -532,7 +534,7 @@ fn merged_branch_candidates(
     if repositories.is_empty() {
         return Err("Only GitHub remotes are supported.".to_string());
     }
-    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
+    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"])?;
     let mut statement = connection
         .prepare(
             "
@@ -551,23 +553,24 @@ fn merged_branch_candidates(
                 .flatten(),
         );
     }
-    let primary = primary_reference(repo_path).ok().and_then(|reference| reference.strip_prefix("origin/").map(str::to_string).or(Some(reference)));
+    let primary = primary_revision(repo_path).ok();
     let protected = ["main", "master"]
         .into_iter()
-        .chain(primary.as_deref())
+        .chain(primary.as_deref().map(primary_local_branch))
         .collect::<HashSet<_>>();
 
     Ok(refs
         .split('\n')
         .filter_map(|line| line.split_once('\0'))
+        .map(|(reference, hash)| (ref_label(reference), hash))
         .filter(|(branch, hash)| !protected.contains(branch) && !checked_out.contains(*branch) && merged_heads.contains(*hash))
         .map(|(branch, _)| branch.to_string())
         .collect())
 }
 
 fn merged_local_branch_candidates(repo_path: &str, checked_out: &HashSet<String>) -> Result<Vec<String>, String> {
-    let primary = primary_reference(repo_path)?;
-    let primary_branch = primary.strip_prefix("origin/").unwrap_or(&primary);
+    let primary = primary_revision(repo_path)?;
+    let primary_branch = primary_local_branch(&primary);
     let protected = ["main", "master", primary_branch]
         .into_iter()
         .collect::<HashSet<_>>();
@@ -579,13 +582,14 @@ fn merged_local_branch_candidates(repo_path: &str, checked_out: &HashSet<String>
             "for-each-ref",
             "--merged",
             &primary,
-            "--format=%(refname:short)",
+            "--format=%(refname)",
             "refs/heads",
         ],
     )?;
 
     Ok(refs
         .lines()
+        .map(ref_label)
         .filter(|branch| !protected.contains(branch) && !checked_out.contains(*branch))
         .map(str::to_string)
         .collect())
@@ -596,17 +600,15 @@ fn merged_local_branch_candidates(repo_path: &str, checked_out: &HashSet<String>
 // offered separately from the rules git and GitHub can prove.
 fn squash_merged_branch_candidates(repo_path: &str, checked_out: &HashSet<String>) -> Result<Vec<String>, String> {
     let primary = squash_search_reference(repo_path)?;
-    let primary_branch = primary
-        .strip_prefix("refs/heads/")
-        .or_else(|| primary.strip_prefix("origin/"))
-        .unwrap_or(&primary);
+    let primary_branch = primary_local_branch(&primary);
     let protected = ["main", "master", primary_branch].into_iter().collect::<HashSet<_>>();
     let squashed = local_squash_merges(repo_path).into_iter().map(|(tip, _)| tip).collect::<HashSet<_>>();
-    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"])?;
+    let refs = git_output_allow_empty(repo_path, &["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"])?;
 
     Ok(refs
         .split('\n')
         .filter_map(|line| line.split_once('\0'))
+        .map(|(reference, hash)| (ref_label(reference), hash))
         .filter(|(branch, hash)| !protected.contains(branch) && !checked_out.contains(*branch) && squashed.contains(*hash))
         .map(|(branch, _)| branch.to_string())
         .collect())
@@ -1246,6 +1248,27 @@ mod tests {
     }
 
     #[test]
+    fn finds_merged_branches_using_the_remote_primary_ref() {
+        use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+        let (path, run) = scratch_repository("cleanup-remote-primary");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["branch", "origin/release/stable"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "ahead"]);
+        run(&["branch", "merged"]);
+        run(&["update-ref", "refs/tags/merged", "HEAD"]);
+        run(&["branch", "release/stable"]);
+        run(&["update-ref", "refs/remotes/origin/release/stable", "HEAD"]);
+        run(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/stable"]);
+
+        let checked_out = HashSet::from(["origin/release/stable".to_string()]);
+        let candidates = merged_local_branch_candidates(&path, &checked_out).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(candidates, ["merged"]);
+    }
+
+    #[test]
     fn detects_a_squash_merge_that_has_not_been_pushed_yet() {
         let path = env::temp_dir()
             .join(format!("git-nav-unpushed-squash-{}", std::process::id()))
@@ -1281,12 +1304,12 @@ mod tests {
         run(&["commit", "--quiet", "--message", "Merge branch 'unpushed'"]);
         let target = sha("HEAD");
 
-        let primary = primary_reference(&path).unwrap();
+        let primary = primary_revision(&path).unwrap();
         let reference = squash_search_reference(&path).unwrap();
         let edges: HashMap<_, _> = local_squash_merges(&path).into_iter().collect();
         fs::remove_dir_all(&path).unwrap();
 
-        assert_eq!(primary, "origin/main");
+        assert_eq!(primary, "refs/remotes/origin/main");
         assert_eq!(reference, "refs/heads/main");
         assert_eq!(edges.get(&tip), Some(&target));
     }

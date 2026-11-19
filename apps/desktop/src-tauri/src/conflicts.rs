@@ -1,7 +1,7 @@
 use serde::Serialize;
 use crate::git::{
     git_error_message, git_output, git_output_allow_empty, git_result, git_version, is_ancestor,
-    resolve_commit,
+    ref_label, resolve_commit,
 };
 
 const MINIMUM_MERGE_TREE_VERSION: (u32, u32) = (2, 38);
@@ -70,7 +70,7 @@ fn predicted_conflicts(repo_path: &str, onto: &str, upstream: &str, branch: &str
         &["rev-list", "--reverse", "--topo-order", "--no-merges", "--cherry-pick", "--right-only", &range],
     )?;
     let mut accumulated = git_output(repo_path, &["rev-parse", "--verify", &format!("{onto_sha}^{{tree}}")])
-        .ok_or_else(|| format!("Could not resolve the tree of {onto}."))?;
+        .ok_or_else(|| format!("Could not resolve the tree of {}.", ref_label(onto)))?;
 
     for commit in commits.lines() {
         let Some(parent) = git_output(repo_path, &["rev-parse", "--verify", "--quiet", &format!("{commit}^1")]) else {
