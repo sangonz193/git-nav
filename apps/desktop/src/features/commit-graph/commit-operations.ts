@@ -431,8 +431,13 @@ const checkout: Operation = {
   ],
   action: () => "Check out",
   plan: ({ target }, values) => {
-    const reference = operandRef(target)
+    const reference =
+      target.kind === "remote" ?
+        `refs/remotes/${target.ref.label}`
+      : operandRef(target)
     const create = target.kind === "remote" ? values.name.trim() : null
+    const track =
+      Boolean(create) && target.kind === "remote" && target.ref.remote !== null
     const detach = target.kind === "tag" || isCommits(target)
     const stash = values.changes === "stash"
     return {
@@ -440,14 +445,14 @@ const checkout: Operation = {
         "git",
         "switch",
         ...(detach ? ["--detach"]
-        : create ? ["-c", create, "--track"]
+        : create ? ["-c", create, ...(track ? ["--track"] : [])]
         : []),
         reference,
       ],
       command: "checkout_ref",
       args: {
         reference,
-        options: { create, track: Boolean(create), detach, stash },
+        options: { create, track, detach, stash },
       },
     }
   },
@@ -642,7 +647,7 @@ const pull: Operation = {
       "git",
       "merge",
       "--ff-only",
-      isRef(target) ? (target.ref.sync?.upstream ?? "") : "",
+      `${operandName(target)}@{upstream}`,
     ],
     command: "pull_branch",
     args: { branch: operandName(target) },
@@ -1303,8 +1308,11 @@ const createBranch: Operation = {
   action: () => "Create branch",
   plan: ({ target }, values) => {
     const name = values.name.trim()
-    const startPoint = operandRef(target)
-    const track = target.kind === "remote"
+    const startPoint =
+      target.kind === "remote" ?
+        `refs/remotes/${target.ref.label}`
+      : operandRef(target)
+    const track = target.kind === "remote" && target.ref.remote !== null
     const checkout = flag(values, "checkout")
     return {
       argv:

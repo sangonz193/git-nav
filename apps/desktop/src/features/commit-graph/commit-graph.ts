@@ -229,23 +229,45 @@ export function isCurrentCheckout(refs: string[]) {
   return refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "))
 }
 
-function isRemoteRef(ref: string, remotes: string[]) {
-  const name = ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref
-  return remotes.some((remote) => name.startsWith(`${remote}/`))
+const REF_NAMESPACES = [
+  ["branch", "refs/heads/"],
+  ["remote", "refs/remotes/"],
+  ["tag", "refs/tags/"],
+] as const
+
+export function parseRef(decoration: string, remotes = DEFAULT_REMOTES) {
+  const checkedOut = decoration.startsWith("HEAD -> ")
+  const ref =
+    checkedOut ?
+      decoration.slice("HEAD -> ".length)
+    : decoration.replace(/^tag: /, "")
+  const namespace = REF_NAMESPACES.find(([, prefix]) => ref.startsWith(prefix))
+  if (!namespace) {
+    return null
+  }
+  const [kind, prefix] = namespace
+  const name = ref.slice(prefix.length)
+  if (
+    kind === "remote" &&
+    (/^[^/]+\/HEAD$/.test(name) ||
+      remotes.some((remote) => name === `${remote}/HEAD`))
+  ) {
+    return null
+  }
+  return { checkedOut, kind, name }
 }
 
-// A commit is pushed when a remote ref reaches it, and topological order puts every child before its
-// parents, so one pass forward carries that reachability down without walking the graph twice.
-export function unpushedHashes(
-  commits: Commit[],
-  remotes: string[] = DEFAULT_REMOTES,
-) {
+// Topological order puts children first, so pushed reachability needs only one pass.
+export function unpushedHashes(commits: Commit[], remotes = DEFAULT_REMOTES) {
   const pushed = new Set<string>()
   const unpushed = new Set<string>()
   for (const commit of commits) {
     if (
       pushed.has(commit.hash) ||
-      commit.refs.some((ref) => isRemoteRef(ref, remotes))
+      commit.refs.some((decoration) => {
+        const ref = parseRef(decoration, remotes)
+        return ref?.kind === "remote" && remoteOf(ref.name, remotes) !== null
+      })
     ) {
       for (const parent of commit.parents) {
         pushed.add(parent)
@@ -372,7 +394,6 @@ export function commitSelection(
   commits: Commit[],
   indexA: number,
   indexB: number,
-  remotes?: string[],
 ): CommitSelection | null {
   const path = ancestryPath(commits, indexA, indexB)
   if (path.length === 0) {
@@ -381,7 +402,7 @@ export function commitSelection(
   const [baseHash] = path[path.length - 1].parents
   return {
     kind: "commits",
-    branches: branchesContaining(commits, Math.min(indexA, indexB), remotes),
+    branches: branchesContaining(commits, Math.min(indexA, indexB)),
     commits: path,
     tip: path[0],
     base:
@@ -462,11 +483,7 @@ export function refSelection(ref: DisplayRef, sha: string): RefSelection {
 
 // Rewriting a range needs a branch that holds it, and a branch holds it when its tip still reaches the newest
 // selected commit. The nearest such tip comes first because it carries the fewest unselected commits along.
-export function branchesContaining(
-  commits: Commit[],
-  tipIndex: number,
-  remotes?: string[],
-) {
+export function branchesContaining(commits: Commit[], tipIndex: number) {
   const branches: { branch: string; sha: string }[] = []
   const reachesTip = new Set([commits[tipIndex].hash])
   for (let index = tipIndex; index >= 0; index -= 1) {
@@ -480,9 +497,10 @@ export function branchesContaining(
     if (!reachesTip.has(commit.hash) || commit.refs.length === 0) {
       continue
     }
-    for (const ref of displayRefs(commit.refs, { remotes })) {
-      if (ref.branch) {
-        branches.push({ branch: ref.branch, sha: commit.hash })
+    for (const decoration of commit.refs) {
+      const ref = parseRef(decoration)
+      if (ref?.kind === "branch") {
+        branches.push({ branch: ref.name, sha: commit.hash })
       }
     }
   }
@@ -863,8 +881,8 @@ function branchPullRequests(
   return remote ? (pullRequests?.get(upstream) ?? []) : []
 }
 
-// Which remote a ref belongs to can only be read from the remotes the repository actually has, since a remote
-// is named freely and "upstream/main" is indistinguishable from a branch called that.
+// A remote's name may itself contain slashes, so which remote a ref belongs to can only be read from the
+// remotes the repository actually has.
 function remoteOf(ref: string, remotes: string[]) {
   return remotes.find((remote) => ref.startsWith(`${remote}/`)) ?? null
 }
@@ -874,19 +892,19 @@ function remoteOf(ref: string, remotes: string[]) {
 // Only a branch that tracks nothing is paired by name.
 function trackedRemote(
   branch: string,
-  branchRefs: string[],
+  remoteRefs: string[],
   remotes: string[],
   sync: BranchSync | null,
 ) {
   const upstream = sync?.upstream
   if (upstream) {
     const tracked = remoteOf(upstream, remotes)
-    return tracked && branchRefs.includes(upstream) ?
+    return tracked && remoteRefs.includes(upstream) ?
         { remote: tracked, ref: upstream }
       : null
   }
   const remote = remotes.find((candidate) =>
-    branchRefs.includes(`${candidate}/${branch}`),
+    remoteRefs.includes(`${candidate}/${branch}`),
   )
   return remote ? { remote, ref: `${remote}/${branch}` } : null
 }
@@ -900,32 +918,28 @@ export function displayRefs(
     worktrees = [],
   }: DisplayRefOptions = {},
 ) {
-  const checkedOut = refs
-    .find((ref) => ref.startsWith("HEAD -> "))
-    ?.slice("HEAD -> ".length)
-  const branchRefs = refs.filter(
-    (ref) => !ref.startsWith("HEAD -> ") && !ref.startsWith("tag: "),
-  )
-  const localBranches = new Set(
-    branchRefs.filter((ref) => !remoteOf(ref, remotes)),
-  )
-  if (checkedOut && !remoteOf(checkedOut, remotes)) {
-    localBranches.add(checkedOut)
-  }
-  const consumed = new Set<string>()
+  const parsed = refs
+    .map((ref) => parseRef(ref, remotes))
+    .filter((ref) => ref !== null)
+  const remoteRefs = parsed
+    .filter((ref) => ref.kind === "remote")
+    .map((ref) => ref.name)
+  const pairedRemoteRefs = new Set<string>()
   const result: DisplayRef[] = []
 
-  for (const branch of localBranches) {
+  for (const { checkedOut, kind, name: branch } of parsed) {
+    if (kind !== "branch") {
+      continue
+    }
     const sync = branchSync?.get(branch) ?? null
-    const tracking = trackedRemote(branch, branchRefs, remotes, sync)
-    consumed.add(branch)
+    const tracking = trackedRemote(branch, remoteRefs, remotes, sync)
     if (tracking) {
-      consumed.add(tracking.ref)
+      pairedRemoteRefs.add(tracking.ref)
     }
     result.push({
       branch,
       label: tracking ? `${branch} · ${tracking.remote}` : branch,
-      checkedOut: branch === checkedOut,
+      checkedOut,
       kind: "branch",
       pullRequests: branchPullRequests(
         branch,
@@ -939,46 +953,19 @@ export function displayRefs(
     })
   }
 
-  for (const ref of branchRefs) {
-    const remote = remoteOf(ref, remotes)
-    if (!consumed.has(ref) && ref !== `${remote}/HEAD`) {
-      result.push({
-        branch: null,
-        label: ref,
-        checkedOut: ref === checkedOut,
-        kind: remote ? "remote" : "branch",
-        pullRequests: remote ? (pullRequests?.get(ref) ?? []) : [],
-        remote,
-        sync: null,
-        worktrees: [],
-      })
+  for (const { checkedOut, kind, name } of parsed) {
+    const isRemote = kind === "remote"
+    if (kind === "branch" || (isRemote && pairedRemoteRefs.has(name))) {
+      continue
     }
-  }
-
-  for (const ref of refs) {
-    if (ref.startsWith("tag: ")) {
-      result.push({
-        branch: null,
-        label: ref.slice("tag: ".length),
-        checkedOut: false,
-        kind: "tag",
-        pullRequests: [],
-        remote: null,
-        sync: null,
-        worktrees: [],
-      })
-    }
-  }
-
-  const checkedOutRemote = checkedOut && remoteOf(checkedOut, remotes)
-  if (checkedOut && checkedOutRemote) {
     result.push({
       branch: null,
-      label: checkedOut,
-      checkedOut: true,
-      kind: "remote",
-      pullRequests: pullRequests?.get(checkedOut) ?? [],
-      remote: checkedOutRemote,
+      label: name,
+      checkedOut,
+      kind,
+      pullRequests: isRemote ? (pullRequests?.get(name) ?? []) : [],
+      // Null for a ref whose remote is no longer configured, which leaves nothing to push to.
+      remote: isRemote ? remoteOf(name, remotes) : null,
       sync: null,
       worktrees: [],
     })

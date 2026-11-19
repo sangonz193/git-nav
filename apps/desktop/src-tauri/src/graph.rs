@@ -170,7 +170,7 @@ pub(crate) fn walk_commit_graph_page(
         external_command("git")
             .args(["--no-optional-locks", "-C", repo_path, "log"])
             .args(&revisions)
-            .args(["--date-order", "--format=%H%x00%P%x00%an%x00%cI%x00%D%x00%s"])
+            .args(["--date-order", "--decorate=full", "--format=%H%x00%P%x00%an%x00%cI%x00%D%x00%s"])
             .stdout(Stdio::piped())
             .spawn()
             .map_err(|error| error.to_string())?,

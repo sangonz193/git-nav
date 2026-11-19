@@ -54,6 +54,8 @@ fn parse_branch_sync(output: &str) -> Vec<BranchSync> {
             let mut fields = line.split('\0');
             let branch = fields.next()?;
             let upstream = fields.next().unwrap_or_default();
+            let upstream_short = fields.next().unwrap_or_default();
+            let upstream = upstream.strip_prefix("refs/remotes/").unwrap_or(upstream_short);
             let track = fields.next().unwrap_or_default();
             let mut sync = BranchSync {
                 branch: branch.to_string(),
@@ -81,7 +83,7 @@ pub(crate) fn branch_sync(repo_path: String) -> Result<Vec<BranchSync>, String> 
         &repo_path,
         &[
             "for-each-ref",
-            "--format=%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)",
+            "--format=%(refname:lstrip=2)%00%(upstream)%00%(upstream:short)%00%(upstream:track,nobracket)",
             "refs/heads",
         ],
     )?;
@@ -298,10 +300,10 @@ mod tests {
     #[test]
     fn reads_the_upstream_state_of_each_branch() {
         let branches = parse_branch_sync(concat!(
-            "ahead\0origin/ahead\0ahead 1, behind 2\n",
-            "gone\0origin/gone\0gone\n",
-            "synced\0origin/synced\0\n",
-            "local\0\0",
+            "ahead\0refs/remotes/origin/ahead\0origin/ahead\0ahead 1, behind 2\n",
+            "gone\0refs/remotes/origin/gone\0origin/gone\0gone\n",
+            "synced\0refs/remotes/origin/synced\0origin/synced\0\n",
+            "local\0\0\0",
         ));
 
         assert_eq!(branches.len(), 4);
@@ -313,6 +315,37 @@ mod tests {
         assert!(!branches[2].is_gone);
         assert_eq!(branches[3].upstream, None);
         assert!(!branches[3].is_gone);
+    }
+
+    #[test]
+    fn keeps_sync_for_a_local_branch_named_like_its_remote_ref() {
+        let directory = env::temp_dir().join(format!("git-nav-branch-sync-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.to_str().unwrap();
+        let run = |arguments: &[&str]| {
+            let output = git_result(path, arguments).unwrap();
+            assert!(
+                output.status.success(),
+                "{arguments:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        run(&["config", "user.email", "tests@example.com"]);
+        run(&["config", "user.name", "Tests"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["remote", "add", "origin", "."]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(&["switch", "--quiet", "-c", "origin/main", "--track", "refs/remotes/origin/main"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "ahead"]);
+
+        let branches = branch_sync(path.to_string()).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+
+        let branch = branches.iter().find(|sync| sync.branch == "origin/main").unwrap();
+        assert_eq!(branch.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((branch.ahead, branch.behind, branch.is_gone), (1, 0, false));
     }
 
     #[test]

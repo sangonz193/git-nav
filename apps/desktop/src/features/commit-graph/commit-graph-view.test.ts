@@ -324,7 +324,7 @@ describe("applyViewConfigSetting", () => {
 describe("commitChips", () => {
   test("drops the kinds that are turned off", () => {
     const chips = commitChips(
-      commit("a", ["main", "tag: v1.0.0"]),
+      commit("a", ["refs/heads/main", "tag: refs/tags/v1.0.0"]),
       context({
         chipKinds: { branch: true, remote: true, stash: true, tag: false },
       }),
@@ -334,7 +334,7 @@ describe("commitChips", () => {
 
   test("keeps the checked out ref whatever is turned off", () => {
     const chips = commitChips(
-      commit("a", ["HEAD -> origin/main"]),
+      commit("a", ["HEAD -> refs/remotes/origin/main"]),
       context({
         chipKinds: { branch: false, remote: false, stash: false, tag: false },
       }),
@@ -367,12 +367,12 @@ describe("commitChips", () => {
     ["tracked", sync("tracked")],
   ])
   const filtered = commit("a", [
-    "gone",
-    "local",
-    "tracked",
-    "origin/tracked",
-    "origin/other",
-    "tag: v1",
+    "refs/heads/gone",
+    "refs/heads/local",
+    "refs/heads/tracked",
+    "refs/remotes/origin/tracked",
+    "refs/remotes/origin/other",
+    "tag: refs/tags/v1",
   ])
   const labels = (chips: ReturnType<typeof commitChips>) =>
     chips.map((chip) =>
@@ -471,7 +471,10 @@ describe("commitChips", () => {
   })
 
   test("matches any PR destination without matching another remote's branch", () => {
-    const row = commit("a", ["origin/feature", "upstream/feature"])
+    const row = commit("a", [
+      "refs/remotes/origin/feature",
+      "refs/remotes/upstream/feature",
+    ])
     const entry = {
       branch: "feature",
       remote: "origin",
@@ -520,7 +523,10 @@ describe("commitChips", () => {
   })
 
   test("a branch tracking a differently named upstream carries that upstream's pull request", () => {
-    const renamed = commit("a", ["local", "origin/pr-branch"])
+    const renamed = commit("a", [
+      "refs/heads/local",
+      "refs/remotes/origin/pr-branch",
+    ])
     const renamedSync = new Map([
       ["local", sync("local", { upstream: "origin/pr-branch" })],
     ])
@@ -546,7 +552,7 @@ describe("commitChips", () => {
   })
 
   test("a branch ahead of its upstream still carries that upstream's pull request", () => {
-    const ahead = commit("a", ["local"])
+    const ahead = commit("a", ["refs/heads/local"])
     const aheadSync = new Map([
       ["local", sync("local", { ahead: 1, upstream: "origin/pr-branch" })],
     ])
@@ -562,7 +568,10 @@ describe("commitChips", () => {
   })
 
   test("a branch tracking another remote does not carry the pull request of its own name", () => {
-    const tracked = commit("a", ["local", "upstream/local"])
+    const tracked = commit("a", [
+      "refs/heads/local",
+      "refs/remotes/upstream/local",
+    ])
     const trackedSync = new Map([
       ["local", sync("local", { upstream: "upstream/local" })],
     ])
@@ -580,7 +589,7 @@ describe("commitChips", () => {
 
   test("the checkout survives a filter it does not match", () => {
     const chips = commitChips(
-      commit("a", ["HEAD -> local"]),
+      commit("a", ["HEAD -> refs/heads/local"]),
       context({
         branchSync,
         filters: { ...DEFAULT_BRANCH_FILTERS, upstream: "gone" },
@@ -651,14 +660,18 @@ describe("isMarkedCommit", () => {
     const hidden = context({
       chipKinds: { branch: true, remote: true, stash: true, tag: false },
     })
-    expect(isMarkedCommit(commit("a", ["tag: v1.0.0"]), hidden)).toBe(false)
+    expect(isMarkedCommit(commit("a", ["tag: refs/tags/v1.0.0"]), hidden)).toBe(
+      false,
+    )
   })
 
   test("the checkout is marked even with every kind hidden", () => {
     const hidden = context({
       chipKinds: { branch: false, remote: false, stash: false, tag: false },
     })
-    expect(isMarkedCommit(commit("a", ["HEAD -> main"]), hidden)).toBe(true)
+    expect(
+      isMarkedCommit(commit("a", ["HEAD -> refs/heads/main"]), hidden),
+    ).toBe(true)
   })
 
   test("a worktree marks the commit it sits on", () => {
@@ -677,7 +690,7 @@ describe("appendGraphRows", () => {
 
   test("a branch opened by a folded merge joins the lane that merged it", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       { ...commit("merge", [], [true, true]), parentLanes: [0, 1] },
       {
         ...commit("branch", ["topic"], [true, true]),
@@ -702,9 +715,9 @@ describe("appendGraphRows", () => {
 
   test("a branch forked from a folded commit joins the lane it forked from", () => {
     const commits = [
-      commit("a", ["main"], [true, true]),
+      commit("a", ["refs/heads/main"], [true, true]),
       { ...commit("fork"), incomingLanes: [0, 1], parentLanes: [0] },
-      commit("b", ["old"]),
+      commit("b", ["refs/heads/old"]),
     ]
     expect(
       appendGraphRows(null, commits, marked, nothingRevealed).rows,
@@ -722,7 +735,7 @@ describe("appendGraphRows", () => {
 
   test("a branch that opens and ends inside a run joins nothing", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       { ...commit("merge", [], [true, true]), parentLanes: [0, 1] },
       {
         ...commit("branch", [], [true, true]),
@@ -731,7 +744,7 @@ describe("appendGraphRows", () => {
         parentLanes: [1],
       },
       { ...commit("fork"), incomingLanes: [0, 1], parentLanes: [0] },
-      commit("b", ["old"]),
+      commit("b", ["refs/heads/old"]),
     ]
     const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
     expect(run).toEqual({ hidden: 3, index: 1, lanes: 1 })
@@ -830,7 +843,7 @@ describe("appendGraphRows", () => {
 
   test("chained forks join the outer lane below the run", () => {
     const commits = [
-      commit("above", ["main"], [true, true, true]),
+      commit("above", ["refs/heads/main"], [true, true, true]),
       {
         ...commit("inner", [], [true, true]),
         lane: 1,
@@ -838,7 +851,7 @@ describe("appendGraphRows", () => {
         parentLanes: [1],
       },
       { ...commit("outer"), incomingLanes: [0, 1], parentLanes: [0] },
-      commit("below", ["old"]),
+      commit("below", ["refs/heads/old"]),
     ]
     const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
     expect(run).toEqual({
@@ -854,7 +867,7 @@ describe("appendGraphRows", () => {
 
   test("chained merges join the outer lane even after the intermediate lane closes", () => {
     const commits = [
-      commit("above", ["main"]),
+      commit("above", ["refs/heads/main"]),
       { ...commit("outer", [], [true, true]), parentLanes: [0, 1] },
       {
         ...commit("inner", [], [true, true, true]),
@@ -867,7 +880,7 @@ describe("appendGraphRows", () => {
         incomingLanes: [0, 1],
         parentLanes: [0],
       },
-      commit("below", ["old"], [true, false, true]),
+      commit("below", ["refs/heads/old"], [true, false, true]),
     ]
     const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
     expect(run).toEqual({
@@ -880,13 +893,13 @@ describe("appendGraphRows", () => {
 
   test("a lane closed and reopened by the same merge gets both joins", () => {
     const commits = [
-      commit("above", ["main"], [true, true]),
+      commit("above", ["refs/heads/main"], [true, true]),
       {
         ...commit("merge", [], [true, true]),
         incomingLanes: [0, 1],
         parentLanes: [0, 1],
       },
-      commit("below", ["old"], [true, true]),
+      commit("below", ["refs/heads/old"], [true, true]),
     ]
     const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
     expect(run).toEqual({
@@ -902,9 +915,9 @@ describe("appendGraphRows", () => {
 
   test("drops a closing with no active destination below the run", () => {
     const commits = [
-      commit("above", ["main"], [true, true]),
+      commit("above", ["refs/heads/main"], [true, true]),
       { ...commit("fork", [], []), incomingLanes: [0, 1] },
-      commit("below", ["old"], []),
+      commit("below", ["refs/heads/old"], []),
     ]
     const [, run] = appendGraphRows(null, commits, marked, nothingRevealed).rows
     expect(run).toEqual({ hidden: 1, index: 1, lanes: 0 })
@@ -1087,13 +1100,13 @@ describe("appendGraphRows", () => {
         (_, index) => index === 0 || index === 1 || index === lane,
       )
       const commits = [
-        commit("above", ["main"], active),
+        commit("above", ["refs/heads/main"], active),
         {
           ...commit("merge", [], active),
           incomingLanes: [0, lane],
           parentLanes: [0, lane],
         },
-        commit("below", ["old"], active),
+        commit("below", ["refs/heads/old"], active),
       ]
       const [, run] = appendGraphRows(
         null,
@@ -1111,10 +1124,10 @@ describe("appendGraphRows", () => {
 
   test("gathers the commits between two refs into one run", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       commit("b"),
       commit("c"),
-      commit("d", ["old"]),
+      commit("d", ["refs/heads/old"]),
     ]
     const { rows } = appendGraphRows(null, commits, marked, nothingRevealed)
     expect(rows).toEqual([
@@ -1126,10 +1139,10 @@ describe("appendGraphRows", () => {
 
   test("a lane that stops inside a run does not cross it", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       commit("b", [], [true, true]),
       commit("c", [], [true]),
-      commit("d", ["old"]),
+      commit("d", ["refs/heads/old"]),
     ]
     const { rows } = appendGraphRows(null, commits, marked, nothingRevealed)
     expect(rows[1].lanes).toBe(1)
@@ -1137,10 +1150,10 @@ describe("appendGraphRows", () => {
 
   test("continuing from an earlier batch gives the same rows as one pass", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       commit("b"),
       commit("c"),
-      commit("d", ["old"]),
+      commit("d", ["refs/heads/old"]),
       commit("e"),
       commit("f"),
     ]
@@ -1163,7 +1176,7 @@ describe("appendGraphRows", () => {
   })
 
   test("the rows an earlier batch produced are left alone", () => {
-    const commits = [commit("a", ["main"]), commit("b"), commit("c")]
+    const commits = [commit("a", ["refs/heads/main"]), commit("b"), commit("c")]
     const first = appendGraphRows(
       null,
       commits.slice(0, 2),
@@ -1177,10 +1190,10 @@ describe("appendGraphRows", () => {
 
   test("a revealed run is shown down to the next ref", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       commit("b"),
       commit("c"),
-      commit("d", ["old"]),
+      commit("d", ["refs/heads/old"]),
       commit("e"),
       commit("f"),
     ]
@@ -1203,7 +1216,7 @@ describe("appendGraphRows", () => {
 
   test("a revealed run carries across the batch that splits it", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       commit("b"),
       commit("c"),
       commit("d"),
@@ -1236,7 +1249,7 @@ describe("appendGraphRows", () => {
   })
 
   test("nothing revealed leaves the graph fully folded", () => {
-    const commits = [commit("a", ["main"]), commit("b")]
+    const commits = [commit("a", ["refs/heads/main"]), commit("b")]
     expect(
       appendGraphRows(null, commits, marked, nothingRevealed).hasRevealedRuns,
     ).toBe(false)
@@ -1244,9 +1257,9 @@ describe("appendGraphRows", () => {
 
   test("a revealed run is reported without another pass over the earlier batches", () => {
     const commits = [
-      commit("a", ["main"]),
+      commit("a", ["refs/heads/main"]),
       commit("b"),
-      commit("c", ["old"]),
+      commit("c", ["refs/heads/old"]),
       commit("d"),
       commit("e"),
     ]
@@ -1268,7 +1281,11 @@ describe("appendGraphRows", () => {
   })
 
   test("a reveal left on a commit that is now marked is not a revealed run", () => {
-    const commits = [commit("a", ["main"]), commit("b"), commit("c", ["old"])]
+    const commits = [
+      commit("a", ["refs/heads/main"]),
+      commit("b"),
+      commit("c", ["refs/heads/old"]),
+    ]
     const revealed = (hash: string) => hash === "b"
     expect(
       appendGraphRows(null, commits, marked, revealed).hasRevealedRuns,
@@ -1279,7 +1296,7 @@ describe("appendGraphRows", () => {
   })
 
   test("a reveal the loaded commits do not hold is not a revealed run", () => {
-    const commits = [commit("a", ["main"]), commit("b")]
+    const commits = [commit("a", ["refs/heads/main"]), commit("b")]
     expect(
       appendGraphRows(null, commits, marked, (hash) => hash === "z")
         .hasRevealedRuns,
@@ -1354,7 +1371,7 @@ describe("collapsed graph state", () => {
 
   test("invalidates cached rows when branch sync lands after the pull requests it pairs", () => {
     const filters = { ...DEFAULT_BRANCH_FILTERS, pullRequest: "none" as const }
-    const row = commit("a", ["local", "origin/feature"])
+    const row = commit("a", ["refs/heads/local", "refs/remotes/origin/feature"])
     const pullRequests = indexPullRequests([
       {
         branch: "feature",
@@ -1410,8 +1427,8 @@ describe("rowIndexOfCommit", () => {
 
 describe("searchGraph", () => {
   const commits = [
-    commit("aaaaaaaa", ["HEAD -> main", "origin/main"]),
-    commit("bbbbbbbb", ["tag: v1.0.0"]),
+    commit("aaaaaaaa", ["HEAD -> refs/heads/main", "refs/remotes/origin/main"]),
+    commit("bbbbbbbb", ["tag: refs/tags/v1.0.0"]),
     commit("cccccccc"),
   ]
   commits[2].subject = "Fix the parser"
@@ -1424,6 +1441,19 @@ describe("searchGraph", () => {
     const hits = searchGraph(commits, "main")
     expect(hits.map((hit) => hit.kind)).toEqual(["branch", "remote"])
     expect(hits[0].label).toBe("main")
+  })
+
+  test("finds branches ending in /HEAD and skips remote HEAD aliases", () => {
+    const refs = [
+      "refs/remotes/origin/HEAD",
+      "refs/remotes/team/fork/HEAD",
+      "refs/remotes/origin/release/HEAD",
+    ]
+    const hits = searchGraph([commit("aaaaaaaa", refs)], "HEAD", {
+      remotes: ["origin", "team/fork"],
+    })
+
+    expect(hits.map((hit) => hit.label)).toEqual(["origin/release/HEAD"])
   })
 
   test("matches a tag by name", () => {

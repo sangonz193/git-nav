@@ -34,7 +34,6 @@ export type ReferenceSources = {
   commits: Commit[]
   headDetail: string | null
   references: Reference[]
-  remotes: string[] | undefined
   revision: ResolvedRevision | null
   stashes: StashEntry[]
 }
@@ -70,7 +69,6 @@ export function searchReferences(
     commits,
     headDetail,
     references,
-    remotes,
     revision,
     stashes,
   }: ReferenceSources,
@@ -121,7 +119,7 @@ export function searchReferences(
   }
 
   // The graph's search covers what a ref list cannot: commit subjects, authors and stash messages.
-  for (const hit of searchGraph(commits, query, { remotes, stashesByBase })) {
+  for (const hit of searchGraph(commits, query, { stashesByBase })) {
     const commit = commits[hit.commitIndex]
     if (hit.kind === "commit") {
       hits.push({

@@ -14,7 +14,7 @@ export function useGraphSearch({
   stashesByBase,
 }: {
   commits: Commit[]
-  remotes: string[] | undefined
+  remotes?: string[]
   stashesByBase: Map<string, StashEntry[]>
 }) {
   const [isSearchOpen, setIsSearchOpen] = useState(false)

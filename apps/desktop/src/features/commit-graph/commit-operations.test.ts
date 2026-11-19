@@ -42,9 +42,9 @@ function commit(
 }
 
 const history = [
-  commit("a", ["b"], ["HEAD -> main", "origin/main"]),
-  commit("b", ["c"], ["topic"]),
-  commit("c", ["d"], ["tag: v1.0.0"]),
+  commit("a", ["b"], ["HEAD -> refs/heads/main", "refs/remotes/origin/main"]),
+  commit("b", ["c"], ["refs/heads/topic"]),
+  commit("c", ["d"], ["tag: refs/tags/v1.0.0"]),
   commit("d"),
 ]
 
@@ -108,9 +108,9 @@ function unavailableOf(source: Selection | null, target: Operand, id: string) {
   return unavailable ? labelText(unavailable) : unavailable
 }
 
-const topic = ref(["topic"], "b")
-const tag = ref(["tag: v1.0.0"], "c")
-const remote = ref(["origin/release"], "b")
+const topic = ref(["refs/heads/topic"], "b")
+const tag = ref(["tag: refs/tags/v1.0.0"], "c")
+const remote = ref(["refs/remotes/origin/release"], "b")
 const range = commitSelection(history, 1, 2)!
 
 describe("applicableOperations", () => {
@@ -128,7 +128,9 @@ describe("applicableOperations", () => {
   })
 
   test("does not offer to check out the branch that is already checked out", () => {
-    expect(ids(null, ref(["HEAD -> main"], "a"))).not.toContain("checkout")
+    expect(ids(null, ref(["HEAD -> refs/heads/main"], "a"))).not.toContain(
+      "checkout",
+    )
   })
 
   test("drops the operations a tag cannot take part in", () => {
@@ -149,6 +151,13 @@ describe("applicableOperations", () => {
     expect(offered).not.toContain("renameBranch")
   })
 
+  test("offers no delete for a remote ref whose remote is no longer configured", () => {
+    const offered = ids(null, ref(["refs/remotes/pr/110"], "b"))
+
+    expect(offered).not.toContain("deleteBranch")
+    expect(offered).not.toContain("deleteRemoteRef")
+  })
+
   test("rebases a selected range onto the clicked ref", () => {
     expect(labelOf(range, tag, "rebaseOnto")).toBe("Rebase onto here")
     expect(titleOf(range, tag, "rebaseOnto")).toBe(
@@ -161,12 +170,12 @@ describe("applicableOperations", () => {
   })
 
   test("merges the selection into the clicked branch", () => {
-    expect(labelOf(topic, ref(["main"], "a"), "mergeSelectedHere")).toBe(
-      "Merge here",
-    )
-    expect(titleOf(topic, ref(["main"], "a"), "mergeSelectedHere")).toBe(
-      "Merge topic into main",
-    )
+    expect(
+      labelOf(topic, ref(["refs/heads/main"], "a"), "mergeSelectedHere"),
+    ).toBe("Merge here")
+    expect(
+      titleOf(topic, ref(["refs/heads/main"], "a"), "mergeSelectedHere"),
+    ).toBe("Merge topic into main")
   })
 
   test("merges into the current branch whether or not something is selected", () => {
@@ -227,7 +236,7 @@ describe("applicableOperations", () => {
 
 describe("unavailable", () => {
   test("says there is nothing to push or fast-forward when a branch matches its upstream", () => {
-    const synced = ref(["feature"], "b", {
+    const synced = ref(["refs/heads/feature"], "b", {
       branch: "feature",
       upstream: "origin/feature",
       ahead: 0,
@@ -240,7 +249,7 @@ describe("unavailable", () => {
   })
 
   test("says a fast-forward has nowhere to go once both sides have moved", () => {
-    const diverged = ref(["feature"], "b", {
+    const diverged = ref(["refs/heads/feature"], "b", {
       branch: "feature",
       upstream: "origin/feature",
       ahead: 2,
@@ -255,14 +264,14 @@ describe("unavailable", () => {
   })
 
   test("leaves a push and a fast-forward open when only one side has moved", () => {
-    const ahead = ref(["feature"], "b", {
+    const ahead = ref(["refs/heads/feature"], "b", {
       branch: "feature",
       upstream: "origin/feature",
       ahead: 2,
       behind: 0,
       isGone: false,
     })
-    const behind = ref(["feature"], "b", {
+    const behind = ref(["refs/heads/feature"], "b", {
       branch: "feature",
       upstream: "origin/feature",
       ahead: 0,
@@ -289,7 +298,9 @@ describe("unavailable", () => {
       pendingOperation: null,
       untrackedFiles: 0,
     }
-    const [entry] = displayRefs(["feature"], { worktrees: [worktree] })
+    const [entry] = displayRefs(["refs/heads/feature"], {
+      worktrees: [worktree],
+    })
 
     expect(unavailableOf(null, refSelection(entry, "b"), "checkout")).toBe(
       "Checked out in feature-tree",
@@ -318,7 +329,7 @@ describe("blocks", () => {
   }
 
   test("blocks pushing a branch the remote already has", () => {
-    const synced = ref(["feature"], "b", {
+    const synced = ref(["refs/heads/feature"], "b", {
       branch: "feature",
       upstream: "origin/feature",
       ahead: 0,
@@ -332,7 +343,7 @@ describe("blocks", () => {
   })
 
   test("blocks a fast-forward that would need a merge", () => {
-    const diverged = ref(["feature"], "b", {
+    const diverged = ref(["refs/heads/feature"], "b", {
       branch: "feature",
       upstream: "origin/feature",
       ahead: 2,
@@ -383,21 +394,103 @@ describe("deleting a remote branch", () => {
   test("pushes the delete to the remote the ref lives on", () => {
     // The repository's primary remote is origin, so naming it here would delete the wrong branch elsewhere.
     expect(
-      planOf(forked, remoteRef("upstream/main"), "deleteRemoteRef")?.argv,
+      planOf(forked, remoteRef("refs/remotes/upstream/main"), "deleteRemoteRef")
+        ?.argv,
     ).toEqual(["git", "push", "upstream", "--delete", "main"])
   })
 
   test("keeps a slash in the branch it deletes", () => {
     expect(
-      planOf(forked, remoteRef("origin/feat/graph"), "deleteRemoteRef")?.argv,
+      planOf(
+        forked,
+        remoteRef("refs/remotes/origin/feat/graph"),
+        "deleteRemoteRef",
+      )?.argv,
     ).toEqual(["git", "push", "origin", "--delete", "feat/graph"])
   })
 
   test("never sees a remote HEAD, which is not shown as a ref in the first place", () => {
-    expect(displayRefs(["upstream/HEAD"], { remotes: forked.remotes })).toEqual(
-      [],
-    )
+    expect(
+      displayRefs(["refs/remotes/upstream/HEAD"], { remotes: forked.remotes }),
+    ).toEqual([])
   })
+})
+
+describe("creating a local branch from a remote ref", () => {
+  test.each([
+    ["origin/release", true],
+    ["pr/110", false],
+  ] as const)("checks out a local branch from %s", (name, track) => {
+    const target = ref([`refs/remotes/${name}`], "b")
+    const { operation, request } = entryFor(null, target, "checkout")
+    const reference = `refs/remotes/${name}`
+
+    expect(operation.plan(request, { name: "topic" }, IDLE)).toEqual({
+      argv: [
+        "git",
+        "switch",
+        "-c",
+        "topic",
+        ...(track ? ["--track"] : []),
+        reference,
+      ],
+      command: "checkout_ref",
+      args: {
+        reference,
+        options: { create: "topic", track, detach: false, stash: false },
+      },
+    })
+  })
+
+  test.each([
+    ["origin/release", true, true],
+    ["origin/release", true, false],
+    ["pr/110", false, true],
+    ["pr/110", false, false],
+  ] as const)(
+    "creates a branch from %s with tracking %s and checkout %s",
+    (name, track, checkout) => {
+      const target = ref([`refs/remotes/${name}`], "b")
+      const { operation, request } = entryFor(null, target, "createBranch")
+      const startPoint = `refs/remotes/${name}`
+      const trackArgs = track ? ["--track"] : []
+
+      expect(
+        operation.plan(
+          request,
+          { name: "topic", checkout: String(checkout) },
+          IDLE,
+        ),
+      ).toEqual({
+        argv:
+          checkout ?
+            ["git", "switch", "-c", "topic", ...trackArgs, startPoint]
+          : ["git", "branch", ...trackArgs, "topic", startPoint],
+        command: "create_branch",
+        args: { name: "topic", startPoint, options: { checkout, track } },
+      })
+    },
+  )
+})
+
+test("warns before deleting an ahead branch named like its upstream", () => {
+  const target = ref(
+    ["refs/heads/origin/main", "refs/remotes/origin/main"],
+    "b",
+    {
+      branch: "origin/main",
+      upstream: "origin/main",
+      ahead: 1,
+      behind: 0,
+      isGone: false,
+    },
+  )
+  const { operation, request } = entryFor(null, target, "deleteBranch")
+
+  expect(target.ref.remote).toBe("origin")
+  expect(operation.warnings(request, IDLE, {})).toEqual([
+    { message: "origin/main has 1 commit that origin/main does not have." },
+  ])
 })
 
 describe("outcome prediction", () => {
