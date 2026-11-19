@@ -111,9 +111,9 @@ export function useGraphData({
     },
     [onError, worktreeStatusCache],
   )
-  // Until the repository reports its remotes, refs are classified against the conventional one rather than
-  // against none, which would read every remote branch as a local one. Repository state is re-read on a timer,
-  // so the list is held by its contents: a fresh array each poll would redraw the whole graph.
+  // Until the repository reports its remotes, branches are paired with their remote copies through the
+  // conventional one rather than through none. Repository state is re-read on a timer, so the list is held by
+  // its contents: a fresh array each poll would redraw the whole graph.
   const remoteNames = repository?.remotes?.join("\n")
   const remotes = useMemo(() => remoteNames?.split("\n"), [remoteNames])
   // A worktree's name and openness come from the project snapshot while its uncommitted work and pending

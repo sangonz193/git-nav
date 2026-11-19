@@ -4,6 +4,7 @@ import {
   detachedWorktrees,
   displayRefs,
   isCurrentCheckout,
+  parseRef,
   rowChips,
   startsLane,
   type BranchPullRequest,
@@ -146,7 +147,6 @@ export const DEFAULT_VIEW_CONFIG: ViewConfig = {
 }
 
 const LEGACY_VIEW_CONFIG_KEY = "git-nav.commit-graph.view"
-const DEFAULT_REMOTES = ["origin"]
 const SEARCH_LIMIT = 12
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -733,28 +733,13 @@ export type SearchHit = {
   label: string
 }
 
-function refHit(
-  ref: string,
-  remotes: string[],
-): { kind: ChipKind; label: string } | null {
-  if (ref.startsWith("tag: ")) {
-    return { kind: "tag", label: ref.slice("tag: ".length) }
-  }
-  const name = ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref
-  const remote = remotes.find((candidate) => name.startsWith(`${candidate}/`))
-  if (name === "HEAD" || (remote && name === `${remote}/HEAD`)) {
-    return null
-  }
-  return { kind: remote ? "remote" : "branch", label: name }
-}
-
 // Refs answer what the graph is navigated by, so they are ranked ahead of the commits carrying them. The walk
 // is newest first, which is the useful order to cut at once both lists are full.
 export function searchGraph(
   commits: Commit[],
   query: string,
   {
-    remotes = DEFAULT_REMOTES,
+    remotes,
     stashesByBase,
   }: { remotes?: string[]; stashesByBase?: Map<string, StashEntry[]> } = {},
 ): SearchHit[] {
@@ -774,13 +759,13 @@ export function searchGraph(
     const commit = commits[index]
     if (refs.length < SEARCH_LIMIT) {
       for (const ref of commit.refs) {
-        const hit = refHit(ref, remotes)
-        if (hit && hit.label.toLowerCase().includes(needle)) {
+        const hit = parseRef(ref, remotes)
+        if (hit && hit.name.toLowerCase().includes(needle)) {
           refs.push({
             commitIndex: index,
             detail: commit.subject,
             kind: hit.kind,
-            label: hit.label,
+            label: hit.name,
           })
         }
       }

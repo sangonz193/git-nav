@@ -103,7 +103,6 @@ export function useGraphSelection({
         commits,
         rangeDrag.anchorIndex,
         rangeDrag.focusIndex,
-        remotes,
       )
     }
     if (!selectionRange) {
@@ -117,8 +116,8 @@ export function useGraphSelection({
     )
     return anchorIndex === -1 || focusIndex === -1 ?
         null
-      : commitSelection(commits, anchorIndex, focusIndex, remotes)
-  }, [commits, rangeDrag, remotes, selectionRange])
+      : commitSelection(commits, anchorIndex, focusIndex)
+  }, [commits, rangeDrag, selectionRange])
   const resolvedRef = useMemo(
     () =>
       selectedRefState ?

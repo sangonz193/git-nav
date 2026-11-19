@@ -28,7 +28,7 @@ const context = {
 
 describe("findSelectedRef", () => {
   test("keeps a tag distinct from a branch with the same name", () => {
-    const refs = ["foo", "tag: foo"]
+    const refs = ["refs/heads/foo", "tag: refs/tags/foo"]
     const tag = displayRefs(refs, context).find((ref) => ref.kind === "tag")!
 
     expect(findSelectedRef(tag, [commit("a", refs)], context)).toMatchObject({
@@ -38,7 +38,7 @@ describe("findSelectedRef", () => {
   })
 
   test("keeps remote refs on different remotes distinct", () => {
-    const refs = ["origin/foo", "upstream/foo"]
+    const refs = ["refs/remotes/origin/foo", "refs/remotes/upstream/foo"]
     const upstream = displayRefs(refs, context).find(
       (ref) => ref.remote === "upstream",
     )!
@@ -49,15 +49,19 @@ describe("findSelectedRef", () => {
   })
 
   test("finds a branch after it moves to another commit", () => {
-    const [branch] = displayRefs(["foo"], context)
+    const [branch] = displayRefs(["refs/heads/foo"], context)
 
     expect(
-      findSelectedRef(branch, [commit("new", ["foo"]), commit("old")], context),
+      findSelectedRef(
+        branch,
+        [commit("new", ["refs/heads/foo"]), commit("old")],
+        context,
+      ),
     ).toMatchObject({ ref: { kind: "branch" }, sha: "new" })
   })
 
   test("returns null when the ref is no longer loaded", () => {
-    const [branch] = displayRefs(["foo"], context)
+    const [branch] = displayRefs(["refs/heads/foo"], context)
 
     expect(findSelectedRef(branch, [commit("a")], context)).toBeNull()
   })

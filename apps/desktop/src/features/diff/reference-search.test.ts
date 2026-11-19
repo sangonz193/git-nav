@@ -44,7 +44,6 @@ function sources(overrides: Partial<ReferenceSources> = {}): ReferenceSources {
     commits: [],
     headDetail: "main",
     references: [],
-    remotes: ["origin"],
     revision: null,
     stashes: [],
     ...overrides,
@@ -87,7 +86,7 @@ describe("searchReferences", () => {
       "release",
       sources({
         commits: [
-          commit("aaa", "start the release", ["release"]),
+          commit("aaa", "start the release", ["refs/heads/release"]),
           commit("bbb", "release notes"),
         ],
         references: [reference("release", "branch", "aaa")],
