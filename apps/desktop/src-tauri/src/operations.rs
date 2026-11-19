@@ -12,12 +12,17 @@ use crate::worktrees::{
 
 #[git_nav_macros::http_command]
 #[tauri::command]
-pub(crate) fn delete_branch(repo_path: String, branch: String) -> Result<OperationResult, String> {
+pub(crate) fn delete_branch(
+    repo_path: String,
+    branch: String,
+    remote_tracking: bool,
+) -> Result<OperationResult, String> {
+    let scope = if remote_tracking { "--remotes" } else { "--force" };
     run_worktree_operation(
         &repo_path,
         &repo_path,
         format!("Deleted {branch}."),
-        &["branch", "--delete", "--force", "--", &branch],
+        &["branch", "--delete", scope, "--", &branch],
         None,
     )
 }
@@ -574,6 +579,30 @@ mod tests {
     use crate::git::git_output;
     use crate::worktrees::existing_git_path;
     use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+    #[test]
+    fn deletes_an_orphaned_remote_tracking_ref_with_a_matching_local_branch() {
+        let (path, run) = scratch_repository("delete-orphaned-remote-ref");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["branch", "pr/110"]);
+        let reference = "refs/remotes/pr/110";
+        run(&["update-ref", reference, "HEAD"]);
+        let before = resolve_commit(&path, reference).unwrap();
+
+        let result = delete_branch(path.clone(), "pr/110".to_string(), true);
+        let refs = ref_shas(&path).unwrap();
+        remove_scratch_repository(&path);
+
+        let OperationResult::Completed(completed) = result.unwrap() else {
+            panic!("deleting an orphaned remote-tracking ref should complete");
+        };
+        assert!(!refs.contains_key(reference));
+        assert_eq!(refs.get("refs/heads/pr/110"), Some(&before));
+        assert_eq!(completed.updates.len(), 1);
+        assert_eq!(completed.updates[0].reference, reference);
+        assert_eq!(completed.updates[0].before, before);
+        assert!(completed.updates[0].after.is_empty());
+    }
 
     #[test]
     fn unrelated_failures_do_not_report_existing_conflicts() {
