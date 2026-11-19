@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use std::{env, fs, time::SystemTime, time::UNIX_EPOCH};
 use crate::git::{
-    CompletedOperation, FailedOperation, OperationResult, RefUpdate, completed_operation, conflicted_files,
-    failed_operation, git_error_message, git_output, git_output_allow_empty, git_result, ref_shas,
+    CompletedOperation, OperationResult, RefUpdate, completed_operation, conflicted_files,
+    failed_operation, git_output_allow_empty, git_result, ref_shas,
     resolve_commit, undone_operation, worktree_path,
 };
 use crate::worktrees::{
@@ -277,38 +277,52 @@ pub(crate) async fn push_ref(repo_path: String, reference: String, options: Push
         .map_err(|error| error.to_string())?
 }
 
-fn upstream_of(repo_path: &str, branch: &str) -> Result<String, String> {
-    git_output(repo_path, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")])
-        .ok_or_else(|| format!("{branch} has no upstream branch."))
-}
-
 fn fast_forward_branch(repo_path: &str, branch: &str) -> Result<OperationResult, String> {
-    let upstream = upstream_of(repo_path, branch)?;
-    let (remote, remote_branch) = upstream
-        .split_once('/')
-        .ok_or_else(|| format!("Could not read the remote of {upstream}."))?;
+    let local_ref = format!("refs/heads/{branch}");
+    let output = git_output_allow_empty(
+        repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%00%(upstream)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:short)",
+            &local_ref,
+        ],
+    )?;
+    let prefix = format!("{local_ref}\0");
+    let mut fields = output
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_default()
+        .split('\0');
+    let (Some(upstream), Some(remote), Some(remote_ref), Some(upstream_short)) = (
+        fields.next().filter(|upstream| !upstream.is_empty()),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+    ) else {
+        return Err(format!("{branch} has no upstream branch."));
+    };
     let before = ref_shas(repo_path)?;
-    let fetched = git_result(repo_path, &["fetch", remote, remote_branch])?;
+    let fetched = git_result(repo_path, &["fetch", "--", remote, remote_ref])?;
     if !fetched.status.success() {
-        return Ok(OperationResult::Failed(FailedOperation { message: git_error_message(&fetched), files: Vec::new() }));
+        return Ok(failed_operation(&fetched, Vec::new()));
     }
 
-    let summary = format!("Fast-forwarded {branch} to {upstream}.");
+    let summary = format!("Fast-forwarded {branch} to {upstream_short}.");
     if let Some(worktree) = worktree_for_branch(repo_path, branch)? {
         if pending_operation(&worktree).is_some() {
             return Err(format!("{worktree} has a Git operation in progress."));
         }
-        let output = git_result(&worktree, &["merge", "--ff-only", &upstream])?;
+        let output = git_result(&worktree, &["merge", "--ff-only", upstream])?;
         if !output.status.success() {
             return Ok(failed_operation(&output, Vec::new()));
         }
         return completed_operation(repo_path, summary, &before);
     }
 
-    let refspec = format!("{remote_branch}:{branch}");
-    let output = git_result(repo_path, &["fetch", remote, &refspec])?;
+    let refspec = format!("{remote_ref}:{local_ref}");
+    let output = git_result(repo_path, &["fetch", "--", remote, &refspec])?;
     if !output.status.success() {
-        return Ok(OperationResult::Failed(FailedOperation { message: git_error_message(&output), files: Vec::new() }));
+        return Ok(failed_operation(&output, Vec::new()));
     }
     completed_operation(repo_path, summary, &before)
 }
@@ -544,8 +558,9 @@ pub(crate) async fn reset_current(repo_path: String, target: String, mode: Strin
 mod tests {
     use super::*;
     use std::path::Path;
+    use crate::git::git_output;
     use crate::worktrees::existing_git_path;
-    use crate::test_support::scratch_repository;
+    use crate::test_support::{remove_scratch_repository, scratch_repository};
 
     #[test]
     fn unrelated_failures_do_not_report_existing_conflicts() {
@@ -763,6 +778,45 @@ mod tests {
         assert!(matches!(again, OperationResult::Completed(_)));
         assert!(!dirty);
         assert_eq!(count, "2");
+    }
+
+    #[test]
+    fn fast_forwards_branches_using_their_configured_upstreams() {
+        for (remote, branch, checkout, upstream_short) in [
+            ("origin", "origin/feature", true, "remotes/origin/feature"),
+            ("team/fork", "topic", false, "team/fork/feature"),
+        ] {
+            let (remote_path, run_remote) = scratch_repository("pull-remote");
+            run_remote(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+            run_remote(&["switch", "--quiet", "-c", "feature"]);
+            let (path, run) = scratch_repository("pull-local");
+            let upstream = format!("refs/remotes/{remote}/feature");
+            let local_ref = format!("refs/heads/{branch}");
+            run(&["remote", "add", remote, &remote_path]);
+            run(&["fetch", remote, "refs/heads/feature"]);
+            run(&["branch", "--track", branch, &upstream]);
+            run(&["branch", "main", &upstream]);
+            if checkout {
+                run(&["switch", "--quiet", branch]);
+            }
+
+            run_remote(&["commit", "--quiet", "--allow-empty", "--message", "ahead"]);
+            let tip = resolve_commit(&remote_path, "refs/heads/feature").unwrap();
+            let result = fast_forward_branch(&path, branch);
+            let local_tip = resolve_commit(&path, &local_ref).unwrap();
+            let tracking_tip = resolve_commit(&path, &upstream).unwrap();
+            remove_scratch_repository(&path);
+            remove_scratch_repository(&remote_path);
+
+            match result.unwrap() {
+                OperationResult::Completed(completed) => {
+                    assert_eq!(completed.summary, format!("Fast-forwarded {branch} to {upstream_short}."));
+                }
+                OperationResult::Failed(failure) => panic!("{branch}: {}", failure.message),
+            }
+            assert_eq!(local_tip, tip);
+            assert_eq!(tracking_tip, tip);
+        }
     }
 
     #[test]
