@@ -271,7 +271,7 @@ fn push_reference(repo_path: &str, reference: &str, options: &PushOptions) -> Re
         return Ok(failed_operation(&output, Vec::new()));
     }
     let summary = if options.delete {
-        format!("Deleted {reference} from {}.", options.remote)
+        format!("Deleted {} from {}.", ref_label(reference), options.remote)
     } else {
         let name = reference.strip_prefix("refs/heads/").unwrap_or(reference);
         format!("Pushed {name} to {}.", options.remote)
@@ -919,6 +919,30 @@ mod tests {
         assert_eq!(remote_refs.get(source), Some(&tip));
         assert!(!remote_refs.contains_key("refs/tags/v1"));
         assert_eq!(upstream.as_deref(), Some("refs/remotes/origin/v1"));
+    }
+
+    #[test]
+    fn deletes_only_the_remote_branch_when_a_tag_shares_its_name() {
+        let (path, run) = scratch_repository("delete-qualified-branch");
+        let (remote, _) = scratch_repository("delete-qualified-branch-remote");
+        let branch = "refs/heads/v1";
+        let tag = "refs/tags/v1";
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["branch", "v1"]);
+        run(&["update-ref", tag, "HEAD"]);
+        run(&["remote", "add", "origin", &remote]);
+        run(&["push", "origin", branch, tag]);
+        let tag_tip = resolve_commit(&remote, tag).unwrap();
+
+        let options = PushOptions { remote: "origin".to_string(), force: false, set_upstream: false, delete: true };
+        let result = push_reference(&path, branch, &options).unwrap();
+        let remote_refs = ref_shas(&remote).unwrap();
+        remove_scratch_repository(&path);
+        remove_scratch_repository(&remote);
+
+        assert!(matches!(result, OperationResult::Completed(result) if result.summary == "Deleted v1 from origin."));
+        assert!(!remote_refs.contains_key(branch));
+        assert_eq!(remote_refs.get(tag), Some(&tag_tip));
     }
 
     #[test]
