@@ -111,6 +111,7 @@ function unavailableOf(source: Selection | null, target: Operand, id: string) {
 const topic = ref(["refs/heads/topic"], "b")
 const tag = ref(["tag: refs/tags/v1.0.0"], "c")
 const remote = ref(["refs/remotes/origin/release"], "b")
+const orphanedRemote = ref(["refs/remotes/pr/110"], "b")
 const range = commitSelection(history, 1, 2)!
 
 describe("applicableOperations", () => {
@@ -147,13 +148,15 @@ describe("applicableOperations", () => {
     const offered = ids(null, remote)
 
     expect(offered).toContain("deleteRemoteRef")
+    expect(offered).not.toContain("deleteOrphanedRemoteRef")
     expect(offered).not.toContain("deleteBranch")
     expect(offered).not.toContain("renameBranch")
   })
 
-  test("offers no delete for a remote ref whose remote is no longer configured", () => {
-    const offered = ids(null, ref(["refs/remotes/pr/110"], "b"))
+  test("offers to delete the local copy of a ref whose remote is missing", () => {
+    const offered = ids(null, orphanedRemote)
 
+    expect(offered).toContain("deleteOrphanedRemoteRef")
     expect(offered).not.toContain("deleteBranch")
     expect(offered).not.toContain("deleteRemoteRef")
   })
@@ -390,6 +393,16 @@ describe("deleting a remote branch", () => {
   }
   const remoteRef = (label: string) =>
     refSelection(displayRefs([label], { remotes: forked.remotes })[0], "b")
+
+  test("deletes an orphaned tracking ref by its short name", () => {
+    expect(
+      planOf(repository, orphanedRemote, "deleteOrphanedRemoteRef"),
+    ).toEqual({
+      argv: ["git", "branch", "--delete", "--remotes", "--", "pr/110"],
+      command: "delete_branch",
+      args: { branch: "pr/110", remoteTracking: true },
+    })
+  })
 
   test("pushes the delete to the remote the ref lives on", () => {
     // The repository's primary remote is origin, so naming it here would delete the wrong branch elsewhere.

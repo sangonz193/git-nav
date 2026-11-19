@@ -1433,7 +1433,7 @@ const deleteBranch: Operation = {
   plan: ({ target }) => ({
     argv: ["git", "branch", "--delete", "--force", operandName(target)],
     command: "delete_branch",
-    args: { branch: operandName(target) },
+    args: { branch: operandName(target), remoteTracking: false },
   }),
 }
 
@@ -1488,6 +1488,26 @@ const deleteRemoteRef: Operation = {
       },
     }
   },
+}
+
+const deleteOrphanedRemoteRef: Operation = {
+  id: "deleteOrphanedRemoteRef",
+  group: "danger",
+  icon: Trash2,
+  destructive: true,
+  applicable: ({ target }) =>
+    target.kind === "remote" && target.ref.remote === null,
+  label: () => "Delete local copy",
+  description: ({ target }) =>
+    `This deletes the tracking ref ${operandName(target)} from this repository only.`,
+  blocks: () => [],
+  warnings: () => [],
+  action: () => "Delete local copy",
+  plan: ({ target }) => ({
+    argv: ["git", "branch", "--delete", "--remotes", "--", operandName(target)],
+    command: "delete_branch",
+    args: { branch: operandName(target), remoteTracking: true },
+  }),
 }
 
 const stashChanges: Operation = {
@@ -1632,6 +1652,7 @@ const OPERATIONS: Operation[] = [
   ),
   deleteBranch,
   deleteRemoteRef,
+  deleteOrphanedRemoteRef,
   deleteTag,
 ]
 
