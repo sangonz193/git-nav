@@ -39,6 +39,8 @@ describe("refLabel", () => {
   })
 
   test("keeps a ref name whole", () => {
+    expect(refLabel("refs/heads/origin/main")).toBe("origin/main")
+    expect(refLabel("refs/tags/v1")).toBe("v1")
     expect(refLabel("origin/main")).toBe("origin/main")
     expect(refLabel(EMPTY_TREE_REF)).toBe("empty")
     expect(refLabel(WORKTREE_REF)).toBe("Working tree")
@@ -50,6 +52,9 @@ describe("defaultBranchName", () => {
     expect(defaultBranchName("origin/main", REMOTES)).toBe("main")
     expect(defaultBranchName("upstream/trunk", REMOTES)).toBe("trunk")
     expect(defaultBranchName("main", REMOTES)).toBe("main")
+    expect(defaultBranchName("refs/heads/origin/main", REMOTES)).toBe(
+      "origin/main",
+    )
     expect(defaultBranchName(null, REMOTES)).toBe("")
   })
 })
@@ -61,10 +66,26 @@ describe("isDefaultBranch", () => {
     expect(isDefaultBranch("feature", "origin/main", REMOTES)).toBe(false)
     expect(isDefaultBranch("main", null, REMOTES)).toBe(false)
   })
+
+  test("recognizes the default branch by full revision", () => {
+    const primary = "refs/remotes/origin/main"
+
+    expect(isDefaultBranch(primary, primary, REMOTES)).toBe(true)
+    expect(
+      isDefaultBranch("refs/remotes/upstream/main", primary, REMOTES),
+    ).toBe(true)
+    expect(isDefaultBranch("refs/heads/main", primary, REMOTES)).toBe(true)
+    expect(isDefaultBranch("refs/heads/origin/main", primary, REMOTES)).toBe(
+      false,
+    )
+    expect(isDefaultBranch("refs/heads/origin/main", primary, [])).toBe(false)
+    expect(isDefaultBranch("origin/main", primary, [])).toBe(true)
+    expect(isDefaultBranch("refs/tags/main", primary, REMOTES)).toBe(false)
+  })
 })
 
 describe("diffTitle", () => {
-  test("names a branch alone when it is measured from the default branch", () => {
+  test("keeps the title of a saved diff that uses short names", () => {
     expect(
       diffTitle(refs("origin/main", "feature"), "origin/main", REMOTES),
     ).toBe("feature")
@@ -74,6 +95,26 @@ describe("diffTitle", () => {
     expect(diffTitle(refs("upstream/main", "feature"), "main", REMOTES)).toBe(
       "feature",
     )
+    expect(diffTitle(refs("main", "feature"), "refs/heads/main", REMOTES)).toBe(
+      "feature",
+    )
+    expect(
+      diffTitle(
+        refs("origin/main", "feature"),
+        "refs/remotes/origin/main",
+        REMOTES,
+      ),
+    ).toBe("feature")
+  })
+
+  test("keeps a local origin/main in the title when the default is the remote ref", () => {
+    expect(
+      diffTitle(
+        refs("refs/heads/origin/main", "refs/heads/feature"),
+        "refs/remotes/origin/main",
+        REMOTES,
+      ),
+    ).toBe("origin/main...feature")
   })
 
   test("names both ends when the base is not the default branch", () => {

@@ -255,9 +255,10 @@ function commitCount(commits: Commit[]) {
 
 function sameOperand(left: Operand | null, right: Operand) {
   return (
-    Boolean(left) &&
-    operandName(left as Operand) === operandName(right) &&
-    operandSha(left as Operand) === operandSha(right)
+    left !== null &&
+    left.kind === right.kind &&
+    operandName(left) === operandName(right) &&
+    operandSha(left) === operandSha(right)
   )
 }
 
@@ -432,7 +433,8 @@ const checkout: Operation = {
   ],
   action: () => "Check out",
   plan: ({ target }, values) => {
-    const reference = operandRef(target)
+    const reference =
+      target.kind === "branch" ? operandName(target) : operandRef(target)
     const create = target.kind === "remote" ? values.name.trim() : null
     const track =
       Boolean(create) && target.kind === "remote" && target.ref.remote !== null
@@ -539,7 +541,7 @@ const push: Operation = {
   },
   action: () => "Push",
   plan: ({ repository, target }, values) => {
-    const reference = operandName(target)
+    const reference = operandRef(target)
     const sync = isRef(target) ? target.ref.sync : null
     const setUpstream = !sync?.upstream || sync.isGone
     const force = values.mode === "force"
@@ -729,7 +731,7 @@ function mergeOperation(
         return [{ reason: "nothing to merge" }]
       }
       return [
-        ...(operands.kind !== "remote" && operands.name === operands.into ?
+        ...(operands.kind === "branch" && operands.name === operands.into ?
           [{ reason: "a branch cannot merge into itself" }]
         : []),
         ...(state.branch && !state.branch.worktreePath ?
@@ -746,15 +748,16 @@ function mergeOperation(
       if (!operands) {
         return {}
       }
+      const into = `refs/heads/${operands.into}`
       return {
         branch: operands.into,
         prediction: {
           kind: "merge",
           source: operands.reference,
-          into: operands.into,
+          into,
         },
         ...(values.mode === "fastForwardOnly" ?
-          { mergeBase: [operands.into, operands.reference] as [string, string] }
+          { mergeBase: [into, operands.reference] as [string, string] }
         : {}),
       }
     },
@@ -848,7 +851,7 @@ const mergeIntoCurrent = mergeOperation(
     (
       repository.currentBranch &&
       (isRef(target) || isCommits(target)) &&
-      (target.kind === "remote" ||
+      (target.kind !== "branch" ||
         operandName(target) !== repository.currentBranch)
     ) ?
       {
@@ -916,16 +919,17 @@ const rebaseOnto: Operation = {
     const source = rebaseSource(request, values)!
     const onto = operandRef(request.target)
     const upstream = source.commits ? source.base?.hash : undefined
+    const branch = `refs/heads/${source.branch}`
     return {
       branch: source.branch,
       ...(source.commits ?
         {}
-      : { mergeBase: [source.branch, onto] as [string, string] }),
+      : { mergeBase: [branch, onto] as [string, string] }),
       ...(upstream ?
         {
           prediction: {
             kind: "rebase" as const,
-            branch: source.branch,
+            branch,
             onto,
             upstream,
           },
@@ -1008,7 +1012,7 @@ const dropCommits: Operation = {
         {
           prediction: {
             kind: "rebase" as const,
-            branch,
+            branch: `refs/heads/${branch}`,
             onto: selection.base.hash,
             upstream: selection.tip.hash,
           },

@@ -10,6 +10,7 @@ import { memo, type ReactNode } from "react"
 
 import {
   pullRequestDescription,
+  refName,
   refRevision,
   relativeDate,
   syncDescription,
@@ -481,7 +482,7 @@ function RefBody({
   const tagDetails = useQuery({
     enabled: ref.kind === "tag",
     queryFn: () =>
-      invoke<TagDetails | null>("tag_details", { repoPath, tag: reference }),
+      invoke<TagDetails | null>("tag_details", { repoPath, tag: refName(ref) }),
     queryKey: [
       "tag-details",
       repoPath,

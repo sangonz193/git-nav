@@ -1,6 +1,6 @@
 use crate::cleanup::{cleanup_candidates, cleanup_database_path, CleanupOptions};
 use crate::git::{
-    changed_refs, git_error_message, git_output_allow_empty, git_result, primary_reference,
+    changed_refs, git_error_message, git_output_allow_empty, git_result, primary_revision, ref_label,
     ref_shas, resolve_commit, RefUpdate,
 };
 use crate::worktrees::{
@@ -47,10 +47,6 @@ fn worktree_blocker(worktree: &str) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-fn canonical_local_branch(branch: &str) -> &str {
-    branch.strip_prefix("heads/").unwrap_or(branch)
-}
-
 fn cleanup_exclusions(
     repo_path: &str,
     options: &CleanupOptions,
@@ -73,7 +69,7 @@ fn cleanup_exclusions(
     };
     Ok(candidates
         .into_iter()
-        .map(|candidate| canonical_local_branch(&candidate.branch).to_string())
+        .map(|candidate| candidate.branch)
         .collect())
 }
 
@@ -103,7 +99,7 @@ pub(crate) fn fast_forward_candidates(
     options: &CleanupOptions,
     database_path: Option<PathBuf>,
 ) -> Result<(String, Vec<FastForwardCandidate>), String> {
-    let primary = primary_reference(repo_path)?;
+    let primary = primary_revision(repo_path)?;
     let primary_sha = resolve_commit(repo_path, &primary)?;
     let excluded = cleanup_exclusions(repo_path, options, database_path)?;
     let refs = git_output_allow_empty(
@@ -122,7 +118,7 @@ pub(crate) fn fast_forward_candidates(
         let Some(branch) = reference.strip_prefix("refs/heads/") else {
             continue;
         };
-        if sha == primary_sha || excluded.contains(canonical_local_branch(branch)) {
+        if sha == primary_sha || excluded.contains(branch) {
             continue;
         }
         let worktree = worktrees.get(branch).cloned();
@@ -168,7 +164,7 @@ pub(crate) fn fast_forward_branches(
         }
     }
     Ok(BranchFastForward {
-        target: primary,
+        target: ref_label(&primary).to_string(),
         moved,
         failed,
         updates: changed_refs(&before, &ref_shas(repo_path)?),
@@ -326,7 +322,7 @@ mod tests {
             fast_forward_candidates(&fixture.path, &options(false), None).unwrap();
         discard(&fixture);
 
-        assert_eq!(primary, "main");
+        assert_eq!(primary, "refs/heads/main");
         let summary = candidates
             .iter()
             .map(|candidate| {
@@ -460,6 +456,25 @@ mod tests {
 
         assert!(!output.status.success());
         assert_eq!(trailing, advanced);
+    }
+
+    #[test]
+    fn fast_forwards_to_master_when_only_a_tag_is_named_main() {
+        let (path, run) = scratch_repository("fast-forward-master-with-main-tag");
+        run(&["branch", "-m", "master"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["update-ref", "refs/tags/main", "HEAD"]);
+        run(&["branch", "trailing"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "ahead"]);
+
+        let result = fast_forward_branches(&path, &options(false), None).unwrap();
+        let branch = sha(&path, "refs/heads/trailing");
+        let tip = sha(&path, "refs/heads/master");
+        remove_scratch_repository(&path);
+
+        assert_eq!(result.target, "master");
+        assert_eq!(result.moved, ["trailing"]);
+        assert_eq!(branch, tip);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::{collections::HashMap, fs, path::Path, path::PathBuf, thread};
 use crate::projects::parse_worktree_records;
 use crate::git::{
-    git_output, git_output_allow_empty, primary_revision, resolve_commit, worktree_path,
+    current_branch, git_output, git_output_allow_empty, primary_revision, resolve_commit, worktree_path,
 };
 
 #[derive(Clone, Copy, Serialize)]
@@ -272,7 +272,7 @@ pub(crate) struct RepositoryState {
 #[tauri::command(async)]
 pub(crate) fn repository_state(repo_path: String) -> Result<RepositoryState, String> {
     let worktree = worktree_path(&repo_path)?;
-    let current_branch = git_output(&worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let current_branch = current_branch(&worktree);
     let remotes = git_output_allow_empty(&repo_path, &["remote"]).unwrap_or_default();
     let remote = remotes
         .lines()
@@ -346,6 +346,22 @@ mod tests {
         let branch = branches.iter().find(|sync| sync.branch == "origin/main").unwrap();
         assert_eq!(branch.upstream.as_deref(), Some("origin/main"));
         assert_eq!((branch.ahead, branch.behind, branch.is_gone), (1, 0, false));
+    }
+
+    #[test]
+    fn reads_the_current_branch_name_when_a_tag_shares_it() {
+        use crate::test_support::{remove_scratch_repository, scratch_repository};
+
+        let (path, run) = scratch_repository("repository-state-branch-tag");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["update-ref", "refs/tags/main", "HEAD"]);
+
+        let state = repository_state(path.clone()).unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(state.current_branch.as_deref(), Some("main"));
+        assert_eq!(state.default_branch.as_deref(), Some("refs/heads/main"));
+        assert!(!state.is_detached);
     }
 
     #[test]

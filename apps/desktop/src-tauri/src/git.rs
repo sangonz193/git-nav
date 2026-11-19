@@ -84,7 +84,7 @@ pub(crate) fn resolve_commit(path: &str, reference: &str) -> Result<String, Stri
     let revision = format!("{reference}^{{commit}}");
     git_output_allow_empty(path, &["rev-parse", "--verify", "--end-of-options", &revision])
         .map(|value| value.trim().to_string())
-        .and_then(|value| (!value.is_empty()).then_some(value).ok_or_else(|| format!("Could not resolve {reference}.")))
+        .and_then(|value| (!value.is_empty()).then_some(value).ok_or_else(|| format!("Could not resolve {}.", ref_label(reference))))
 }
 
 pub(crate) fn resolve_diff_base(path: &str, reference: &str, head_sha: &str) -> Result<String, String> {
@@ -111,26 +111,18 @@ pub(crate) fn resolve_diff_base(path: &str, reference: &str, head_sha: &str) -> 
     resolve_commit(path, reference)
 }
 
-pub(crate) fn primary_reference(path: &str) -> Result<String, String> {
-    find_primary_reference(path, true)
+pub(crate) fn current_branch(path: &str) -> Option<String> {
+    git_output(path, &["symbolic-ref", "--quiet", "HEAD"])
+        .and_then(|reference| reference.strip_prefix("refs/heads/").map(str::to_string))
 }
 
 pub(crate) fn primary_revision(path: &str) -> Result<String, String> {
-    find_primary_reference(path, false)
-}
-
-fn find_primary_reference(path: &str, short: bool) -> Result<String, String> {
-    let args: &[&str] = if short {
-        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]
-    } else {
-        &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]
-    };
-    if let Some(reference) = git_output(path, args) {
+    if let Some(reference) = git_output(path, &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]) {
         if resolve_commit(path, &reference).is_ok() {
             return Ok(reference);
         }
     }
-    for reference in ["main", "master", "HEAD"] {
+    for reference in ["refs/heads/main", "refs/heads/master", "HEAD"] {
         if resolve_commit(path, reference).is_ok() {
             return Ok(reference.to_string());
         }
@@ -138,8 +130,18 @@ fn find_primary_reference(path: &str, short: bool) -> Result<String, String> {
     Err("Could not identify the primary branch.".to_string())
 }
 
+pub(crate) fn primary_local_branch(reference: &str) -> &str {
+    reference
+        .strip_prefix("refs/remotes/")
+        .and_then(|remote_ref| remote_ref.split_once('/').map(|(_, branch)| branch))
+        .unwrap_or_else(|| ref_label(reference))
+}
+
 pub(crate) fn ref_label(reference: &str) -> &str {
-    reference.strip_prefix("refs/remotes/").unwrap_or(reference)
+    ["refs/heads/", "refs/remotes/", "refs/tags/"]
+        .into_iter()
+        .find_map(|prefix| reference.strip_prefix(prefix))
+        .unwrap_or(reference)
 }
 
 pub(crate) fn worktree_path(path: &str) -> Result<String, String> {

@@ -419,6 +419,23 @@ mod tests {
     }
 
     #[test]
+    fn selects_the_local_primary_branch_when_a_tag_shares_its_name() {
+        let (path, run) = scratch_repository("compare-local-primary");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["update-ref", "refs/tags/main", "HEAD"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "main"]);
+        run(&["branch", "feature", "refs/heads/main"]);
+
+        let selection = branch_range(&path, "refs/heads/feature").unwrap();
+        let base = merge_base_sha(&path, &selection.base_ref, &selection.head_ref).unwrap();
+        let tip = resolve_commit(&path, "HEAD").unwrap();
+        remove_scratch_repository(&path);
+
+        assert_eq!(selection.base_ref, "refs/heads/main");
+        assert_eq!(base, tip);
+    }
+
+    #[test]
     fn compares_a_branch_against_where_it_forked_from_the_primary_branch() {
         let (path, run) = scratch_repository("branch-range");
         let write = |name: &str, contents: &str| fs::write(Path::new(&path).join(name), contents).unwrap();

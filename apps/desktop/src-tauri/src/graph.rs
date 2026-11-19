@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use crate::process::external_command;
 use crate::git::{
-    ChildGuard, git_output_allow_empty, is_ancestor, primary_reference, resolve_commit,
+    ChildGuard, git_output_allow_empty, is_ancestor, primary_local_branch, primary_revision, resolve_commit,
 };
 
 const COMMIT_BATCH_SIZE: usize = 500;
@@ -409,11 +409,12 @@ pub(crate) fn stream_commit_graph(
 // Lane 0 belongs to the default branch, and a local branch that is only ahead of its remote is the same
 // line of history, so the reservation starts at whichever of the two can reach the other.
 fn reserved_lane_tip(repo_path: &str) -> Option<String> {
-    let primary = primary_reference(repo_path).ok()?;
+    let primary = primary_revision(repo_path).ok()?;
     let primary_sha = resolve_commit(repo_path, &primary).ok()?;
-    let Some(local) = primary.strip_prefix("origin/") else {
+    if !primary.starts_with("refs/remotes/") {
         return Some(primary_sha);
-    };
+    }
+    let local = primary_local_branch(&primary);
     let Ok(local_sha) = resolve_commit(repo_path, &format!("refs/heads/{local}")) else {
         return Some(primary_sha);
     };
@@ -816,6 +817,7 @@ mod tests {
         run(&["commit", "--quiet", "--allow-empty", "--message", "remote side"]);
         run(&["update-ref", "refs/remotes/origin/main", "refs/heads/other"]);
         run(&["checkout", "--quiet", "main"]);
+        run(&["branch", "origin/main", "refs/heads/main"]);
         let remote = resolve_commit(&path, "refs/heads/other").unwrap();
         let diverged = reserved_lane_tip(&path);
         fs::remove_dir_all(&path).unwrap();

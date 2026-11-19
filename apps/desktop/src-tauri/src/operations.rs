@@ -1,9 +1,10 @@
 use serde::Deserialize;
 use std::{env, fs, time::SystemTime, time::UNIX_EPOCH};
 use crate::git::{
-    CompletedOperation, OperationResult, RefUpdate, completed_operation, conflicted_files,
-    failed_operation, git_error_message, git_output_allow_empty, git_result, git_result_with_stdin, ref_shas,
-    ref_label, resolve_commit, undone_operation, worktree_path,
+    CompletedOperation, FailedOperation, OperationResult, RefUpdate, completed_operation, conflicted_files,
+    failed_operation, git_error_message, git_output, git_output_allow_empty, git_result,
+    git_result_with_stdin, is_ancestor, ref_label, ref_shas, resolve_commit, undone_operation,
+    worktree_path,
 };
 use crate::worktrees::{
     idle_worktree, pending_operation, pending_operation_label, worktree_for_branch,
@@ -213,14 +214,18 @@ fn checkout_reference(repo_path: &str, reference: &str, options: &CheckoutOption
     }
 
     let output = git_result(&worktree, &arguments)?;
+    let label = if options.create.is_some() || options.detach { ref_label(reference) } else { reference };
     if !output.status.success() {
         if options.stash {
             let _ = git_result(&worktree, &["stash", "pop"]);
         }
-        return Ok(failed_operation(&output, Vec::new()));
+        return Ok(OperationResult::Failed(FailedOperation {
+            message: git_error_message(&output).replace(reference, label),
+            files: Vec::new(),
+        }));
     }
 
-    let landed = options.create.clone().unwrap_or_else(|| reference.to_string());
+    let landed = options.create.as_deref().unwrap_or(label);
     let mut summary = format!("Checked out {landed}.");
     if options.stash && !git_result(&worktree, &["stash", "pop"])?.status.success() {
         summary = format!("{summary} The set aside changes conflicted, so they are still in the stash and the files carry conflict markers.");
@@ -268,7 +273,8 @@ fn push_reference(repo_path: &str, reference: &str, options: &PushOptions) -> Re
     let summary = if options.delete {
         format!("Deleted {reference} from {}.", options.remote)
     } else {
-        format!("Pushed {reference} to {}.", options.remote)
+        let name = reference.strip_prefix("refs/heads/").unwrap_or(reference);
+        format!("Pushed {name} to {}.", options.remote)
     };
     // Rewinding the local remote-tracking ref would hide the push rather than reverse it, so this reports no undo.
     Ok(OperationResult::Completed(CompletedOperation { summary, updates: Vec::new() }))
@@ -388,33 +394,62 @@ fn merge_into_branch(repo_path: &str, source: &str, into: &str, options: &MergeO
         return squash_into_branch(repo_path, &worktree, source, into, options.message.as_deref());
     }
 
-    let mut arguments = vec!["merge".to_string(), "--no-edit".to_string()];
+    let mut arguments = vec!["merge", "--no-edit"];
     match options.mode.as_str() {
-        "noFastForward" => arguments.push("--no-ff".to_string()),
-        "fastForwardOnly" => arguments.push("--ff-only".to_string()),
+        "noFastForward" => arguments.push("--no-ff"),
+        "fastForwardOnly" => arguments.push("--ff-only"),
         _ => {}
     }
-    if let Some(message) = options.message.as_ref().filter(|message| !message.trim().is_empty()) {
-        arguments.push("--message".to_string());
-        arguments.push(message.clone());
-    } else if let Some(short) = source.strip_prefix("refs/remotes/") {
-        let input = format!("{source_sha}\t\tremote-tracking branch '{short}' of .\n");
-        let output = git_result_with_stdin(&worktree, &["fmt-merge-msg"], input.as_bytes())?;
-        // The formatter needs a current commit, but merging into an unborn branch does not.
-        if !output.status.success() && resolve_commit(&worktree, "HEAD").is_ok() {
+    let label = ref_label(source);
+    let summary = format!("Merged {label} into {into}.");
+    let abort = Some(["merge", "--abort"].as_slice());
+    let kind = [
+        ("refs/heads/", "branch"),
+        ("refs/remotes/", "remote-tracking branch"),
+        ("refs/tags/", "tag"),
+    ].into_iter().find_map(|(prefix, kind)| source.starts_with(prefix).then_some(kind));
+    let revision = if kind.is_some()
+        && !matches!(label, "-" | "FETCH_HEAD")
+        && git_output(&worktree, &[
+            "-c", "core.warnAmbiguousRefs=true", "rev-parse", "--symbolic-full-name",
+            "--verify", "--end-of-options", label,
+        ]).as_deref() == Some(source)
+    {
+        label
+    } else {
+        source
+    };
+    if let Some(message) = options.message.as_deref().filter(|message| !message.trim().is_empty()) {
+        arguments.extend(["--message", message]);
+    } else if let Some(kind) = kind.filter(|_| {
+        revision == source && options.mode != "fastForwardOnly"
+            && resolve_commit(&worktree, "HEAD").is_ok_and(|head| !is_ancestor(&worktree, &source_sha, &head))
+    }) {
+        let object = if kind == "tag" {
+            git_output_allow_empty(&worktree, &["rev-parse", "--verify", "--end-of-options", source])?.trim().to_string()
+        } else {
+            source_sha
+        };
+        let input = format!("{object}\t\t{kind} '{label}' of .\n");
+        let mut format_args = vec!["fmt-merge-msg"];
+        if kind == "branch" {
+            format_args.push("--no-log");
+        } else {
+            arguments.push("--no-log");
+        }
+        let output = git_result_with_stdin(&worktree, &format_args, input.as_bytes())?;
+        if !output.status.success() {
             return Err(git_error_message(&output));
         }
-        let message = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
-        if !message.trim_end().is_empty() {
-            arguments.push("--no-log".to_string());
-            arguments.push("--message".to_string());
-            arguments.push(message.trim_end().to_string());
-        }
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let path = directory.path().join("message");
+        fs::write(&path, output.stdout).map_err(|error| error.to_string())?;
+        let path = path.to_str().ok_or("The merge message path is not valid UTF-8.")?;
+        arguments.extend(["--file", path, "--", revision]);
+        return run_worktree_operation(repo_path, &worktree, summary, &arguments, abort);
     }
-    arguments.push(source.to_string());
-    let arguments: Vec<_> = arguments.iter().map(String::as_str).collect();
-    let summary = format!("Merged {} into {into}.", ref_label(source));
-    run_worktree_operation(repo_path, &worktree, summary, &arguments, Some(&["merge", "--abort"]))
+    arguments.extend(["--", revision]);
+    run_worktree_operation(repo_path, &worktree, summary, &arguments, abort)
 }
 
 #[git_nav_macros::http_command]
@@ -576,7 +611,7 @@ pub(crate) async fn reset_current(repo_path: String, target: String, mode: Strin
 mod tests {
     use super::*;
     use std::path::Path;
-    use crate::git::git_output;
+    use crate::git::{current_branch, git_output_bytes};
     use crate::worktrees::existing_git_path;
     use crate::test_support::{remove_scratch_repository, scratch_repository};
 
@@ -680,7 +715,7 @@ mod tests {
             &CheckoutOptions { create: None, track: false, detach: false, stash: true },
         )
         .unwrap();
-        let branch = git_output(&path, &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        let branch = current_branch(&path).unwrap();
         let restored = fs::read_to_string(Path::new(&path).join("tracked.txt")).unwrap();
         let stashes = git_output_allow_empty(&path, &["stash", "list"]).unwrap();
         fs::remove_dir_all(&path).unwrap();
@@ -862,6 +897,92 @@ mod tests {
     }
 
     #[test]
+    fn pushes_only_the_branch_and_sets_upstream_when_a_tag_shares_its_name() {
+        let (path, run) = scratch_repository("push-qualified-branch");
+        let (remote, _) = scratch_repository("push-qualified-branch-remote");
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["update-ref", "refs/tags/v1", "HEAD"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "branch tip"]);
+        run(&["branch", "v1"]);
+        run(&["remote", "add", "origin", &remote]);
+        let source = "refs/heads/v1";
+
+        let options = PushOptions { remote: "origin".to_string(), force: false, set_upstream: true, delete: false };
+        let result = push_reference(&path, source, &options).unwrap();
+        let remote_refs = ref_shas(&remote).unwrap();
+        let tip = resolve_commit(&path, source).unwrap();
+        let upstream = git_output(&path, &["for-each-ref", "--format=%(upstream)", source]);
+        remove_scratch_repository(&path);
+        remove_scratch_repository(&remote);
+
+        assert!(matches!(result, OperationResult::Completed(result) if result.summary == "Pushed v1 to origin."));
+        assert_eq!(remote_refs.get(source), Some(&tip));
+        assert!(!remote_refs.contains_key("refs/tags/v1"));
+        assert_eq!(upstream.as_deref(), Some("refs/remotes/origin/v1"));
+    }
+
+    #[test]
+    fn honors_the_destination_branch_merge_log_options() {
+        let (path, run) = scratch_repository("merge-branch-log");
+        run(&["config", "merge.log", "false"]);
+        run(&["config", "branch.integration.mergeOptions", "--log=8"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["switch", "--quiet", "-c", "topic"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "first change"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "second change"]);
+
+        let options = MergeOptions { mode: "noFastForward".to_string(), message: None };
+        for source_name in ["topic", "refs/heads/topic"] {
+            run(&["switch", "--quiet", "-C", "integration", "refs/heads/main"]);
+            let result = merge_into_branch(&path, "refs/heads/topic", "integration", &options).unwrap();
+            let subject = git_output(&path, &["log", "-1", "--format=%s"]);
+            let body = git_output(&path, &["log", "-1", "--format=%b"]);
+
+            assert!(matches!(result, OperationResult::Completed(_)));
+            assert_eq!(subject.as_deref(), Some("Merge branch 'topic' into integration"));
+            assert_eq!(body.unwrap(), format!("* {source_name}:\n  second change\n  first change"));
+            run(&["update-ref", "refs/tags/topic", "refs/heads/main"]);
+        }
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
+    fn merges_a_colliding_tag_with_a_long_non_utf8_annotation() {
+        let (path, run) = scratch_repository("merge-tag-annotation");
+        run(&["config", "i18n.commitEncoding", "ISO-8859-1"]);
+        run(&["config", "merge.log", "false"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["branch", "integration"]);
+        run(&["branch", "release"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "release"]);
+        let annotation = Path::new(&path).join(".git/annotation");
+        let mut message = b"caf\xe9\n".repeat(64_000);
+        message.extend_from_slice(b"End of release notes\n");
+        fs::write(&annotation, &message).unwrap();
+        run(&["tag", "--no-sign", "--annotate", "--file", annotation.to_str().unwrap(), "release"]);
+        let source = "refs/tags/release";
+        let tip = resolve_commit(&path, source).unwrap();
+        run(&["switch", "--quiet", "integration"]);
+
+        let options = MergeOptions { mode: "noFastForward".to_string(), message: None };
+        let merged = merge_into_branch(&path, source, "integration", &options).unwrap();
+        let commit = git_output_bytes(&path, &["cat-file", "commit", "HEAD"]).unwrap();
+        let merged_tip = resolve_commit(&path, "HEAD^2").unwrap();
+
+        run(&["switch", "--quiet", "release"]);
+        let options = MergeOptions { mode: "fastForwardOnly".to_string(), message: None };
+        let forwarded = merge_into_branch(&path, source, "release", &options).unwrap();
+        let forwarded_tip = resolve_commit(&path, "HEAD").unwrap();
+        remove_scratch_repository(&path);
+
+        assert!(matches!(merged, OperationResult::Completed(_)));
+        assert_eq!(merged_tip, tip);
+        assert!(commit.ends_with(&message));
+        assert!(matches!(forwarded, OperationResult::Completed(_)));
+        assert_eq!(forwarded_tip, tip);
+    }
+
+    #[test]
     fn names_the_remote_branch_in_the_merge_subject_when_a_local_name_collides() {
         let (path, run) = scratch_repository("merge-remote-ref");
         run(&["config", "merge.log", "true"]);
@@ -885,6 +1006,55 @@ mod tests {
         assert_eq!(subject.as_deref(), Some("Merge remote-tracking branch 'origin/main' into feature"));
         assert_eq!(body.as_deref(), Some("* origin/main:\n  remote"));
         assert_eq!(merged_sha.unwrap(), remote_sha);
+    }
+
+    #[test]
+    fn displays_short_tag_names_when_switching_to_a_tag() {
+        let (path, run) = scratch_repository("checkout-qualified-tag");
+        run(&["config", "tag.gpgSign", "false"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["tag", "release"]);
+        let options = CheckoutOptions { create: None, detach: true, track: false, stash: false };
+
+        let completed = checkout_reference(&path, "refs/tags/release", &options).unwrap();
+        let failed = checkout_reference(&path, "refs/tags/missing", &options).unwrap();
+        fs::remove_dir_all(&path).unwrap();
+
+        assert!(matches!(completed, OperationResult::Completed(result) if result.summary == "Checked out release."));
+        assert!(matches!(failed, OperationResult::Failed(result) if result.message.contains("missing") && !result.message.contains("refs/tags/")));
+    }
+
+    #[test]
+    fn names_branches_and_tags_in_merge_subjects_when_names_collide() {
+        let (path, run) = scratch_repository("merge-qualified-ref");
+        run(&["config", "merge.log", "false"]);
+        run(&["config", "tag.gpgSign", "false"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "base"]);
+        run(&["branch", "integration"]);
+        run(&["branch", "annotated"]);
+        run(&["branch", "lightweight"]);
+        run(&["tag", "release"]);
+        run(&["commit", "--quiet", "--allow-empty", "--message", "release"]);
+        run(&["branch", "release"]);
+        run(&["tag", "--annotate", "annotated", "--message", "Release annotation"]);
+        run(&["tag", "lightweight"]);
+        let tip = resolve_commit(&path, "HEAD").unwrap();
+        let options = MergeOptions { mode: "noFastForward".to_string(), message: None };
+
+        for (source, subject, body) in [
+            ("refs/heads/release", "Merge branch 'release' into integration", None),
+            ("refs/tags/annotated", "Merge tag 'annotated' into integration", Some("Release annotation")),
+            ("refs/tags/lightweight", "Merge tag 'lightweight' into integration", None),
+        ] {
+            run(&["switch", "--quiet", "-C", "integration", "refs/heads/annotated"]);
+            let result = merge_into_branch(&path, source, "integration", &options).unwrap();
+
+            assert!(matches!(result, OperationResult::Completed(_)));
+            assert_eq!(git_output(&path, &["log", "-1", "--format=%s"]).as_deref(), Some(subject));
+            assert_eq!(git_output(&path, &["log", "-1", "--format=%b"]).as_deref(), body);
+            assert_eq!(resolve_commit(&path, "HEAD^2").unwrap(), tip);
+        }
+        fs::remove_dir_all(&path).unwrap();
     }
 
     #[test]

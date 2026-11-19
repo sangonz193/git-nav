@@ -1,5 +1,7 @@
 import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
 
+const REF_NAMESPACE = /^refs\/(?:heads|remotes|tags)\//
+
 export type SelectedRefs = {
   base: string
   head: string
@@ -19,10 +21,16 @@ export function defaultBranchName(
   defaultBranch: string | null,
   remotes: string[],
 ) {
-  return remotes.reduce(
-    (value, remote) =>
-      value.startsWith(`${remote}/`) ? value.slice(remote.length + 1) : value,
-    defaultBranch ? refLabel(defaultBranch) : "",
+  const label = defaultBranch ? refLabel(defaultBranch) : ""
+  if (defaultBranch?.startsWith("refs/heads/")) {
+    return label
+  }
+  const remote = remotes.find((remote) => label.startsWith(`${remote}/`))
+  return (
+    remote ? label.slice(remote.length + 1)
+    : defaultBranch?.startsWith("refs/remotes/") ?
+      label.slice(label.indexOf("/") + 1)
+    : label
   )
 }
 
@@ -31,13 +39,19 @@ export function isDefaultBranch(
   defaultBranch: string | null,
   remotes: string[],
 ) {
+  if (!defaultBranch) {
+    return false
+  }
   const name = defaultBranchName(defaultBranch, remotes)
-  const label = refLabel(reference)
+  const revisions = [
+    defaultBranch,
+    `refs/heads/${name}`,
+    ...remotes.map((remote) => `refs/remotes/${remote}/${name}`),
+  ]
   return (
-    name !== "" &&
-    (reference === defaultBranch ||
-      label === name ||
-      remotes.some((remote) => label === `${remote}/${name}`))
+    revisions.includes(reference) ||
+    (!REF_NAMESPACE.test(reference) &&
+      revisions.some((revision) => refLabel(revision) === reference))
   )
 }
 
@@ -84,8 +98,7 @@ export function refLabel(reference: string) {
   return (
     reference === EMPTY_TREE_REF ? "empty"
     : reference === WORKTREE_REF ? "Working tree"
-    : reference.startsWith("refs/remotes/") ?
-      reference.slice("refs/remotes/".length)
+    : REF_NAMESPACE.test(reference) ? reference.replace(REF_NAMESPACE, "")
     : reference.replace(/^[0-9a-f]{40}(?:[0-9a-f]{24})?\b/i, (sha) =>
         sha.slice(0, 8),
       )
