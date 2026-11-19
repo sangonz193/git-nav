@@ -10,7 +10,7 @@ import { memo, type ReactNode } from "react"
 
 import {
   pullRequestDescription,
-  refName,
+  refRevision,
   relativeDate,
   syncDescription,
   worktreeDescription,
@@ -476,7 +476,7 @@ function RefBody({
   tipCommit: Commit | null
 }) {
   const { ref } = selection
-  const reference = refName(ref)
+  const reference = refRevision(ref)
   const divergence = divergenceTargets(ref, menus.repository?.defaultBranch)
   const tagDetails = useQuery({
     enabled: ref.kind === "tag",

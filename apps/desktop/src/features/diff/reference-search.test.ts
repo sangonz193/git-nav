@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import type { Commit, StashEntry } from "../commit-graph/commit-graph"
+import { isDefaultBranch } from "./diff-title"
 import {
   isRevisionExpression,
   searchReferences,
@@ -28,11 +29,13 @@ function reference(
   name: string,
   kind: Reference["kind"],
   sha = "sha",
+  revision = name,
 ): Reference {
   return {
     date: "2026-01-01T00:00:00Z",
     kind,
     name,
+    revision,
     sha,
     subject: `subject of ${name}`,
   }
@@ -67,6 +70,38 @@ describe("isRevisionExpression", () => {
 })
 
 describe("searchReferences", () => {
+  test("uses the same remote revision from the repository and graph for a comparison", () => {
+    const revision = "refs/remotes/origin/topic"
+    const [repositoryHit] = searchReferences(
+      "origin/topic",
+      sources({
+        references: [reference("origin/topic", "remote", "aaa", revision)],
+      }),
+    )
+    const [graphHit] = searchReferences(
+      "origin/topic",
+      sources({ commits: [commit("aaa", "topic", [revision])] }),
+    )
+
+    expect(repositoryHit.reference).toBe(revision)
+    expect(graphHit.reference).toBe(revision)
+  })
+
+  test("recognizes the default remote branch despite its disambiguated picker label", () => {
+    const defaultBranch = "refs/remotes/origin/main"
+    const [hit] = searchReferences(
+      "origin/main",
+      sources({
+        references: [
+          reference("remotes/origin/main", "remote", "aaa", defaultBranch),
+        ],
+      }),
+    )
+
+    expect(hit.label).toBe("remotes/origin/main")
+    expect(isDefaultBranch(hit.branch!, defaultBranch, ["origin"])).toBe(true)
+  })
+
   test("finds a branch the graph window does not reach", () => {
     const hits = searchReferences(
       "ancient",

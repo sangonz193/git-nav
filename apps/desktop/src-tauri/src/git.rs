@@ -112,7 +112,20 @@ pub(crate) fn resolve_diff_base(path: &str, reference: &str, head_sha: &str) -> 
 }
 
 pub(crate) fn primary_reference(path: &str) -> Result<String, String> {
-    if let Some(reference) = git_output(path, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]) {
+    find_primary_reference(path, true)
+}
+
+pub(crate) fn primary_revision(path: &str) -> Result<String, String> {
+    find_primary_reference(path, false)
+}
+
+fn find_primary_reference(path: &str, short: bool) -> Result<String, String> {
+    let args: &[&str] = if short {
+        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]
+    } else {
+        &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]
+    };
+    if let Some(reference) = git_output(path, args) {
         if resolve_commit(path, &reference).is_ok() {
             return Ok(reference);
         }
@@ -123,6 +136,10 @@ pub(crate) fn primary_reference(path: &str) -> Result<String, String> {
         }
     }
     Err("Could not identify the primary branch.".to_string())
+}
+
+pub(crate) fn ref_label(reference: &str) -> &str {
+    reference.strip_prefix("refs/remotes/").unwrap_or(reference)
 }
 
 pub(crate) fn worktree_path(path: &str) -> Result<String, String> {

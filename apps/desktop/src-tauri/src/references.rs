@@ -9,6 +9,7 @@ const REFERENCE_FORMAT: &str = "%(refname)%00%(refname:short)%00%(objectname)%00
 pub(crate) struct Reference {
     kind: String,
     name: String,
+    revision: String,
     sha: String,
     subject: String,
     date: String,
@@ -70,6 +71,7 @@ fn parse_references(output: &str) -> Vec<Reference> {
             Some(Reference {
                 kind: kind.to_string(),
                 name: name.to_string(),
+                revision: if kind == "remote" { full_name } else { name }.to_string(),
                 sha: sha.to_string(),
                 subject: subject.to_string(),
                 date: date.to_string(),
@@ -118,21 +120,21 @@ mod tests {
         let references = parse_references(&[
             "refs/heads/main\0main\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
             "refs/remotes/origin/HEAD\0origin\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
-            "refs/remotes/origin/main\0origin/main\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
+            "refs/remotes/origin/main\0remotes/origin/main\0branch-sha\0\0Ship it\0\02026-08-29T12:00:00+00:00",
             "refs/tags/v1\0v1\0tag-sha\0commit-sha\0Tag message\0Tagged commit\02026-08-28T12:00:00+00:00",
         ]
         .join("\n"));
 
         let described: Vec<_> = references
             .iter()
-            .map(|reference| (reference.kind.as_str(), reference.name.as_str(), reference.sha.as_str(), reference.subject.as_str()))
+            .map(|reference| (reference.kind.as_str(), reference.name.as_str(), reference.revision.as_str(), reference.sha.as_str(), reference.subject.as_str()))
             .collect();
         assert_eq!(
             described,
             vec![
-                ("branch", "main", "branch-sha", "Ship it"),
-                ("remote", "origin/main", "branch-sha", "Ship it"),
-                ("tag", "v1", "commit-sha", "Tagged commit"),
+                ("branch", "main", "main", "branch-sha", "Ship it"),
+                ("remote", "remotes/origin/main", "refs/remotes/origin/main", "branch-sha", "Ship it"),
+                ("tag", "v1", "v1", "commit-sha", "Tagged commit"),
             ]
         );
     }

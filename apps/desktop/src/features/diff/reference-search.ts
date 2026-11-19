@@ -11,6 +11,7 @@ export type Reference = {
   date: string
   kind: RefKind
   name: string
+  revision: string
   sha: string
   subject: string
 }
@@ -53,8 +54,14 @@ function worktreeHit(): ReferenceHit {
   }
 }
 
-function referenceHit({ kind, name, subject }: Reference): ReferenceHit {
-  return { branch: name, detail: subject, kind, label: name, reference: name }
+function referenceHit({ kind, name, revision, subject }: Reference) {
+  return {
+    branch: revision,
+    detail: subject,
+    kind,
+    label: name,
+    reference: revision,
+  }
 }
 
 /**
@@ -144,12 +151,14 @@ export function searchReferences(
       }
     } else if (!named.has(hit.label)) {
       named.add(hit.label)
+      const reference =
+        hit.kind === "remote" ? `refs/remotes/${hit.label}` : hit.label
       hits.push({
-        branch: hit.label,
+        branch: reference,
         detail: hit.detail,
         kind: hit.kind,
         label: hit.label,
-        reference: hit.label,
+        reference,
       })
     }
   }

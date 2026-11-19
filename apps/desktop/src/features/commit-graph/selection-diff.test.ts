@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test"
 
 import { EMPTY_TREE_REF } from "@/lib/repository-constants"
 
-import { commitSelection, displayRefs, refSelection } from "./commit-graph"
+import { persistedDiffPanelParams } from "../diff/diff-panel-state"
+import { branchRangeTitle, selectedRefs } from "../diff/diff-title"
+import {
+  commitSelection,
+  displayRefs,
+  refRevision,
+  refSelection,
+} from "./commit-graph"
 import {
   canDiffSelection,
   divergenceTargets,
@@ -69,6 +76,45 @@ describe("canDiffSelection", () => {
 
     expect(canDiffSelection(refSelection(topic, "a"), "main")).toBe(true)
   })
+
+  test("distinguishes the default remote ref from a same-named local branch", () => {
+    const [local, remote] = displayRefs([
+      "refs/heads/origin/main",
+      "refs/remotes/origin/main",
+    ])
+    const primary = "refs/remotes/origin/main"
+
+    expect(canDiffSelection(refSelection(local, "a"), primary)).toBe(true)
+    expect(canDiffSelection(refSelection(remote, "b"), primary)).toBe(false)
+    expect(divergenceTargets(local, primary)).toEqual([
+      { label: "origin/main", reference: primary },
+    ])
+  })
+})
+
+test("persists the remote diff revision with its short display label", () => {
+  const [local] = displayRefs(["refs/heads/origin/topic"])
+  const [remote] = displayRefs(["refs/remotes/origin/topic"])
+  const refs = selectedRefs(
+    "refs/remotes/origin/main",
+    refRevision(remote),
+    true,
+  )
+  const persisted = persistedDiffPanelParams(
+    { name: "repo", path: "/repo" },
+    refs,
+    null,
+    {},
+  )
+
+  expect(refRevision(local)).toBe("origin/topic")
+  expect(persisted).toMatchObject({
+    baseRef: "refs/remotes/origin/main",
+    baseLabel: "origin/main",
+    headRef: "refs/remotes/origin/topic",
+    headLabel: "origin/topic",
+  })
+  expect(branchRangeTitle(refs)).toBe("origin/topic")
 })
 
 describe("divergenceTargets", () => {
@@ -118,6 +164,35 @@ describe("divergenceTargets", () => {
 
     expect(divergenceTargets(topic, "main")).toEqual([
       { label: "origin/main", reference: "topic@{upstream}" },
+    ])
+    expect(divergenceTargets(topic, "refs/remotes/origin/main")).toEqual([
+      { label: "origin/main", reference: "topic@{upstream}" },
+    ])
+  })
+
+  test("keeps a remote default distinct from an upstream with a repeated remote name", () => {
+    const [local] = displayRefs(
+      ["refs/heads/origin/main", "refs/remotes/origin/origin/main"],
+      {
+        branchSync: new Map([
+          [
+            "origin/main",
+            {
+              branch: "origin/main",
+              upstream: "origin/origin/main",
+              ahead: 0,
+              behind: 0,
+              isGone: false,
+            },
+          ],
+        ]),
+      },
+    )
+    const primary = "refs/remotes/origin/main"
+
+    expect(divergenceTargets(local, primary)).toEqual([
+      { label: "origin/origin/main", reference: "origin/main@{upstream}" },
+      { label: "origin/main", reference: primary },
     ])
   })
 

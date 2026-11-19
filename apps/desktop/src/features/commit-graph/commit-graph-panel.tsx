@@ -1083,7 +1083,7 @@ function CommitGraphPanelContent({
   const openSelectionDiff = useCallback(
     (selected: Selection, filePath?: string) => {
       if (selected.kind !== "commits") {
-        return openRefDiff(refName(selected.ref))
+        return openRefDiff(selected.ref)
       }
       return selected.commits.length === 1 ?
           openCommitDiff(selected.tip, filePath)

@@ -22,7 +22,7 @@ export function defaultBranchName(
   return remotes.reduce(
     (value, remote) =>
       value.startsWith(`${remote}/`) ? value.slice(remote.length + 1) : value,
-    defaultBranch ?? "",
+    defaultBranch ? refLabel(defaultBranch) : "",
   )
 }
 
@@ -32,10 +32,12 @@ export function isDefaultBranch(
   remotes: string[],
 ) {
   const name = defaultBranchName(defaultBranch, remotes)
+  const label = refLabel(reference)
   return (
     name !== "" &&
-    (reference === name ||
-      remotes.some((remote) => reference === `${remote}/${name}`))
+    (reference === defaultBranch ||
+      label === name ||
+      remotes.some((remote) => label === `${remote}/${name}`))
   )
 }
 
@@ -82,6 +84,8 @@ export function refLabel(reference: string) {
   return (
     reference === EMPTY_TREE_REF ? "empty"
     : reference === WORKTREE_REF ? "Working tree"
+    : reference.startsWith("refs/remotes/") ?
+      reference.slice("refs/remotes/".length)
     : reference.replace(/^[0-9a-f]{40}(?:[0-9a-f]{24})?\b/i, (sha) =>
         sha.slice(0, 8),
       )

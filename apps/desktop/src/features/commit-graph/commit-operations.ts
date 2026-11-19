@@ -21,6 +21,7 @@ import type { ComponentType, ReactNode } from "react"
 import {
   PENDING_OPERATION_LABELS,
   refName,
+  refRevision,
   remoteBranchName,
   type Commit,
   type CommitSelection,
@@ -230,7 +231,7 @@ export function operandName(operand: Operand) {
 // Every operand that git can name resolves to something it accepts on a command line.
 function operandRef(operand: Operand) {
   if (isRef(operand)) {
-    return refName(operand.ref)
+    return refRevision(operand.ref)
   }
   if (operand.kind === "stash") {
     return operand.entry.name
@@ -431,10 +432,7 @@ const checkout: Operation = {
   ],
   action: () => "Check out",
   plan: ({ target }, values) => {
-    const reference =
-      target.kind === "remote" ?
-        `refs/remotes/${target.ref.label}`
-      : operandRef(target)
+    const reference = operandRef(target)
     const create = target.kind === "remote" ? values.name.trim() : null
     const track =
       Boolean(create) && target.kind === "remote" && target.ref.remote !== null
@@ -654,7 +652,12 @@ const pull: Operation = {
   }),
 }
 
-type MergeOperands = { into: string; name: string; reference: string }
+type MergeOperands = {
+  into: string
+  kind: Operand["kind"]
+  name: string
+  reference: string
+}
 
 function mergeOperation(
   id: string,
@@ -726,7 +729,7 @@ function mergeOperation(
         return [{ reason: "nothing to merge" }]
       }
       return [
-        ...(operands.name === operands.into ?
+        ...(operands.kind !== "remote" && operands.name === operands.into ?
           [{ reason: "a branch cannot merge into itself" }]
         : []),
         ...(state.branch && !state.branch.worktreePath ?
@@ -829,6 +832,7 @@ const mergeSelectedHere = mergeOperation(
     source && !sameOperand(source, target) && target.kind === "branch" ?
       {
         into: operandName(target),
+        kind: source.kind,
         name: operandName(source),
         reference: operandRef(source),
       }
@@ -844,10 +848,12 @@ const mergeIntoCurrent = mergeOperation(
     (
       repository.currentBranch &&
       (isRef(target) || isCommits(target)) &&
-      operandName(target) !== repository.currentBranch
+      (target.kind === "remote" ||
+        operandName(target) !== repository.currentBranch)
     ) ?
       {
         into: repository.currentBranch,
+        kind: target.kind,
         name: operandName(target),
         reference: operandRef(target),
       }
@@ -1308,10 +1314,7 @@ const createBranch: Operation = {
   action: () => "Create branch",
   plan: ({ target }, values) => {
     const name = values.name.trim()
-    const startPoint =
-      target.kind === "remote" ?
-        `refs/remotes/${target.ref.label}`
-      : operandRef(target)
+    const startPoint = operandRef(target)
     const track = target.kind === "remote" && target.ref.remote !== null
     const checkout = flag(values, "checkout")
     return {

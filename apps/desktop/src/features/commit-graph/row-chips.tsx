@@ -44,10 +44,12 @@ import {
   Terminal,
 } from "lucide-react"
 
+import { refLabel } from "../diff/diff-title"
 import {
   chipLabel,
   PULL_REQUEST_STATE_LABELS,
   refName,
+  refRevision,
   refSelection,
   refSyncLabel,
   sameRef,
@@ -77,7 +79,7 @@ import {
 export type ChipMenuContext = {
   copyText: (value: string) => void
   openPullRequest: (url: string) => void
-  openRefDiff: (reference: string) => void
+  openRefDiff: (ref: DisplayRef) => void
   openStashDiff: (entry: StashEntry) => void
   openWorkingTree: (worktree: RowWorktree) => void
   openWorktree: (path: string, target: WorktreeTarget) => void
@@ -174,6 +176,7 @@ export function refMenuActions(
 ) {
   const { Item, Sub, SubContent, SubTrigger } = components
   const reference = refName(ref)
+  const defaultBranch = menus.repository?.defaultBranch
   return (
     <>
       <OperationMenuItems
@@ -184,10 +187,10 @@ export function refMenuActions(
         source={menus.selection}
         target={refSelection(ref, sha)}
       />
-      {showCompare && reference !== menus.repository?.defaultBranch && (
-        <Item onSelect={() => menus.openRefDiff(reference)}>
+      {showCompare && refRevision(ref) !== defaultBranch && (
+        <Item onSelect={() => menus.openRefDiff(ref)}>
           <FileDiff />
-          {`Compare with ${menus.repository?.defaultBranch ?? "the default branch"}`}
+          {`Compare with ${defaultBranch ? refLabel(defaultBranch) : "the default branch"}`}
         </Item>
       )}
       <Item onSelect={() => menus.copyText(reference)}>
