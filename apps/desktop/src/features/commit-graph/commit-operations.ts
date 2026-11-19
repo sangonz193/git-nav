@@ -1482,12 +1482,12 @@ const deleteRemoteRef: Operation = {
   plan: ({ target }) => {
     const ref = (target as RefSelection).ref
     const remote = ref.remote ?? ""
-    const branch = remoteBranchName(ref) ?? ""
+    const reference = `refs/heads/${remoteBranchName(ref) ?? ""}`
     return {
-      argv: ["git", "push", remote, "--delete", branch],
+      argv: ["git", "push", remote, "--delete", reference],
       command: "push_ref",
       args: {
-        reference: branch,
+        reference,
         options: { remote, force: false, setUpstream: false, delete: true },
       },
     }

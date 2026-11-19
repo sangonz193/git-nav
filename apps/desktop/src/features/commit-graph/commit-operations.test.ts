@@ -407,9 +407,20 @@ describe("deleting a remote branch", () => {
   test("pushes the delete to the remote the ref lives on", () => {
     // The repository's primary remote is origin, so naming it here would delete the wrong branch elsewhere.
     expect(
-      planOf(forked, remoteRef("refs/remotes/upstream/main"), "deleteRemoteRef")
-        ?.argv,
-    ).toEqual(["git", "push", "upstream", "--delete", "main"])
+      planOf(forked, remoteRef("refs/remotes/upstream/v1"), "deleteRemoteRef"),
+    ).toEqual({
+      argv: ["git", "push", "upstream", "--delete", "refs/heads/v1"],
+      command: "push_ref",
+      args: {
+        reference: "refs/heads/v1",
+        options: {
+          remote: "upstream",
+          force: false,
+          setUpstream: false,
+          delete: true,
+        },
+      },
+    })
   })
 
   test("keeps a slash in the branch it deletes", () => {
@@ -419,7 +430,7 @@ describe("deleting a remote branch", () => {
         remoteRef("refs/remotes/origin/feat/graph"),
         "deleteRemoteRef",
       )?.argv,
-    ).toEqual(["git", "push", "origin", "--delete", "feat/graph"])
+    ).toEqual(["git", "push", "origin", "--delete", "refs/heads/feat/graph"])
   })
 
   test("never sees a remote HEAD, which is not shown as a ref in the first place", () => {
