@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
 import { showErrorToast } from "@/lib/error-toast"
 import { invoke } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import type { CompletedOperation } from "./commit-operations"
 import type { CleanOptions } from "./commit-graph-view"
@@ -67,26 +67,33 @@ export function useBranchFastForward({
     onError: (message) =>
       showErrorToast("Could not fast-forward branches.", message),
   })
-  // Cleanup candidates are excluded, so the set depends on the cleanup options in force.
+  // Repository changes stay out of the key so a busy repository cannot keep restarting the read.
+  const repositoryState = `${graphVersion}\0${pullRequestVersion}\0${worktreeState}`
+  const readState = useRef<string | null>(null)
   const previewQuery = useQuery({
-    queryKey: [
-      "fastForwardCandidates",
-      repoPath,
-      cleanOptions,
-      graphVersion,
-      pullRequestVersion,
-      worktreeState,
-    ],
-    queryFn: () =>
-      invoke<FastForwardCandidate[]>("preview_fast_forward_candidates", {
+    queryKey: ["fastForwardCandidates", repoPath, cleanOptions],
+    queryFn: () => {
+      readState.current = repositoryState
+      return invoke<FastForwardCandidate[]>("preview_fast_forward_candidates", {
         repoPath,
         options: cleanOptions,
-      }),
+      })
+    },
     enabled: worktreeState !== null,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     retry: false,
   })
+  const { isFetching, refetch } = previewQuery
+  useEffect(() => {
+    if (
+      worktreeState !== null &&
+      !isFetching &&
+      readState.current !== repositoryState
+    ) {
+      void refetch()
+    }
+  }, [isFetching, refetch, repositoryState, worktreeState])
   const preview = previewQuery.data ?? null
   return {
     candidateCount:
@@ -94,7 +101,7 @@ export function useBranchFastForward({
     fastForward: () => fastForwardMutation.mutate(),
     isConfirmationOpen,
     isPending: fastForwardMutation.isPending,
-    isPreviewPending: previewQuery.isFetching,
+    isPreviewPending: isFetching,
     preview,
     previewError: previewQuery.error && String(previewQuery.error),
     setIsConfirmationOpen,
