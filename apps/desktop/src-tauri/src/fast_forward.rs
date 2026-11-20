@@ -121,22 +121,46 @@ pub(crate) fn fast_forward_candidates(
         if sha == primary_sha || excluded.contains(branch) {
             continue;
         }
-        let worktree = worktrees.get(branch).cloned();
-        let blocker = worktree
-            .as_deref()
-            .map(worktree_blocker)
-            .transpose()?
-            .flatten();
         candidates.push(FastForwardCandidate {
             branch: branch.to_string(),
-            worktree,
-            blocker,
+            worktree: worktrees.get(branch).cloned(),
+            blocker: None,
             reference: reference.to_string(),
             sha: sha.to_string(),
         });
     }
+    assign_worktree_blockers(&mut candidates)?;
     candidates.sort_by(|left, right| left.branch.cmp(&right.branch));
     Ok((primary, candidates))
+}
+
+// Each check runs `git status`, and a repository can park dozens of worktrees on branches behind main.
+fn assign_worktree_blockers(candidates: &mut [FastForwardCandidate]) -> Result<(), String> {
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let chunk_size = candidates.len().div_ceil(8);
+    std::thread::scope(|scope| {
+        let workers = candidates
+            .chunks_mut(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    for candidate in chunk {
+                        candidate.blocker = candidate
+                            .worktree
+                            .as_deref()
+                            .map(worktree_blocker)
+                            .transpose()?
+                            .flatten();
+                    }
+                    Ok::<_, String>(())
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .try_for_each(|worker| worker.join().unwrap())
+    })
 }
 
 pub(crate) fn fast_forward_branches(

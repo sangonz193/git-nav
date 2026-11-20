@@ -1,6 +1,6 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, collections::HashSet, path::PathBuf, sync::Mutex, sync::OnceLock};
+use std::{collections::HashMap, collections::HashSet, path::PathBuf, sync::Arc, sync::Mutex, sync::OnceLock};
 use crate::projects::parse_worktree_records;
 use crate::git::{
     git_output, git_output_allow_empty, git_result, git_succeeds, patch_id, primary_local_branch,
@@ -65,6 +65,7 @@ pub(crate) struct SquashTip {
 }
 
 static LOCAL_SQUASH_MERGE_MEMO: OnceLock<Mutex<HashMap<String, HashMap<String, SquashTipMemo>>>> = OnceLock::new();
+static LOCAL_SQUASH_MERGE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 const MAX_MEMOIZED_SQUASH_TIPS: usize = 4096;
 
 #[cfg(test)]
@@ -102,6 +103,16 @@ fn record_squash_reachability_walk(repo_path: &str) {
 
 #[cfg(not(test))]
 fn record_squash_reachability_walk(_repo_path: &str) {}
+
+fn local_squash_merge_lock(repo_path: &str) -> Arc<Mutex<()>> {
+    LOCAL_SQUASH_MERGE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(repo_path.to_string())
+        .or_default()
+        .clone()
+}
 
 fn store_local_squash_merge_memos(repo_path: &str, mut next: HashMap<String, SquashTipMemo>) {
     if next.len() > MAX_MEMOIZED_SQUASH_TIPS {
@@ -332,7 +343,10 @@ fn cold_squash_tip_memos(
     memos
 }
 
+// Both toolbar badges and the graph ask at once, so later callers wait for the first and reuse its memo.
 fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
+    let lock = local_squash_merge_lock(repo_path);
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Ok(primary) = squash_search_reference(repo_path) else {
         return Vec::new();
     };
@@ -834,6 +848,30 @@ mod tests {
             .get(repo_path)
             .and_then(|memos| memos.get(tip))
             .cloned()
+    }
+
+    #[test]
+    fn concurrent_squash_searches_share_one_candidate_walk() {
+        let (path, run) = scratch_repository("squash-memo-concurrent");
+        fs::write(Path::new(&path).join("base.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "feature"]);
+        fs::write(Path::new(&path).join("feature.txt"), "feature\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "feature"]);
+        run(&["checkout", "--quiet", "main"]);
+
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| local_squash_merges(&path));
+            }
+        });
+        let walks = SQUASH_CANDIDATE_WALKS.get().unwrap().lock().unwrap()[&path];
+        clear_squash_memo(&path);
+        remove_scratch_repository(&path);
+
+        assert_eq!(walks, 1);
     }
 
     #[test]
