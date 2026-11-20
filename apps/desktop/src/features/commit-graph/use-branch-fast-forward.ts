@@ -1,8 +1,8 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
 import { showErrorToast } from "@/lib/error-toast"
-import { invoke } from "@/lib/ipc"
+import { invoke, isDesktop } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import type { CompletedOperation } from "./commit-operations"
 import type { CleanOptions } from "./commit-graph-view"
@@ -36,6 +36,7 @@ export function useBranchFastForward({
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
   const fastForwardMutation = useMutation({
+    networkMode: isDesktop ? "always" : "online",
     mutationFn: () =>
       invoke<BranchFastForward>("fast_forward_merged_branches", {
         repoPath,
@@ -67,26 +68,29 @@ export function useBranchFastForward({
     onError: (message) =>
       showErrorToast("Could not fast-forward branches.", message),
   })
-  // Cleanup candidates are excluded, so the set depends on the cleanup options in force.
+  // Repository changes stay out of the key so a busy repository cannot keep restarting the read.
+  const repositoryState = `${graphVersion}\0${pullRequestVersion}\0${worktreeState}`
+  const [readState, setReadState] = useState<string | null>(null)
   const previewQuery = useQuery({
-    queryKey: [
-      "fastForwardCandidates",
-      repoPath,
-      cleanOptions,
-      graphVersion,
-      pullRequestVersion,
-      worktreeState,
-    ],
-    queryFn: () =>
-      invoke<FastForwardCandidate[]>("preview_fast_forward_candidates", {
+    queryKey: ["fastForwardCandidates", repoPath, cleanOptions],
+    networkMode: isDesktop ? "always" : "online",
+    queryFn: () => {
+      setReadState(repositoryState)
+      return invoke<FastForwardCandidate[]>("preview_fast_forward_candidates", {
         repoPath,
         options: cleanOptions,
-      }),
-    enabled: worktreeState !== null,
+      })
+    },
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     retry: false,
   })
+  const { fetchStatus, refetch } = previewQuery
+  useEffect(() => {
+    if (fetchStatus === "idle" && readState !== repositoryState) {
+      void refetch()
+    }
+  }, [fetchStatus, readState, refetch, repositoryState])
   const preview = previewQuery.data ?? null
   return {
     candidateCount:
@@ -94,7 +98,8 @@ export function useBranchFastForward({
     fastForward: () => fastForwardMutation.mutate(),
     isConfirmationOpen,
     isPending: fastForwardMutation.isPending,
-    isPreviewPending: previewQuery.isFetching,
+    // A read still owed to a change keeps the badge loading, so it does not flash idle between reads.
+    isPreviewPending: fetchStatus !== "idle" || readState !== repositoryState,
     preview,
     previewError: previewQuery.error && String(previewQuery.error),
     setIsConfirmationOpen,

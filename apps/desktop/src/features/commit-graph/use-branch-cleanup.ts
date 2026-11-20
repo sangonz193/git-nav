@@ -1,8 +1,8 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
 import { showErrorToast } from "@/lib/error-toast"
-import { invoke } from "@/lib/ipc"
+import { invoke, isDesktop } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import type { CleanOptions } from "./commit-graph-view"
 
@@ -39,6 +39,7 @@ export function useBranchCleanup({
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
   const cleanMutation = useMutation({
+    networkMode: isDesktop ? "always" : "online",
     mutationFn: async (): Promise<CleanResult> => {
       if (!Object.values(cleanOptions).some(Boolean)) {
         return { report: "Select at least one cleanup option." }
@@ -74,35 +75,37 @@ export function useBranchCleanup({
     },
     onError: (message) => showErrorToast("Could not delete branches.", message),
   })
-  // The badge counts what the dialog would delete, so the candidates are read for the options in force and
-  // re-read when the repository changes rather than on a timer of their own.
+  // Repository changes stay out of the key so a busy repository cannot keep restarting the read.
+  const repositoryState = `${graphVersion}\0${pullRequestVersion}\0${worktreeState}`
+  const [readState, setReadState] = useState<string | null>(null)
   const previewQuery = useQuery({
-    queryKey: [
-      "cleanupCandidates",
-      repoPath,
-      cleanOptions,
-      graphVersion,
-      pullRequestVersion,
-      worktreeState,
-    ],
-    queryFn: () =>
-      invoke<CleanupCandidate[]>("preview_cleanup_candidates", {
+    queryKey: ["cleanupCandidates", repoPath, cleanOptions],
+    networkMode: isDesktop ? "always" : "online",
+    queryFn: () => {
+      setReadState(repositoryState)
+      return invoke<CleanupCandidate[]>("preview_cleanup_candidates", {
         repoPath,
         options: cleanOptions,
-      }),
-    // The count stands until a newer one replaces it, so a refresh does not blank the badge on its way through.
-    enabled: worktreeState !== null,
+      })
+    },
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     retry: false,
   })
+  const { fetchStatus, refetch } = previewQuery
+  useEffect(() => {
+    if (fetchStatus === "idle" && readState !== repositoryState) {
+      void refetch()
+    }
+  }, [fetchStatus, readState, refetch, repositoryState])
   const cleanPreview = previewQuery.data ?? null
   return {
     candidateCount: cleanPreview?.length ?? 0,
     clean: () => cleanMutation.mutate(),
     isConfirmationOpen,
     isPending: cleanMutation.isPending,
-    isPreviewPending: previewQuery.isFetching,
+    // A read still owed to a change keeps the badge loading, so it does not flash idle between reads.
+    isPreviewPending: fetchStatus !== "idle" || readState !== repositoryState,
     preview: cleanPreview,
     previewError: previewQuery.error && String(previewQuery.error),
     setIsConfirmationOpen,

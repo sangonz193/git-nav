@@ -1,6 +1,7 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, collections::HashSet, path::PathBuf, sync::Mutex, sync::OnceLock};
+use std::{collections::HashMap, collections::HashSet, path::PathBuf, sync::Arc, sync::Mutex, sync::OnceLock};
+use crate::process::{parallel_map, PARALLEL_MAP_WORKERS};
 use crate::projects::parse_worktree_records;
 use crate::git::{
     git_output, git_output_allow_empty, git_result, git_succeeds, patch_id, primary_local_branch,
@@ -65,6 +66,7 @@ pub(crate) struct SquashTip {
 }
 
 static LOCAL_SQUASH_MERGE_MEMO: OnceLock<Mutex<HashMap<String, HashMap<String, SquashTipMemo>>>> = OnceLock::new();
+static LOCAL_SQUASH_MERGE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 const MAX_MEMOIZED_SQUASH_TIPS: usize = 4096;
 
 #[cfg(test)]
@@ -102,6 +104,16 @@ fn record_squash_reachability_walk(repo_path: &str) {
 
 #[cfg(not(test))]
 fn record_squash_reachability_walk(_repo_path: &str) {}
+
+fn local_squash_merge_lock(repo_path: &str) -> Arc<Mutex<()>> {
+    LOCAL_SQUASH_MERGE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(repo_path.to_string())
+        .or_default()
+        .clone()
+}
 
 fn store_local_squash_merge_memos(repo_path: &str, mut next: HashMap<String, SquashTipMemo>) {
     if next.len() > MAX_MEMOIZED_SQUASH_TIPS {
@@ -194,19 +206,24 @@ fn octopus_merge_base(repo_path: &str, revisions: &[&str]) -> Result<Option<Stri
     octopus_merge_base(repo_path, &revisions)
 }
 
-fn candidate_patch_id(repo_path: &str, hash: &str, patches: &mut HashMap<String, Option<String>>) -> Result<String, ()> {
-    patches
-        .entry(hash.to_string())
-        .or_insert_with(|| patch_id(repo_path, &["show", hash]))
-        .clone()
-        .ok_or(())
+fn candidate_patch_id(repo_path: &str, hash: &str, patches: &Mutex<HashMap<String, Option<String>>>) -> Result<String, ()> {
+    let cached = patches.lock().unwrap().get(hash).cloned();
+    let patch = match cached {
+        Some(patch) => patch,
+        // Computed without the lock so workers run their git processes in parallel.
+        None => {
+            let patch = patch_id(repo_path, &["show", hash]);
+            patches.lock().unwrap().insert(hash.to_string(), patch.clone());
+            patch
+        }
+    };
+    patch.ok_or(())
 }
 
 fn squash_merge_target_from_memo(
-    repo_path: &str,
     memo: &SquashTipMemo,
     candidates: &[&SquashCandidate],
-    candidate_patches: &mut HashMap<String, Option<String>>,
+    mut candidate_patch: impl FnMut(&str) -> Result<String, ()>,
 ) -> Result<Option<String>, ()> {
     if let Some(candidate) = candidates.iter().find(|candidate| candidate.tree == memo.tree) {
         return Ok(Some(candidate.hash.clone()));
@@ -216,7 +233,7 @@ fn squash_merge_target_from_memo(
     }
     let branch_patch = memo.patch_id.as_deref().unwrap();
     for candidate in candidates.iter().filter(|candidate| candidate.paths == memo.paths) {
-        if candidate_patch_id(repo_path, &candidate.hash, candidate_patches)? == branch_patch {
+        if candidate_patch(&candidate.hash)? == branch_patch {
             return Ok(Some(candidate.hash.clone()));
         }
     }
@@ -229,7 +246,7 @@ fn compute_squash_tip_memo(
     base: &str,
     primary: &str,
     candidates: &[&SquashCandidate],
-    candidate_patches: &mut HashMap<String, Option<String>>,
+    candidate_patch: impl FnMut(&str) -> Result<String, ()>,
 ) -> Result<SquashTipMemo, ()> {
     let mut memo = SquashTipMemo {
         base: base.to_string(),
@@ -256,7 +273,7 @@ fn compute_squash_tip_memo(
     if memo.patch_id.is_none() {
         return Err(());
     }
-    memo.result = squash_merge_target_from_memo(repo_path, &memo, candidates, candidate_patches)?;
+    memo.result = squash_merge_target_from_memo(&memo, candidates, candidate_patch)?;
     Ok(memo)
 }
 
@@ -278,61 +295,81 @@ fn cold_squash_tip_memos(
     repo_path: &str,
     primary_hash: &str,
     tips: &[SquashTip],
-    candidate_patches: &mut HashMap<String, Option<String>>,
+    candidate_patches: HashMap<String, Option<String>>,
 ) -> HashMap<String, SquashTipMemo> {
-    let branch_bases: Vec<_> = tips
-        .iter()
-        .filter_map(|tip| git_output(repo_path, &["merge-base", &tip.hash, primary_hash]).map(|base| (tip, base)))
-        .collect();
-    let bases: Vec<_> = branch_bases
-        .iter()
-        .map(|(_, base)| base.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
+    let branch_bases: Vec<_> = parallel_map(tips, |tip| {
+        git_output(repo_path, &["merge-base", &tip.hash, primary_hash]).map(|base| (tip, base))
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut tips_by_base = HashMap::new();
+    for (tip, base) in branch_bases {
+        tips_by_base.entry(base).or_insert_with(Vec::new).push(tip);
+    }
+    let bases: Vec<_> = tips_by_base.into_iter().collect();
     if bases.is_empty() {
         return HashMap::new();
     }
     let mut revisions = vec![primary_hash];
-    revisions.extend(bases.iter().map(String::as_str));
+    revisions.extend(bases.iter().map(|(base, _)| base.as_str()));
     let Ok(oldest_base) = octopus_merge_base(repo_path, &revisions) else {
         return HashMap::new();
     };
-    if oldest_base.is_none() {
-        let mut memos = HashMap::new();
-        for base in bases {
-            let Ok(candidates) = squash_candidates(repo_path, &format!("{base}..{primary_hash}")) else {
-                continue;
-            };
-            let candidates: Vec<_> = candidates.iter().collect();
-            for (tip, tip_base) in branch_bases.iter().filter(|(_, tip_base)| tip_base == &base) {
-                if let Ok(memo) = compute_squash_tip_memo(repo_path, tip, tip_base, primary_hash, &candidates, candidate_patches) {
-                    memos.insert(tip.hash.clone(), memo);
-                }
-            }
-        }
-        return memos;
-    }
-    let Ok(candidates) = squash_candidates(repo_path, &format!("{}..{primary_hash}", oldest_base.unwrap())) else {
+    let Ok(shared) = oldest_base
+        .map(|base| squash_candidates(repo_path, &format!("{base}..{primary_hash}")))
+        .transpose()
+    else {
         return HashMap::new();
     };
+    let candidate_patches = Mutex::new(candidate_patches);
     let mut memos = HashMap::new();
-    for base in bases {
-        let Ok(hashes) = git_output_allow_empty(repo_path, &["rev-list", "--no-merges", &format!("{base}..{primary_hash}")]) else {
-            continue;
-        };
-        let hashes = hashes.lines().collect();
-        let candidates = squash_candidates_for_base(&candidates, &hashes);
-        for (tip, tip_base) in branch_bases.iter().filter(|(_, tip_base)| tip_base == &base) {
-            if let Ok(memo) = compute_squash_tip_memo(repo_path, tip, tip_base, primary_hash, &candidates, candidate_patches) {
-                memos.insert(tip.hash.clone(), memo);
+    for batch in bases.chunks(PARALLEL_MAP_WORKERS * 2) {
+        let separate;
+        let candidates = match &shared {
+            Some(shared) => parallel_map(batch, |(base, _)| {
+                let hashes = git_output_allow_empty(
+                    repo_path,
+                    &["rev-list", "--no-merges", &format!("{base}..{primary_hash}")],
+                )
+                .ok()?;
+                Some(squash_candidates_for_base(shared, &hashes.lines().collect()))
+            }),
+            None => {
+                separate = parallel_map(batch, |(base, _)| {
+                    squash_candidates(repo_path, &format!("{base}..{primary_hash}")).ok()
+                });
+                separate
+                    .iter()
+                    .map(|candidates| candidates.as_ref().map(|candidates| candidates.iter().collect()))
+                    .collect()
             }
-        }
+        };
+        let jobs: Vec<_> = batch
+            .iter()
+            .zip(&candidates)
+            .filter_map(|((base, tips), candidates)| Some((base, tips, candidates.as_ref()?)))
+            .flat_map(|(base, tips, candidates)| tips.iter().map(move |tip| (tip, base, candidates)))
+            .collect();
+        memos.extend(
+            parallel_map(&jobs, |(tip, base, candidates)| {
+                compute_squash_tip_memo(repo_path, tip, base, primary_hash, candidates, |hash| {
+                    candidate_patch_id(repo_path, hash, &candidate_patches)
+                })
+                .ok()
+                .map(|memo| (tip.hash.clone(), memo))
+            })
+            .into_iter()
+            .flatten(),
+        );
     }
     memos
 }
 
+// Concurrent callers wait for the first search and reuse its memo.
 fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
+    let lock = local_squash_merge_lock(repo_path);
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Ok(primary) = squash_search_reference(repo_path) else {
         return Vec::new();
     };
@@ -375,7 +412,7 @@ fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
             None => cold.push(tip.clone()),
         }
     }
-    let mut candidate_patches = HashMap::new();
+    let candidate_patches = Mutex::new(HashMap::new());
     for (old_primary, entries) in advanced {
         match git_is_ancestor(repo_path, &old_primary, &primary_hash) {
             Ok(true) => {
@@ -403,7 +440,9 @@ fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
                 Ok(candidates) => {
                     let candidates: Vec<_> = candidates.iter().collect();
                     for (tip, mut memo) in pending {
-                        match squash_merge_target_from_memo(repo_path, &memo, &candidates, &mut candidate_patches) {
+                        match squash_merge_target_from_memo(&memo, &candidates, |hash| {
+                            candidate_patch_id(repo_path, hash, &candidate_patches)
+                        }) {
                             Ok(result) => {
                                 memo.result = result;
                                 memo.primary = primary_hash.clone();
@@ -446,7 +485,7 @@ fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
             Err(_) => cold.extend(entries.into_iter().map(|(tip, _)| tip)),
         }
     }
-    let fills = cold_squash_tip_memos(repo_path, &primary_hash, &cold, &mut candidate_patches);
+    let fills = cold_squash_tip_memos(repo_path, &primary_hash, &cold, candidate_patches.into_inner().unwrap());
     for (tip, memo) in fills {
         if let Some(target) = &memo.result {
             edges.push((tip.clone(), target.clone()));
@@ -834,6 +873,30 @@ mod tests {
             .get(repo_path)
             .and_then(|memos| memos.get(tip))
             .cloned()
+    }
+
+    #[test]
+    fn concurrent_squash_searches_share_one_candidate_walk() {
+        let (path, run) = scratch_repository("squash-memo-concurrent");
+        fs::write(Path::new(&path).join("base.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "base"]);
+        run(&["checkout", "--quiet", "-b", "feature"]);
+        fs::write(Path::new(&path).join("feature.txt"), "feature\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "--quiet", "--message", "feature"]);
+        run(&["checkout", "--quiet", "main"]);
+
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| local_squash_merges(&path));
+            }
+        });
+        let walks = SQUASH_CANDIDATE_WALKS.get().unwrap().lock().unwrap()[&path];
+        clear_squash_memo(&path);
+        remove_scratch_repository(&path);
+
+        assert_eq!(walks, 1);
     }
 
     #[test]

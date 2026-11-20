@@ -1,3 +1,4 @@
+use crate::process::parallel_map;
 use crate::cleanup::{cleanup_candidates, cleanup_database_path, CleanupOptions};
 use crate::git::{
     changed_refs, git_error_message, git_output_allow_empty, git_result, primary_revision, ref_label,
@@ -121,22 +122,27 @@ pub(crate) fn fast_forward_candidates(
         if sha == primary_sha || excluded.contains(branch) {
             continue;
         }
-        let worktree = worktrees.get(branch).cloned();
-        let blocker = worktree
-            .as_deref()
-            .map(worktree_blocker)
-            .transpose()?
-            .flatten();
         candidates.push(FastForwardCandidate {
             branch: branch.to_string(),
-            worktree,
-            blocker,
+            worktree: worktrees.get(branch).cloned(),
+            blocker: None,
             reference: reference.to_string(),
             sha: sha.to_string(),
         });
     }
+    assign_worktree_blockers(&mut candidates)?;
     candidates.sort_by(|left, right| left.branch.cmp(&right.branch));
     Ok((primary, candidates))
+}
+
+fn assign_worktree_blockers(candidates: &mut [FastForwardCandidate]) -> Result<(), String> {
+    let blockers = parallel_map(&*candidates, |candidate| {
+        candidate.worktree.as_deref().map(worktree_blocker).transpose()
+    });
+    for (candidate, blocker) in candidates.iter_mut().zip(blockers) {
+        candidate.blocker = blocker?.flatten();
+    }
+    Ok(())
 }
 
 pub(crate) fn fast_forward_branches(

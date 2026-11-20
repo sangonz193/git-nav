@@ -1,4 +1,5 @@
 use std::{io, io::Read, process::Command, process::Output, process::Stdio, thread, time::Duration, time::Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(any(unix, test))]
 use std::{env, ffi::OsStr, ffi::OsString, path::Path};
 #[cfg(all(unix, not(test)))]
@@ -376,10 +377,48 @@ fn apply_appimage_environment(
     }
 }
 
+pub(crate) const PARALLEL_MAP_WORKERS: usize = 8;
+
+// Spawning a process costs milliseconds, so independent git calls share a few threads.
+pub(crate) fn parallel_map<'a, T: Sync, R: Send>(items: &'a [T], map: impl Fn(&'a T) -> R + Sync) -> Vec<R> {
+    let next_index = AtomicUsize::new(0);
+    let map = &map;
+    let next_index = &next_index;
+    thread::scope(|scope| {
+        let workers = (0..items.len().min(PARALLEL_MAP_WORKERS))
+            .map(|_| scope.spawn(move || {
+                let mut results = Vec::new();
+                loop {
+                    let index = next_index.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(index) else {
+                        break;
+                    };
+                    results.push((index, map(item)));
+                }
+                results
+            }))
+            .collect::<Vec<_>>();
+        let mut ordered = Vec::new();
+        ordered.resize_with(items.len(), || None);
+        for (index, result) in workers.into_iter().flat_map(|worker| worker.join().unwrap()) {
+            ordered[index] = Some(result);
+        }
+        ordered.into_iter().map(Option::unwrap).collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn parallel_map_keeps_input_order() {
+        let items: Vec<_> = (0..37).collect();
+
+        assert_eq!(parallel_map(&items, |item| item * 2), items.iter().map(|item| item * 2).collect::<Vec<_>>());
+        assert!(parallel_map(&Vec::<i32>::new(), |item| *item).is_empty());
+    }
 
     #[test]
     #[cfg(target_os = "windows")]
