@@ -396,14 +396,26 @@ pub(crate) fn tag_details(repo_path: String, tag: String) -> Result<Option<TagDe
     Ok(parse_tag_details(&output))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub(crate) enum CommitGraphEvent {
+    Batch(Vec<Vec<serde_json::Value>>),
+    Done { has_more: bool },
+}
+
 #[tauri::command]
 pub(crate) fn stream_commit_graph(
     repo_path: String,
-    on_batch: Channel<Vec<Vec<serde_json::Value>>>,
+    on_batch: Channel<CommitGraphEvent>,
 ) -> Result<(), String> {
     walk_commit_graph(&repo_path, |batch| {
-        on_batch.send(batch).map_err(|error| error.to_string())
-    })
+        on_batch
+            .send(CommitGraphEvent::Batch(batch))
+            .map_err(|error| error.to_string())
+    })?;
+    on_batch
+        .send(CommitGraphEvent::Done { has_more: false })
+        .map_err(|error| error.to_string())
 }
 
 // Lane 0 belongs to the default branch, and a local branch that is only ahead of its remote is the same

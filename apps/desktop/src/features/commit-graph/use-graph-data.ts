@@ -2,6 +2,7 @@ import { invoke, isDesktop, stream } from "@/lib/ipc"
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,7 @@ import {
 import {
   commitFromTuple,
   indexPullRequests,
+  parseRef,
   type BranchPullRequest,
   type BranchSync,
   type Commit,
@@ -31,23 +33,30 @@ export const BROWSER_GRAPH_WINDOW_SIZE = 2_000
 const REPOSITORY_FINGERPRINT_INTERVAL = 1_500
 const REPOSITORY_FOCUS_DEBOUNCE = 150
 type GraphWindowComplete = { hasMore: boolean }
+const EMPTY_GRAPH = {
+  commits: [] as Commit[],
+  offset: 0,
+  hasOlderCommits: false,
+  version: 0,
+}
 
 export function useGraphData({
-  onBeforeReload,
   onError,
   repoPath,
 }: {
-  onBeforeReload: () => void
   onError: (message: string | null) => void
   repoPath: string
 }) {
-  const [commits, setCommits] = useState<Commit[]>([])
+  const [graph, setGraph] = useState(EMPTY_GRAPH)
   const [squashMergeInferences, setSquashMergeInferences] = useState<
     SquashMergeInference[]
   >([])
-  const [graphVersion, setGraphVersion] = useState(0)
-  const [graphOffset, setGraphOffset] = useState(0)
-  const [hasOlderCommits, setHasOlderCommits] = useState(false)
+  const [request, setRequest] = useState({
+    offset: null as number | null,
+    refresh: true,
+  })
+  const requestedWindow = useRef({ request, pending: true })
+  const displayedOffset = useRef<number | null>(null)
   const [isGraphWindowLoading, setIsGraphWindowLoading] = useState(true)
   const worktreeStatusCache = getWorktreeStatusCache(repoPath)
   const { isLoaded, projectWorktrees, worktreeStatuses, repository, stashes } =
@@ -65,11 +74,9 @@ export function useGraphData({
   const [pullRequestVersion, setPullRequestVersion] = useState(0)
   const fingerprint = useRef<string | null>(null)
   const fingerprintGeneration = useRef(0)
-  const streamedRepoPath = useRef<string | null>(null)
   const squashMergeInferenceGeneration = useRef(0)
   const squashMergeInferenceRequest = useRef<{
-    graphVersion: number
-    path: string
+    window: typeof request
     request: Promise<SquashMergeInference[] | null>
   } | null>(null)
   const refreshSquashMergeInferencesRef = useRef<(() => void) | null>(null)
@@ -85,15 +92,27 @@ export function useGraphData({
       }
     }, []),
   })
+  const setGraphOffset = useCallback(
+    (offset: number | null, refresh = false) => {
+      const current = requestedWindow.current
+      const next = {
+        offset,
+        refresh: refresh || (current.pending && current.request.refresh),
+      }
+      requestedWindow.current = { request: next, pending: true }
+      setRequest(next)
+      setIsGraphWindowLoading(true)
+      onError(null)
+    },
+    [onError],
+  )
   const refreshGraph = useCallback(() => {
-    onError(null)
-    onBeforeReload()
     // The next poll adopts whatever the re-stream lands on rather than refreshing again on top of it.
     fingerprint.current = null
     fingerprintGeneration.current += 1
-    setGraphOffset(0)
-    setGraphVersion((version) => version + 1)
-  }, [onBeforeReload, onError])
+    const current = requestedWindow.current
+    setGraphOffset(current.pending ? current.request.offset : null, true)
+  }, [setGraphOffset])
   // HEAD moves with every commit, so these markers stay anchored to a stale commit until the refs are re-read.
   const refreshWorktreeStatus = useCallback(
     (
@@ -164,45 +183,49 @@ export function useGraphData({
     return byBase
   }, [stashes])
 
+  const needsBranchStatus = useEffectEvent((commits: Commit[]) =>
+    commits.some((commit) =>
+      commit.refs.some((decoration) => {
+        const ref = parseRef(decoration)
+        return ref?.kind === "branch" && !branchSync.has(ref.name)
+      }),
+    ),
+  )
+
   useEffect(() => {
     let disposed = false
-    let isReplaced = false
+    let finished = false
     let inferenceTimeout: number | null = null
-    // The reset belongs to the stream that replaces the window, so it lives where that stream starts. Only
-    // another repository is cleared outright: a refresh keeps the graph on screen until its replacement's first
-    // rows land, so the panel never blanks between the two.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setHasOlderCommits(false)
-    setIsGraphWindowLoading(true)
-    if (streamedRepoPath.current !== repoPath) {
-      streamedRepoPath.current = repoPath
-      setCommits([])
-    }
+    const isCurrent = () =>
+      !disposed && requestedWindow.current.request === request
+    const previousOffset = displayedOffset.current
+    const offset = request.offset ?? previousOffset ?? 0
+    const buffer = previousOffset !== null || offset > 0
+    let replacement: Commit[] = []
     function refreshSquashMergeInferences() {
-      if (document.hidden) {
+      if (document.hidden || (buffer && !finished)) {
         return
       }
       const current = squashMergeInferenceRequest.current
       const generation = squashMergeInferenceGeneration.current
-      const request =
-        current?.graphVersion === graphVersion && current.path === repoPath ?
+      const inference =
+        current?.window === request ?
           current.request
         : invoke<SquashMergeInference[]>("inferred_squash_merge_edges", {
             repoPath,
           }).catch(() => null)
       squashMergeInferenceRequest.current = {
-        graphVersion,
-        path: repoPath,
-        request,
+        window: request,
+        request: inference,
       }
-      request.finally(() => {
-        if (squashMergeInferenceRequest.current?.request === request) {
+      inference.finally(() => {
+        if (squashMergeInferenceRequest.current?.request === inference) {
           squashMergeInferenceRequest.current = null
         }
       })
-      return request.then((inferences) => {
+      return inference.then((inferences) => {
         if (
-          !disposed &&
+          isCurrent() &&
           generation === squashMergeInferenceGeneration.current &&
           inferences !== null
         ) {
@@ -233,63 +256,75 @@ export function useGraphData({
       refreshSquashMergeInferencesOnVisibility,
     )
 
-    if (graphOffset === 0) {
+    let nextStatus: Map<string, BranchSync> | undefined
+    const status =
+      (request.refresh || offset === 0) &&
       invoke<BranchSync[]>("branch_sync", { repoPath })
         .then((entries) => {
-          if (!disposed) {
-            setBranchSync(
-              new Map(entries.map((entry) => [entry.branch, entry])),
-            )
-          }
+          nextStatus = new Map(entries.map((entry) => [entry.branch, entry]))
+          if (isCurrent() && (!buffer || finished)) setBranchSync(nextStatus)
         })
         .catch(() => undefined)
-    }
-    const stopStream = stream<CommitBatch>(
+    const stopStream = stream<CommitBatch, GraphWindowComplete>(
       "stream_commit_graph",
       isDesktop ?
         { repoPath }
       : {
           repoPath,
-          offset: graphOffset,
+          offset,
           limit: BROWSER_GRAPH_WINDOW_SIZE,
         },
       (batch) => {
-        if (!disposed) {
-          const rows = batch.map(commitFromTuple)
-          const replaces = !isReplaced
-          isReplaced = true
-          setCommits((existing) => (replaces ? rows : existing.concat(rows)))
-          if (graphOffset === 0) {
-            scheduleSquashMergeInferences()
-          }
+        if (!isCurrent() || finished || batch.length === 0) return
+        const rows = batch.map(commitFromTuple)
+        if (buffer) {
+          replacement.push(...rows)
+        } else {
+          displayedOffset.current = offset
+          setGraph((current) => ({
+            ...current,
+            commits: current.commits.concat(rows),
+          }))
+          if (offset === 0) scheduleSquashMergeInferences()
         }
       },
       (message) => {
-        if (!disposed) {
-          onError(message)
-          setIsGraphWindowLoading(false)
-        }
+        if (!isCurrent() || finished) return
+        replacement = []
+        requestedWindow.current.pending = false
+        onError(message)
+        setIsGraphWindowLoading(false)
       },
-      (data) => {
-        if (!disposed) {
-          if (
-            !isDesktop &&
-            typeof data === "object" &&
-            data !== null &&
-            "hasMore" in data
-          ) {
-            setHasOlderCommits((data as GraphWindowComplete).hasMore)
-          }
-          if (!isReplaced) {
-            setCommits([])
-          }
-          setIsGraphWindowLoading(false)
+      async (data) => {
+        if (!isCurrent() || finished) return
+        if (!isDesktop && offset > 0 && replacement.length === 0) {
+          setGraphOffset(0)
+          return
         }
+        if (buffer && status && !nextStatus && needsBranchStatus(replacement)) {
+          await status
+          if (!isCurrent()) return
+        }
+        if (buffer && nextStatus) setBranchSync(nextStatus)
+        if (buffer && offset === 0) scheduleSquashMergeInferences()
+        finished = true
+        const received = replacement
+        replacement = []
+        displayedOffset.current = offset
+        requestedWindow.current.pending = false
+        setGraph((current) => ({
+          commits: buffer ? received : current.commits,
+          offset,
+          hasOlderCommits: data.hasMore,
+          version: current.version + Number(buffer && request.refresh),
+        }))
+        setIsGraphWindowLoading(false)
       },
     )
     return () => {
       disposed = true
       stopStream()
+      replacement = []
       if (inferenceTimeout !== null) {
         window.clearTimeout(inferenceTimeout)
       }
@@ -299,7 +334,7 @@ export function useGraphData({
         refreshSquashMergeInferencesOnVisibility,
       )
     }
-  }, [graphOffset, graphVersion, onError, repoPath, refreshWorktreeStatus])
+  }, [onError, repoPath, request, setGraphOffset])
 
   useEffect(() => {
     let disposed = false
@@ -398,14 +433,14 @@ export function useGraphData({
     return () => {
       disposed = true
     }
-  }, [graphVersion, pullRequestVersion, repoPath])
+  }, [graph.version, pullRequestVersion, repoPath])
 
   return {
     branchSync,
-    commits,
-    graphOffset,
-    graphVersion,
-    hasOlderCommits,
+    commits: graph.commits,
+    graphOffset: graph.offset,
+    graphVersion: graph.version,
+    hasOlderCommits: graph.hasOlderCommits,
     isGraphWindowLoading,
     pullRequestVersion,
     pullRequests,

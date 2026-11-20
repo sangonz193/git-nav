@@ -64,26 +64,33 @@ export function imageUrl(token: string) {
 
 /**
  * Delivers batches from a long-running command: a Tauri `Channel` on desktop, Server-Sent Events in
- * the browser. Returns a disposer that stops the walk on the backend.
+ * the browser. Returns a disposer that stops delivery to the caller.
  */
-export function stream<T>(
+export function stream<T, Done>(
   command: string,
   args: Args,
   onBatch: (batch: T) => void,
   onError: (message: string) => void,
-  onDone?: (data: unknown) => void,
+  onDone: (data: Done) => void,
 ): () => void {
   if (isDesktop) {
-    const channel = new Channel<T>()
-    channel.onmessage = onBatch
     let disposed = false
-    invokeTauri(command, { ...args, onBatch: channel })
-      .then(() => {
-        if (!disposed) onDone?.({})
-      })
-      .catch((message: unknown) => {
-        if (!disposed) onError(String(message))
-      })
+    const channel = new Channel<{ batch: T } | { done: Done }>((event) => {
+      if (disposed) return
+      if ("done" in event) {
+        disposed = true
+        onDone(event.done)
+      } else {
+        onBatch(event.batch)
+      }
+    })
+    invokeTauri(command, { ...args, onBatch: channel }).catch(
+      (message: unknown) => {
+        if (disposed) return
+        disposed = true
+        onError(String(message))
+      },
+    )
     return () => {
       disposed = true
     }
@@ -102,7 +109,7 @@ export function stream<T>(
   })
   source.addEventListener("done", (event) => {
     source.close()
-    onDone?.(JSON.parse(event.data) as unknown)
+    onDone(JSON.parse(event.data) as Done)
   })
   // EventSource retries on its own, which would restart the whole walk after a clean finish.
   source.onerror = () => {

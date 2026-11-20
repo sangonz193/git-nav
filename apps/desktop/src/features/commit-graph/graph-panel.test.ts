@@ -1,14 +1,18 @@
 import { expect, test } from "bun:test"
 import { fileURLToPath } from "node:url"
 
-test.each(["online", "offline"])(
-  "refreshes badge previews and runs confirmed actions on desktop while %s",
+const renameModes = ["rename-status-first", "rename-commits-first"]
+
+const modes = ["online", "offline", "browser", "refresh", "filtered", "linked"]
+
+test.each([...modes, ...renameModes])(
+  "renders graph refreshes and badge previews in %s mode",
   async (mode) => {
     const child = Bun.spawn(
       [
         process.execPath,
         fileURLToPath(
-          new URL("./test-fixtures/badge-previews.tsx", import.meta.url),
+          new URL("./test-fixtures/graph-panel.tsx", import.meta.url),
         ),
         mode,
       ],

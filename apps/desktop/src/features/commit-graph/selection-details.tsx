@@ -430,6 +430,14 @@ function DivergenceSections({
       sha,
       refreshKey,
     ],
+    placeholderData: (data, query) =>
+      (
+        query?.queryKey[1] === repoPath &&
+        query.queryKey[3] === against.reference &&
+        query.queryKey[4] === sha
+      ) ?
+        data
+      : undefined,
     retry: false,
   })
   return (
@@ -491,6 +499,14 @@ function RefBody({
       selection.sha,
       refreshKey,
     ],
+    placeholderData: (data, query) =>
+      (
+        query?.queryKey[1] === repoPath &&
+        query.queryKey[3] === reference &&
+        query.queryKey[4] === selection.sha
+      ) ?
+        data
+      : undefined,
     retry: false,
   })
   const tagBody = tagDetails.data?.body.trim()

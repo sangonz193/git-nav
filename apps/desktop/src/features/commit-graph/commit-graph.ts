@@ -96,7 +96,7 @@ export type RefKind = "branch" | "remote" | "tag"
 // A stash is not a ref, but it occupies the same row and competes for the same width, so the two are ordered
 // and collapsed as one list.
 export type RowChip =
-  | { entry: StashEntry; kind: "stash" }
+  | { entry: StashEntry; kind: "stash"; occurrence: number }
   | { kind: RefKind; ref: DisplayRef }
   | { kind: "worktree"; worktree: RowWorktree }
 
@@ -591,9 +591,14 @@ export function rowChips(
   stashes: StashEntry[] = [],
   worktrees: RowWorktree[] = [],
 ): RowChip[] {
+  const stashCounts = new Map<string, number>()
   const chips: RowChip[] = [
     ...refs.map((ref): RowChip => ({ kind: ref.kind, ref })),
-    ...stashes.map((entry): RowChip => ({ kind: "stash", entry })),
+    ...stashes.map((entry): RowChip => {
+      const occurrence = stashCounts.get(entry.sha) ?? 0
+      stashCounts.set(entry.sha, occurrence + 1)
+      return { kind: "stash", entry, occurrence }
+    }),
     ...worktrees.map((worktree): RowChip => ({ kind: "worktree", worktree })),
   ]
   return chips.sort((a, b) => chipPriority(a) - chipPriority(b))
@@ -742,11 +747,13 @@ export function overflowHasSelectedRef(
   )
 }
 
-export function chipName(chip: RowChip) {
+export function chipKey(chip: RowChip) {
   if (chip.kind === "stash") {
-    return chip.entry.name
+    return `stash:${chip.entry.sha}:${chip.occurrence}`
   }
-  return chip.kind === "worktree" ? chip.worktree.name : refName(chip.ref)
+  return chip.kind === "worktree" ?
+      `worktree:${chip.worktree.path}`
+    : refRevision(chip.ref)
 }
 
 export function chipLabel(chip: RowChip) {
