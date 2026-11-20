@@ -64,6 +64,7 @@ import {
   type RowChip,
   type RowWorktree,
   type Selection,
+  type StashChip,
   type StashEntry,
 } from "./commit-graph"
 import { LabelText, OperationMenuItems } from "./commit-operation-menu"
@@ -348,13 +349,13 @@ function stashMenuItems(
 
 export function stashMenuEntry(
   menus: ChipMenuContext,
-  entry: StashEntry,
+  chip: StashChip,
   components: RefMenuComponents,
-  key = `${entry.sha}:${entry.name}`,
 ) {
+  const { entry } = chip
   const { Sub, SubContent, SubTrigger } = components
   return (
-    <Sub key={key}>
+    <Sub key={chipKey(chip)}>
       <SubTrigger>
         <LabelText
           label={{
@@ -389,7 +390,7 @@ export function chipMenuEntry(
   components: RefMenuComponents,
 ) {
   if (chip.kind === "stash") {
-    return stashMenuEntry(menus, chip.entry, components, chipKey(chip))
+    return stashMenuEntry(menus, chip, components)
   }
   return chip.kind === "worktree" ?
       worktreeMenuEntry(menus, chip.worktree, components)

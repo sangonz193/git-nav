@@ -3,7 +3,15 @@ import { fileURLToPath } from "node:url"
 
 const renameModes = ["rename-status-first", "rename-commits-first"]
 
-const modes = ["online", "offline", "browser", "refresh", "filtered", "linked"]
+const modes = [
+  "online",
+  "offline",
+  "browser",
+  "refresh",
+  "filtered",
+  "linked",
+  "stash",
+]
 
 test.each([...modes, ...renameModes])(
   "renders graph refreshes and badge previews in %s mode",

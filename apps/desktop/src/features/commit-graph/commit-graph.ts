@@ -93,10 +93,12 @@ export type DisplayRef = {
 
 export type RefKind = "branch" | "remote" | "tag"
 
+export type StashChip = { entry: StashEntry; kind: "stash"; occurrence: number }
+
 // A stash is not a ref, but it occupies the same row and competes for the same width, so the two are ordered
 // and collapsed as one list.
 export type RowChip =
-  | { entry: StashEntry; kind: "stash"; occurrence: number }
+  | StashChip
   | { kind: RefKind; ref: DisplayRef }
   | { kind: "worktree"; worktree: RowWorktree }
 
@@ -585,20 +587,24 @@ export function detachedWorktrees(
   return worktrees.filter((worktree) => !attached.has(worktree.path))
 }
 
+export function stashChips(stashes: StashEntry[]) {
+  const stashCounts = new Map<string, number>()
+  return stashes.map((entry) => {
+    const occurrence = stashCounts.get(entry.sha) ?? 0
+    stashCounts.set(entry.sha, occurrence + 1)
+    return { kind: "stash" as const, entry, occurrence }
+  })
+}
+
 // Every chip on a row competes for the same width, so they are ordered and measured as one list.
 export function rowChips(
   refs: DisplayRef[],
   stashes: StashEntry[] = [],
   worktrees: RowWorktree[] = [],
 ): RowChip[] {
-  const stashCounts = new Map<string, number>()
   const chips: RowChip[] = [
     ...refs.map((ref): RowChip => ({ kind: ref.kind, ref })),
-    ...stashes.map((entry): RowChip => {
-      const occurrence = stashCounts.get(entry.sha) ?? 0
-      stashCounts.set(entry.sha, occurrence + 1)
-      return { kind: "stash", entry, occurrence }
-    }),
+    ...stashChips(stashes),
     ...worktrees.map((worktree): RowChip => ({ kind: "worktree", worktree })),
   ]
   return chips.sort((a, b) => chipPriority(a) - chipPriority(b))

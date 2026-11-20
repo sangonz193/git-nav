@@ -16,6 +16,7 @@ import type { CommitBatch } from "../commit-graph"
 const mode = process.argv[2]
 const linked = mode === "linked"
 const rename = mode.startsWith("rename-")
+const testingStash = mode === "stash"
 const filtered = mode === "filtered" || linked || rename
 const testingRefresh = mode === "refresh" || filtered
 const browser = mode === "browser"
@@ -32,6 +33,7 @@ Object.assign(globalThis, {
   NodeFilter: window.NodeFilter,
   MutationObserver: window.MutationObserver,
   CustomEvent: window.CustomEvent,
+  KeyboardEvent: window.KeyboardEvent,
   Element: window.Element,
   Node: window.Node,
   getComputedStyle: window.getComputedStyle.bind(window),
@@ -88,6 +90,15 @@ let pullRequests: Promise<unknown[]> | unknown[] =
 let changedFiles = 0
 let cleanupReads = 0
 let fastForwardReads = 0
+const stash = {
+  base: null,
+  branch: null,
+  date: "2026-01-01",
+  message: "Saved changes",
+  name: "stash@{0}",
+  sha: "saved",
+}
+let stashes = testingStash ? [stash, { ...stash, name: "stash@{1}" }] : []
 
 const streams: { id: number; reject: (error: string) => void }[] = []
 const done = { done: { hasMore: false } }
@@ -95,9 +106,12 @@ const mockCommands = {
   invoke(command: string, args?: unknown) {
     switch (command) {
       case "project_snapshot":
-        return { worktrees: testingRefresh || browser ? [] : [worktree] }
+        return {
+          worktrees:
+            testingRefresh || testingStash || browser ? [] : [worktree],
+        }
       case "worktree_status":
-        return testingRefresh || browser ? [] : status.promise
+        return testingRefresh || testingStash || browser ? [] : status.promise
       case "preview_cleanup_candidates":
         cleanupReads++
         return []
@@ -115,6 +129,7 @@ const mockCommands = {
       case "branch_pull_requests":
         return pullRequests
       case "stash_list":
+        return stashes
       case "inferred_squash_merge_edges":
         return []
       case "settings":
@@ -279,6 +294,40 @@ function batch(start: number, count: number) {
   }
 }
 
+async function testStashMenu() {
+  const trigger = container.querySelector('[aria-haspopup="menu"]')!
+  const key = (value: string) =>
+    new KeyboardEvent("keydown", { bubbles: true, key: value })
+  const stashTrigger = (index: number) =>
+    [
+      ...document.querySelectorAll('[role="menuitem"][aria-haspopup="menu"]'),
+    ].find((item) => item.textContent === `stash@{${index}}`)
+  const submenu = () => document.querySelectorAll('[role="menu"]')[1]
+
+  await act(async () => trigger.dispatchEvent(key("Enter")))
+  const first = stashTrigger(0)!
+  const second = stashTrigger(1)!
+  await act(async () => first.dispatchEvent(key("ArrowRight")))
+  const open = submenu()
+  assert.ok(open?.textContent?.includes("Show stashed changes"))
+
+  await act(async () => {
+    stashes = [
+      { ...stash, sha: "new", message: "New changes" },
+      { ...stash, name: "stash@{1}" },
+      { ...stash, name: "stash@{2}" },
+    ]
+    window.dispatchEvent(new window.Event("focus"))
+  })
+  assert.ok(submenu() === open, "the same submenu stays open")
+  assert.ok(
+    open.textContent?.includes("stash@{1}"),
+    "the open stash is renumbered",
+  )
+  assert.ok(stashTrigger(1) === first, "first occurrence keeps its trigger")
+  assert.ok(stashTrigger(2) === second, "second occurrence keeps its trigger")
+}
+
 async function testRefresh() {
   const { CommitGraphPanel } = await import("../commit-graph-panel")
   const { TooltipProvider } =
@@ -328,6 +377,7 @@ async function testRefresh() {
       </QueryClientProvider>,
     )
   })
+  if (testingStash) return testStashMenu()
   if (filtered) {
     const button = (label: string) =>
       [...window.document.querySelectorAll("button")].find(
@@ -467,7 +517,7 @@ async function testBrowserWindows() {
 }
 
 try {
-  if (testingRefresh) await testRefresh()
+  if (testingRefresh || testingStash) await testRefresh()
   else if (browser) await testBrowserWindows()
   else await testBadges()
 } finally {
