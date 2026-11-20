@@ -1,3 +1,4 @@
+use crate::process::parallel_map;
 use crate::cleanup::{cleanup_candidates, cleanup_database_path, CleanupOptions};
 use crate::git::{
     changed_refs, git_error_message, git_output_allow_empty, git_result, primary_revision, ref_label,
@@ -134,33 +135,14 @@ pub(crate) fn fast_forward_candidates(
     Ok((primary, candidates))
 }
 
-// Each check runs `git status`, and a repository can park dozens of worktrees on branches behind main.
 fn assign_worktree_blockers(candidates: &mut [FastForwardCandidate]) -> Result<(), String> {
-    if candidates.is_empty() {
-        return Ok(());
+    let blockers = parallel_map(&*candidates, |candidate| {
+        candidate.worktree.as_deref().map(worktree_blocker).transpose()
+    });
+    for (candidate, blocker) in candidates.iter_mut().zip(blockers) {
+        candidate.blocker = blocker?.flatten();
     }
-    let chunk_size = candidates.len().div_ceil(8);
-    std::thread::scope(|scope| {
-        let workers = candidates
-            .chunks_mut(chunk_size)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    for candidate in chunk {
-                        candidate.blocker = candidate
-                            .worktree
-                            .as_deref()
-                            .map(worktree_blocker)
-                            .transpose()?
-                            .flatten();
-                    }
-                    Ok::<_, String>(())
-                })
-            })
-            .collect::<Vec<_>>();
-        workers
-            .into_iter()
-            .try_for_each(|worker| worker.join().unwrap())
-    })
+    Ok(())
 }
 
 pub(crate) fn fast_forward_branches(

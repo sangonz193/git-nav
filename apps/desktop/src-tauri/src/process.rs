@@ -382,6 +382,14 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn parallel_map_keeps_input_order() {
+        let items: Vec<_> = (0..37).collect();
+
+        assert_eq!(parallel_map(&items, |item| item * 2), items.iter().map(|item| item * 2).collect::<Vec<_>>());
+        assert!(parallel_map(&Vec::<i32>::new(), |item| *item).is_empty());
+    }
+
+    #[test]
     #[cfg(target_os = "windows")]
     fn timeout_terminates_windows_descendants_even_after_parent_exit() {
         use windows::{core::Owned, Win32::{
@@ -817,4 +825,19 @@ mod tests {
             assert_eq!(changes.get(name), Some(&Some(OsString::from("/original/value"))));
         }
     }
+}
+
+// Spawning a process costs milliseconds, so independent git calls over many branches or worktrees share a few threads.
+pub(crate) fn parallel_map<'a, T: Sync, R: Send>(items: &'a [T], map: impl Fn(&'a T) -> R + Sync) -> Vec<R> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let map = &map;
+    thread::scope(|scope| {
+        let workers = items
+            .chunks(items.len().div_ceil(8))
+            .map(|chunk| scope.spawn(move || chunk.iter().map(map).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap()).collect()
+    })
 }

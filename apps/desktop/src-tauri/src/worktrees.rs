@@ -1,5 +1,6 @@
 use serde::Serialize;
-use std::{collections::HashMap, fs, path::Path, path::PathBuf, thread};
+use std::{collections::HashMap, fs, path::Path, path::PathBuf};
+use crate::process::parallel_map;
 use crate::projects::parse_worktree_records;
 use crate::git::{
     current_branch, git_output, git_output_allow_empty, primary_revision, resolve_commit, worktree_path,
@@ -173,34 +174,30 @@ pub(crate) fn worktree_status(repo_path: String, worktree_paths: Option<Vec<Stri
     if worktrees.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(thread::scope(|scope| {
-        let workers = worktrees.chunks(worktrees.len().div_ceil(8))
-            .map(|chunk| scope.spawn(move || {
-                chunk.iter().filter_map(|worktree| {
-                    let status = git_output_allow_empty(
-                        &worktree.path,
-                        &[
-                            "--no-optional-locks",
-                            "status",
-                            "--porcelain=v2",
-                            "--untracked-files=normal",
-                        ],
-                    ).ok()?;
-                    let (changed_files, untracked_files) = parse_status_counts(&status);
-                    Some(WorktreeStatus {
-                        branch: worktree.branch.clone(),
-                        head: worktree.head.clone(),
-                        is_detached: worktree.is_detached,
-                        changed_files,
-                        untracked_files,
-                        pending_operation: pending_operation(&worktree.path),
-                        path: worktree.path.clone(),
-                    })
-                }).collect::<Vec<_>>()
-            }))
-            .collect::<Vec<_>>();
-        workers.into_iter().flat_map(|worker| worker.join().unwrap()).collect()
-    }))
+    Ok(parallel_map(&worktrees, |worktree| {
+        let status = git_output_allow_empty(
+            &worktree.path,
+            &[
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v2",
+                "--untracked-files=normal",
+            ],
+        ).ok()?;
+        let (changed_files, untracked_files) = parse_status_counts(&status);
+        Some(WorktreeStatus {
+            branch: worktree.branch.clone(),
+            head: worktree.head.clone(),
+            is_detached: worktree.is_detached,
+            changed_files,
+            untracked_files,
+            pending_operation: pending_operation(&worktree.path),
+            path: worktree.path.clone(),
+        })
+    })
+    .into_iter()
+    .flatten()
+    .collect())
 }
 
 fn same_path(left: &str, right: &str) -> bool {

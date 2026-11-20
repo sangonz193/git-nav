@@ -1,6 +1,7 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, collections::HashSet, path::PathBuf, sync::Arc, sync::Mutex, sync::OnceLock};
+use crate::process::parallel_map;
 use crate::projects::parse_worktree_records;
 use crate::git::{
     git_output, git_output_allow_empty, git_result, git_succeeds, patch_id, primary_local_branch,
@@ -289,12 +290,14 @@ fn cold_squash_tip_memos(
     repo_path: &str,
     primary_hash: &str,
     tips: &[SquashTip],
-    candidate_patches: &mut HashMap<String, Option<String>>,
+    candidate_patches: &HashMap<String, Option<String>>,
 ) -> HashMap<String, SquashTipMemo> {
-    let branch_bases: Vec<_> = tips
-        .iter()
-        .filter_map(|tip| git_output(repo_path, &["merge-base", &tip.hash, primary_hash]).map(|base| (tip, base)))
-        .collect();
+    let branch_bases: Vec<_> = parallel_map(tips, |tip| {
+        git_output(repo_path, &["merge-base", &tip.hash, primary_hash]).map(|base| (tip, base))
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     let bases: Vec<_> = branch_bases
         .iter()
         .map(|(_, base)| base.clone())
@@ -309,38 +312,45 @@ fn cold_squash_tip_memos(
     let Ok(oldest_base) = octopus_merge_base(repo_path, &revisions) else {
         return HashMap::new();
     };
-    if oldest_base.is_none() {
-        let mut memos = HashMap::new();
-        for base in bases {
-            let Ok(candidates) = squash_candidates(repo_path, &format!("{base}..{primary_hash}")) else {
-                continue;
+    let separate;
+    let shared;
+    let base_candidates: HashMap<&str, Vec<&SquashCandidate>> = match oldest_base {
+        None => {
+            separate = parallel_map(&bases, |base| squash_candidates(repo_path, &format!("{base}..{primary_hash}")).ok());
+            bases
+                .iter()
+                .zip(&separate)
+                .filter_map(|(base, candidates)| Some((base.as_str(), candidates.as_ref()?.iter().collect())))
+                .collect()
+        }
+        Some(oldest_base) => {
+            let Ok(candidates) = squash_candidates(repo_path, &format!("{oldest_base}..{primary_hash}")) else {
+                return HashMap::new();
             };
-            let candidates: Vec<_> = candidates.iter().collect();
-            for (tip, tip_base) in branch_bases.iter().filter(|(_, tip_base)| tip_base == &base) {
-                if let Ok(memo) = compute_squash_tip_memo(repo_path, tip, tip_base, primary_hash, &candidates, candidate_patches) {
-                    memos.insert(tip.hash.clone(), memo);
-                }
-            }
+            shared = candidates;
+            let hashes = parallel_map(&bases, |base| {
+                git_output_allow_empty(repo_path, &["rev-list", "--no-merges", &format!("{base}..{primary_hash}")]).ok()
+            });
+            bases
+                .iter()
+                .zip(hashes)
+                .filter_map(|(base, hashes)| {
+                    let hashes = hashes?;
+                    Some((base.as_str(), squash_candidates_for_base(&shared, &hashes.lines().collect())))
+                })
+                .collect()
         }
-        return memos;
-    }
-    let Ok(candidates) = squash_candidates(repo_path, &format!("{}..{primary_hash}", oldest_base.unwrap())) else {
-        return HashMap::new();
     };
-    let mut memos = HashMap::new();
-    for base in bases {
-        let Ok(hashes) = git_output_allow_empty(repo_path, &["rev-list", "--no-merges", &format!("{base}..{primary_hash}")]) else {
-            continue;
-        };
-        let hashes = hashes.lines().collect();
-        let candidates = squash_candidates_for_base(&candidates, &hashes);
-        for (tip, tip_base) in branch_bases.iter().filter(|(_, tip_base)| tip_base == &base) {
-            if let Ok(memo) = compute_squash_tip_memo(repo_path, tip, tip_base, primary_hash, &candidates, candidate_patches) {
-                memos.insert(tip.hash.clone(), memo);
-            }
-        }
-    }
-    memos
+    parallel_map(&branch_bases, |(tip, base)| {
+        let candidates = base_candidates.get(base.as_str())?;
+        let mut patches = candidate_patches.clone();
+        compute_squash_tip_memo(repo_path, tip, base, primary_hash, candidates, &mut patches)
+            .ok()
+            .map(|memo| (tip.hash.clone(), memo))
+    })
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 // Both toolbar badges and the graph ask at once, so later callers wait for the first and reuse its memo.
@@ -460,7 +470,7 @@ fn local_squash_merges(repo_path: &str) -> Vec<(String, String)> {
             Err(_) => cold.extend(entries.into_iter().map(|(tip, _)| tip)),
         }
     }
-    let fills = cold_squash_tip_memos(repo_path, &primary_hash, &cold, &mut candidate_patches);
+    let fills = cold_squash_tip_memos(repo_path, &primary_hash, &cold, &candidate_patches);
     for (tip, memo) in fills {
         if let Some(target) = &memo.result {
             edges.push((tip.clone(), target.clone()));
