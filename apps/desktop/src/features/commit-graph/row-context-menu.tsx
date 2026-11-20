@@ -7,12 +7,7 @@ import {
 } from "@workspace/shadcn/components/context-menu"
 import { Copy, FileDiff, GitBranch, GitCompareArrows } from "lucide-react"
 
-import {
-  chipName,
-  type Commit,
-  type CommitSelection,
-  type RowChip,
-} from "./commit-graph"
+import { type Commit, type CommitSelection, type RowChip } from "./commit-graph"
 import { OperationMenuItems } from "./commit-operation-menu"
 import {
   chipMenuEntry,
@@ -92,13 +87,7 @@ export function RowContextMenuBody({
           </ContextMenuItem>
         )}
       {chips.length === 1 &&
-        chipMenuEntry(
-          menus,
-          chips[0],
-          commit.hash,
-          chipName(chips[0]),
-          contextMenuComponents,
-        )}
+        chipMenuEntry(menus, chips[0], commit.hash, contextMenuComponents)}
       {chips.length > 1 && (
         <ContextMenuSub>
           <ContextMenuSubTrigger>
@@ -106,14 +95,8 @@ export function RowContextMenuBody({
             Refs
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            {chips.map((chip, index) =>
-              chipMenuEntry(
-                menus,
-                chip,
-                commit.hash,
-                `${chipName(chip)}-${index}`,
-                contextMenuComponents,
-              ),
+            {chips.map((chip) =>
+              chipMenuEntry(menus, chip, commit.hash, contextMenuComponents),
             )}
           </ContextMenuSubContent>
         </ContextMenuSub>

@@ -170,6 +170,7 @@ body {
   flex: 1;
   height: 100%;
   overflow: auto;
+  overflow-anchor: none;
 }
 
 .commit-graph-scroll.is-selecting {

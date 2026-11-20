@@ -46,6 +46,7 @@ import {
 import {
   PULL_REQUEST_STATE_LABELS,
   relativeDate,
+  stashChips,
   type PullRequestState,
   type StashEntry,
 } from "./commit-graph"
@@ -269,8 +270,8 @@ export function GraphToolbar({
               source={null}
               target={{ kind: "worktree" }}
             />
-            {stashes.map((entry) =>
-              stashMenuEntry(menus, entry, dropdownMenuComponents),
+            {stashChips(stashes).map((chip) =>
+              stashMenuEntry(menus, chip, dropdownMenuComponents),
             )}
             {stashes.length === 0 && !menus.repository?.isDirty && (
               <DropdownMenuItem disabled>Nothing is stashed</DropdownMenuItem>

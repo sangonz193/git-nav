@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test"
 import {
   ancestryPath,
   branchesContaining,
-  chipName,
+  chipKey,
   chipWidth,
   commitSelection,
   detachedWorktrees,
@@ -524,11 +524,30 @@ describe("rowChips", () => {
 
   test("keeps the current checkout first", () => {
     const refs = displayRefs(["refs/heads/other", "HEAD -> refs/heads/main"])
-    expect(rowChips(refs, [stash("stash@{0}")]).map(chipName)).toEqual([
-      "main",
-      "other",
-      "stash@{0}",
+    expect(rowChips(refs, [stash("stash@{0}")]).map(chipKey)).toEqual([
+      "refs/heads/main",
+      "refs/heads/other",
+      "stash:stash@{0}:0",
     ])
+  })
+
+  test("keeps distinct stash occurrences keyed across badge reorder and stash reindexing", () => {
+    const first = { ...stash("stash@{0}"), sha: "first" }
+    const second = { ...stash("stash@{1}"), sha: "second" }
+    const duplicate = { ...first, name: "stash@{2}" }
+    const tags = ["tag: refs/tags/v1", "tag: refs/tags/v2"]
+    const keys = (refs: string[], entries: StashEntry[]) =>
+      rowChips(displayRefs(refs), entries).map(chipKey)
+
+    const before = keys(tags, [first, second, duplicate])
+    expect(new Set(before).size).toBe(before.length)
+    expect(
+      keys(
+        ["refs/heads/main", ...tags.toReversed()],
+        [first, second, duplicate],
+      ).slice(1, 4),
+    ).toEqual(before.slice(0, 3))
+    expect(keys(tags, [{ ...second, name: first.name }])[0]).toBe(before[1])
   })
 })
 

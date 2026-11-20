@@ -46,6 +46,7 @@ import {
 
 import { refLabel } from "../diff/diff-title"
 import {
+  chipKey,
   chipLabel,
   PULL_REQUEST_STATE_LABELS,
   refName,
@@ -63,6 +64,7 @@ import {
   type RowChip,
   type RowWorktree,
   type Selection,
+  type StashChip,
   type StashEntry,
 } from "./commit-graph"
 import { LabelText, OperationMenuItems } from "./commit-operation-menu"
@@ -347,12 +349,13 @@ function stashMenuItems(
 
 export function stashMenuEntry(
   menus: ChipMenuContext,
-  entry: StashEntry,
+  chip: StashChip,
   components: RefMenuComponents,
 ) {
+  const { entry } = chip
   const { Sub, SubContent, SubTrigger } = components
   return (
-    <Sub key={entry.sha}>
+    <Sub key={chipKey(chip)}>
       <SubTrigger>
         <LabelText
           label={{
@@ -384,15 +387,14 @@ export function chipMenuEntry(
   menus: ChipMenuContext,
   chip: RowChip,
   sha: string,
-  key: string,
   components: RefMenuComponents,
 ) {
   if (chip.kind === "stash") {
-    return stashMenuEntry(menus, chip.entry, components)
+    return stashMenuEntry(menus, chip, components)
   }
   return chip.kind === "worktree" ?
       worktreeMenuEntry(menus, chip.worktree, components)
-    : refMenuEntry(menus, chip.ref, sha, key, components)
+    : refMenuEntry(menus, chip.ref, sha, chipKey(chip), components)
 }
 
 function worktreeMarker(worktree: RowWorktree) {
@@ -623,12 +625,7 @@ export function overflowTooltip(chips: RowChip[]) {
   )
 }
 
-export function rowChip(
-  menus: ChipMenuContext,
-  chip: RowChip,
-  sha: string,
-  key?: string,
-) {
+export function rowChip(menus: ChipMenuContext, chip: RowChip, sha: string) {
   const Icon = CHIP_ICONS[chip.kind]
   const ref =
     chip.kind === "stash" || chip.kind === "worktree" ? null : chip.ref
@@ -659,7 +656,7 @@ export function rowChip(
     return menus.selectRef(chip.ref, sha)
   }
   return (
-    <ContextMenu key={key}>
+    <ContextMenu key={chipKey(chip)}>
       <Tooltip>
         {/* Radix context menu triggers do not stop propagation, so the row menu would open on top of this one. */}
         <ContextMenuTrigger

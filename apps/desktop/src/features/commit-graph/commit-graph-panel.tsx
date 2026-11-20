@@ -5,7 +5,7 @@ import {
   tableFeatures,
   useTable,
 } from "@tanstack/react-table"
-import { useVirtualizer } from "@tanstack/react-virtual"
+import { observeElementOffset, useVirtualizer } from "@tanstack/react-virtual"
 import { useMutation } from "@tanstack/react-query"
 import { showErrorToast } from "@/lib/error-toast"
 import { invoke } from "@/lib/ipc"
@@ -47,6 +47,7 @@ import {
   type TouchEvent as ReactTouchEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -57,7 +58,6 @@ import { BranchFastForwardDialog } from "./branch-fast-forward-dialog"
 import { drawCommitGraph } from "./commit-graph-canvas"
 import {
   ancestryPath,
-  chipName,
   clampGraphWidth,
   displayRefs,
   fitGraphWidth,
@@ -93,7 +93,6 @@ import {
   useViewConfig,
   type BranchFilters,
   type ChipContext,
-  type GraphRow,
   type GraphRows,
   type SearchHit,
   type ViewConfig,
@@ -176,6 +175,7 @@ export function CommitGraphPanel(props: IDockviewPanelProps<GraphPanelParams>) {
   }
   return (
     <CommitGraphPanelContent
+      key={props.params.path}
       {...props}
       config={config}
       updateConfig={updateConfig}
@@ -216,42 +216,14 @@ function CommitGraphPanelContent({
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
   const scrollElement = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
-  const refreshAnchor = useRef<{
-    commits: Commit[]
-    hash: string
-    offset: number
-  } | null>(null)
   const pendingScrollHash = useRef<string | null>(null)
-  const rowsRef = useRef<GraphRow[] | null>(null)
   const [scroll, setScroll] = useState({
-    top: 0,
     height: 0,
     width: 0,
     scrollbarHeight: 0,
   })
   const [sheetPeekHeight, setSheetPeekHeight] = useState(0)
-  const scrollFrame = useRef<number | null>(null)
   const savedScrollTop = useTabScrollTop(api, scrollElement)
-  const captureScrollAnchor = useCallback(() => {
-    const element = scrollElement.current
-    const scrollTop =
-      element?.isConnected ? element.scrollTop : savedScrollTop.current
-    const row = Math.floor(scrollTop / rowHeight)
-    const rowData = rowsRef.current?.[row]
-    const anchorRow = isRunHeader(rowData) ? row + 1 : row
-    const commit =
-      commitsRef.current[
-        rowsRef.current ? (rowsRef.current[anchorRow]?.index ?? -1) : anchorRow
-      ]
-    refreshAnchor.current =
-      commit ?
-        {
-          commits: commitsRef.current,
-          hash: commit.hash,
-          offset: scrollTop - anchorRow * rowHeight,
-        }
-      : null
-  }, [rowHeight, savedScrollTop])
   const {
     branchSync,
     commits,
@@ -274,11 +246,9 @@ function CommitGraphPanelContent({
     worktreeState,
     worktreesByHead,
   } = useGraphData({
-    onBeforeReload: captureScrollAnchor,
     onError: setError,
     repoPath: params.path,
   })
-  const commitsRef = useRef(commits)
   const persistSelection = useCallback(
     (selectedCommitHashes: string[]) =>
       api.updateParameters(
@@ -457,6 +427,15 @@ function CommitGraphPanelContent({
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
     observeElementRect: observeAttachedElementRect,
+    observeElementOffset: (instance, notify) =>
+      observeElementOffset(instance, (_, isScrolling) => {
+        const element = instance.scrollElement
+        // The scroll-end timer may still carry the offset from before a graph swap.
+        notify(
+          element?.isConnected ? element.scrollTop : savedScrollTop.current,
+          isScrolling,
+        )
+      }),
     overscan: 12,
     // Room past the last row reserves the expanded sheet, otherwise half the viewport, so rows can clear it.
     paddingEnd: Math.max(
@@ -468,6 +447,48 @@ function CommitGraphPanelContent({
     scrollMargin: GRAPH_HEADER_HEIGHT,
     scrollPaddingStart: GRAPH_HEADER_HEIGHT,
   })
+  const view = {
+    commits,
+    rows,
+    graphOffset,
+    rowHeight,
+    filters,
+    revealed,
+    collapseUnmarked,
+    chipKinds: config.chipKinds,
+  }
+  const viewport = useRef(view)
+  const previous = viewport.current
+  let restoredScrollTop: number | undefined
+  if (previous.graphOffset !== graphOffset) {
+    restoredScrollTop = 0
+  } else if (
+    (previous.commits !== commits || previous.rows !== rows) &&
+    previous.filters === filters &&
+    previous.revealed === revealed &&
+    previous.collapseUnmarked === collapseUnmarked &&
+    previous.chipKinds === config.chipKinds
+  ) {
+    const element = scrollElement.current
+    const top =
+      element?.isConnected ? element.scrollTop : savedScrollTop.current
+    const row = Math.floor(top / previous.rowHeight)
+    const anchor = isRunHeader(previous.rows?.[row]) ? row + 1 : row
+    const commit =
+      previous.commits[previous.rows ? previous.rows[anchor]?.index : anchor]
+    const index = commit && commitIndexesByHash.get(commit.hash)
+    const delta =
+      top > 0 && index !== undefined ?
+        rowOfCommit(index) * rowHeight - anchor * previous.rowHeight
+      : 0
+    const maxTop =
+      rowVirtualizer.getTotalSize() + GRAPH_HEADER_HEIGHT - scroll.height
+    restoredScrollTop = Math.max(0, Math.min(top + delta, maxTop))
+  }
+  if (restoredScrollTop !== undefined) {
+    // Set the range before React reconciles the keyed rows and their menus.
+    rowVirtualizer.scrollOffset = restoredScrollTop
+  }
   const virtualRows = rowVirtualizer.getVirtualItems()
   const virtualScrollTop = rowVirtualizer.scrollOffset ?? 0
   const graphScrollTop = graphCanvasTop(
@@ -486,10 +507,10 @@ function CommitGraphPanelContent({
   }
   const checkoutScrollDirection =
     currentCheckoutRow === -1 || scroll.height === 0 ? null
-    : (currentCheckoutRow + 1) * rowHeight < scroll.top ? "up"
+    : (currentCheckoutRow + 1) * rowHeight < virtualScrollTop ? "up"
     : (
       currentCheckoutRow * rowHeight + GRAPH_HEADER_HEIGHT >=
-      scroll.top + scroll.height
+      virtualScrollTop + scroll.height
     ) ?
       "down"
     : null
@@ -597,7 +618,6 @@ function CommitGraphPanelContent({
       return
     }
     setScroll({
-      top: element.scrollTop,
       height: element.clientHeight,
       width: element.clientWidth,
       scrollbarHeight: element.offsetHeight - element.clientHeight,
@@ -628,14 +648,6 @@ function CommitGraphPanelContent({
     rowVirtualizer.measure()
   }, [rowHeight, rowVirtualizer])
 
-  useEffect(() => {
-    commitsRef.current = commits
-  }, [commits])
-
-  useEffect(() => {
-    rowsRef.current = rows
-  }, [rows])
-
   // Opening a run moves every row below it, so the commit that asked for the scroll is followed to its new place.
   useEffect(() => {
     const hash = pendingScrollHash.current
@@ -652,22 +664,17 @@ function CommitGraphPanelContent({
     })
   }, [commitIndexesByHash, detailsExpanded, rowOfCommit, rowVirtualizer])
 
-  useEffect(() => {
-    const anchor = refreshAnchor.current
+  useLayoutEffect(() => {
+    viewport.current = view
+    if (restoredScrollTop === undefined) return
+    savedScrollTop.current = restoredScrollTop
     const element = scrollElement.current
-    // The graph it was captured on stays up until the refresh lands, and it is only restored on the replacement.
-    if (!anchor || !element || commits === anchor.commits) {
-      return
+    if (element?.isConnected && element.scrollTop !== restoredScrollTop) {
+      element.scrollTop = restoredScrollTop
     }
-    const index = commits.findIndex((commit) => commit.hash === anchor.hash)
-    if (index === -1) {
-      return
-    }
-    element.scrollTop = rowOfCommit(index) * rowHeight + anchor.offset
-    refreshAnchor.current = null
-  }, [commits, rowHeight, rowOfCommit])
+  })
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (canvas.current) {
       drawCommitGraph({
         canvas: canvas.current,
@@ -694,7 +701,6 @@ function CommitGraphPanelContent({
     unpushed,
     unpushedLaneMasks,
     virtualRows,
-    drawCommitGraph,
   ])
 
   function startGraphResize(
@@ -727,16 +733,6 @@ function CommitGraphPanelContent({
     window.addEventListener("mouseup", onEnd)
     window.addEventListener("touchmove", onMove)
     window.addEventListener("touchend", onEnd)
-  }
-
-  function onScroll() {
-    if (scrollFrame.current !== null) {
-      return
-    }
-    scrollFrame.current = requestAnimationFrame(() => {
-      scrollFrame.current = null
-      updateScroll()
-    })
   }
 
   // A commit inside a collapsed run has no row of its own, so the run it sits in is opened and the scroll
@@ -844,7 +840,6 @@ function CommitGraphPanelContent({
     setSelectedRef(null)
     setSelectionRange(null)
     setGraphOffset(offset)
-    rowVirtualizer.scrollToIndex(0)
   }
 
   const canSelectCommitByHash = useCallback(
@@ -1139,7 +1134,6 @@ function CommitGraphPanelContent({
           rangeDrag && "is-selecting",
           rangeDrag && !selection && "is-unrelated",
         )}
-        onScroll={onScroll}
         ref={scrollElement}
         role="grid"
         style={
@@ -1339,14 +1333,7 @@ function CommitGraphPanelContent({
                       <div className="commit-graph-refs">
                         {chips
                           .slice(0, shown)
-                          .map((chip, index) =>
-                            rowChip(
-                              menus,
-                              chip,
-                              commit.hash,
-                              `${chipName(chip)}-${index}`,
-                            ),
-                          )}
+                          .map((chip) => rowChip(menus, chip, commit.hash))}
                         {overflowChips.length > 0 && (
                           <DropdownMenu>
                             <Tooltip>
@@ -1372,12 +1359,11 @@ function CommitGraphPanelContent({
                               </TooltipContent>
                             </Tooltip>
                             <DropdownMenuContent>
-                              {overflowChips.map((chip, index) =>
+                              {overflowChips.map((chip) =>
                                 chipMenuEntry(
                                   menus,
                                   chip,
                                   commit.hash,
-                                  `${chipName(chip)}-${index}`,
                                   dropdownMenuComponents,
                                 ),
                               )}
@@ -1465,7 +1451,7 @@ function CommitGraphPanelContent({
           }
         />
       )}
-      {commits.length === 0 && !error && (
+      {commits.length === 0 && isGraphWindowLoading && !error && (
         <p className="commit-graph-status">Loading commits…</p>
       )}
       {error && (
