@@ -281,6 +281,8 @@ export function GraphToolbar({
           hint={
             cleanup.candidateCount > 0 ?
               `${cleanup.candidateCount} branch${cleanup.candidateCount === 1 ? "" : "es"} can be cleaned`
+            : cleanup.isPreviewPending ?
+              "Checking for branches to clean…"
             : "Clean merged branches"
           }
         >
@@ -292,11 +294,18 @@ export function GraphToolbar({
             type="button"
             variant="outline"
           >
-            {cleanup.isPending ?
+            {cleanup.isPending || cleanup.isPreviewPending ?
               <LoaderCircle className="animate-spin" />
             : <Broom />}
             {cleanup.candidateCount > 0 && (
-              <span className="tabular-nums">{cleanup.candidateCount}</span>
+              <span
+                className={cn(
+                  "tabular-nums",
+                  cleanup.isPreviewPending && "animate-pulse",
+                )}
+              >
+                {cleanup.candidateCount}
+              </span>
             )}
           </Button>
         </Hinted>
@@ -304,6 +313,8 @@ export function GraphToolbar({
           hint={
             fastForward.candidateCount > 0 ?
               `${fastForward.candidateCount} branch${fastForward.candidateCount === 1 ? "" : "es"} can be fast-forwarded`
+            : fastForward.isPreviewPending ?
+              "Checking for branches to fast-forward…"
             : "Fast-forward branches to the default branch"
           }
         >
@@ -315,11 +326,18 @@ export function GraphToolbar({
             type="button"
             variant="outline"
           >
-            {fastForward.isPending ?
+            {fastForward.isPending || fastForward.isPreviewPending ?
               <LoaderCircle className="animate-spin" />
             : <FastForward />}
             {fastForward.candidateCount > 0 && (
-              <span className="tabular-nums">{fastForward.candidateCount}</span>
+              <span
+                className={cn(
+                  "tabular-nums",
+                  fastForward.isPreviewPending && "animate-pulse",
+                )}
+              >
+                {fastForward.candidateCount}
+              </span>
             )}
           </Button>
         </Hinted>
