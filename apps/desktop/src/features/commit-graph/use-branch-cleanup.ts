@@ -1,8 +1,8 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
 import { showErrorToast } from "@/lib/error-toast"
-import { invoke } from "@/lib/ipc"
+import { invoke, isDesktop } from "@/lib/ipc"
 import { toast } from "@workspace/shadcn/components/sonner"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 
 import type { CleanOptions } from "./commit-graph-view"
 
@@ -39,6 +39,7 @@ export function useBranchCleanup({
 }) {
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
   const cleanMutation = useMutation({
+    networkMode: isDesktop ? "always" : "online",
     mutationFn: async (): Promise<CleanResult> => {
       if (!Object.values(cleanOptions).some(Boolean)) {
         return { report: "Select at least one cleanup option." }
@@ -76,11 +77,12 @@ export function useBranchCleanup({
   })
   // Repository changes stay out of the key so a busy repository cannot keep restarting the read.
   const repositoryState = `${graphVersion}\0${pullRequestVersion}\0${worktreeState}`
-  const readState = useRef<string | null>(null)
+  const [readState, setReadState] = useState<string | null>(null)
   const previewQuery = useQuery({
     queryKey: ["cleanupCandidates", repoPath, cleanOptions],
+    networkMode: isDesktop ? "always" : "online",
     queryFn: () => {
-      readState.current = repositoryState
+      setReadState(repositoryState)
       return invoke<CleanupCandidate[]>("preview_cleanup_candidates", {
         repoPath,
         options: cleanOptions,
@@ -90,19 +92,20 @@ export function useBranchCleanup({
     refetchOnWindowFocus: false,
     retry: false,
   })
-  const { isFetching, refetch } = previewQuery
+  const { fetchStatus, refetch } = previewQuery
   useEffect(() => {
-    if (!isFetching && readState.current !== repositoryState) {
+    if (fetchStatus === "idle" && readState !== repositoryState) {
       void refetch()
     }
-  }, [isFetching, refetch, repositoryState])
+  }, [fetchStatus, readState, refetch, repositoryState])
   const cleanPreview = previewQuery.data ?? null
   return {
     candidateCount: cleanPreview?.length ?? 0,
     clean: () => cleanMutation.mutate(),
     isConfirmationOpen,
     isPending: cleanMutation.isPending,
-    isPreviewPending: isFetching,
+    // A read still owed to a change keeps the badge loading, so it does not flash idle between reads.
+    isPreviewPending: fetchStatus !== "idle" || readState !== repositoryState,
     preview: cleanPreview,
     previewError: previewQuery.error && String(previewQuery.error),
     setIsConfirmationOpen,
