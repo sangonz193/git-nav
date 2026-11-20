@@ -79,21 +79,16 @@ export function useBranchFastForward({
         options: cleanOptions,
       })
     },
-    enabled: worktreeState !== null,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     retry: false,
   })
   const { isFetching, refetch } = previewQuery
   useEffect(() => {
-    if (
-      worktreeState !== null &&
-      !isFetching &&
-      readState.current !== repositoryState
-    ) {
+    if (!isFetching && readState.current !== repositoryState) {
       void refetch()
     }
-  }, [isFetching, refetch, repositoryState, worktreeState])
+  }, [isFetching, refetch, repositoryState])
   const preview = previewQuery.data ?? null
   return {
     candidateCount:
