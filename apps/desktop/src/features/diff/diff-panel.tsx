@@ -84,6 +84,7 @@ import {
 } from "./diff-title"
 import {
   carriedFolds,
+  carriedKeys,
   changedFilesLabel,
   fileIdentity,
   fileName,
@@ -92,6 +93,7 @@ import {
   isViewedFile,
   NARROW_DIFF_PANEL_WIDTH,
   persistedDiffPanelParams,
+  sameMarks,
   toggledDiffFileTree,
   WIDE_DIFF_PANEL_WIDTH,
   type ChangedFile,
@@ -112,6 +114,7 @@ import type {
 } from "@/lib/panel-params"
 
 const SEARCH_DEBOUNCE = 120
+const FINGERPRINT_INTERVAL = 2_000
 const LAYOUT_OPTIONS: {
   icon: typeof Columns2
   label: string
@@ -178,6 +181,25 @@ function HeadPickerLabel({
 
 function fileKey(file: ChangedFile) {
   return `${file.status}:${file.oldPath}:${file.newPath}`
+}
+
+// Branches move on commit or fetch, and the working tree on any edit.
+function comparisonFingerprint(path: string, head: string) {
+  return Promise.all([
+    invoke<string>("repository_fingerprint", { repoPath: path }),
+    head === WORKTREE_REF ?
+      invoke<string>("working_tree_fingerprint", { repoPath: path })
+    : null,
+  ]).then((parts) => parts.join(":"))
+}
+
+// The working tree has no commit to compare, so it always counts as changed.
+function isSameComparison(shown: LoadedComparison, next: Comparison) {
+  return (
+    next.headSha !== WORKTREE_REF &&
+    next.baseSha === shown.comparison.baseSha &&
+    next.headSha === shown.comparison.headSha
+  )
 }
 
 /**
@@ -315,6 +337,7 @@ export function DiffPanel({
   const scrollElement = useRef<HTMLDivElement>(null)
   useTabScrollTop(api, scrollElement)
   const marksDuringLoad = useRef<Map<string, string | null> | null>(null)
+  const shownFingerprint = useRef<string | null>(null)
   const userPreferencesRef = useRef(userPreferences)
   const pendingRestoredFilePath = useRef(params.selectedFilePath ?? null)
   const loadDiff = useMemo(
@@ -331,7 +354,9 @@ export function DiffPanel({
         })),
     [loadedComparison, params.path],
   )
-  const { entries, request } = useDiffLoader(fileKey, loadDiff)
+  // Only moving an end starts the list over; a reread keeps the scroll position and the loaded diffs.
+  const comparisonScope = loadedComparison?.refs ?? null
+  const { entries, request } = useDiffLoader(fileKey, loadDiff, comparisonScope)
   const metadata = useRepositoryMetadata(params.path, version)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const shownFiles = useMemo(
@@ -449,7 +474,7 @@ export function DiffPanel({
     keyOf: fileKey,
     mode,
     request,
-    resetKey: comparison,
+    resetKey: comparisonScope,
     scrollElement,
     wrap,
   })
@@ -481,7 +506,7 @@ export function DiffPanel({
             stored.set(path, identity)
           }
         }
-        setViewed(stored)
+        setViewed((current) => (sameMarks(current, stored) ? current : stored))
       })
       .catch(() => undefined)
       .finally(() => {
@@ -494,27 +519,38 @@ export function DiffPanel({
     }
   }, [params.path, refs.base, refs.head, refs.mergeBase, version])
 
+  // Fingerprint first, so a change landing during the comparison is caught by the next poll.
   useEffect(() => {
     let cancelled = false
-    invoke<Comparison>("compare_refs", {
-      repoPath: params.path,
-      baseRef: refs.base,
-      headRef: refs.head,
-      mergeBase: refs.mergeBase,
-      ignoreWhitespace,
-    })
+    shownFingerprint.current = null
+    const fingerprint = comparisonFingerprint(params.path, refs.head).catch(
+      () => null,
+    )
+    fingerprint
+      .then(() =>
+        invoke<Comparison>("compare_refs", {
+          repoPath: params.path,
+          baseRef: refs.base,
+          headRef: refs.head,
+          mergeBase: refs.mergeBase,
+          ignoreWhitespace,
+        }),
+      )
       .then((nextComparison) => {
         if (!cancelled) {
-          setExpanded(new Set())
-          setAllExpanded(new Set())
-          setHandFolds((current) =>
-            carriedFolds(current, nextComparison.files.map(fileKey)),
+          const keys = nextComparison.files.map(fileKey)
+          setExpanded((current) => carriedKeys(current, keys))
+          setAllExpanded((current) => carriedKeys(current, keys))
+          setHandFolds((current) => carriedFolds(current, keys))
+          setLoadedComparison((current) =>
+            (
+              current?.refs === refs &&
+              current.ignoreWhitespace === ignoreWhitespace &&
+              isSameComparison(current, nextComparison)
+            ) ?
+              current
+            : { comparison: nextComparison, ignoreWhitespace, refs },
           )
-          setLoadedComparison({
-            comparison: nextComparison,
-            ignoreWhitespace,
-            refs,
-          })
           setError(null)
         }
       })
@@ -523,10 +559,56 @@ export function DiffPanel({
           setError(String(message))
         }
       })
+      .finally(() =>
+        fingerprint.then((value) => {
+          if (!cancelled) {
+            shownFingerprint.current = value
+          }
+        }),
+      )
     return () => {
       cancelled = true
     }
   }, [ignoreWhitespace, params.path, refs, version])
+
+  // A hidden tab skips polls and checks once it is shown again.
+  useEffect(() => {
+    let disposed = false
+    let inFlight = false
+    const poll = () => {
+      const shown = shownFingerprint.current
+      if (inFlight || shown === null || document.hidden || !api.isVisible) {
+        return
+      }
+      inFlight = true
+      comparisonFingerprint(params.path, refs.head)
+        .then((fingerprint) => {
+          if (
+            !disposed &&
+            shownFingerprint.current === shown &&
+            fingerprint !== shown
+          ) {
+            shownFingerprint.current = null
+            setVersion((current) => current + 1)
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false
+        })
+    }
+    const interval = window.setInterval(poll, FINGERPRINT_INTERVAL)
+    window.addEventListener("focus", poll)
+    const visibility = api.onDidVisibilityChange(
+      ({ isVisible }) => isVisible && poll(),
+    )
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+      window.removeEventListener("focus", poll)
+      visibility.dispose()
+    }
+  }, [api, params.path, refs.head])
 
   // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {
@@ -632,6 +714,8 @@ export function DiffPanel({
           clearFileSelection()
           setViewed(new Map())
           setHandFolds(new Map())
+          setExpanded(new Set())
+          setAllExpanded(new Set())
           setRefs(range)
           api.setTitle(branchRangeTitle(range))
         })
@@ -792,12 +876,14 @@ export function DiffPanel({
 
   // Where the ends sit cannot say whether a tab still carries the name it opened with, since a
   // comparison can be pointed back at the ends it opened from. Moving an end is what retitles the tab.
-  // Moving either end of the comparison leaves behind marks and folds that were made against a different
-  // one.
+  // Moving either end of the comparison leaves behind marks, folds and expanded files that were made against
+  // a different one.
   function moveRefs(next: SelectedRefs) {
     clearFileSelection()
     setViewed(new Map())
     setHandFolds(new Map())
+    setExpanded(new Set())
+    setAllExpanded(new Set())
     setRefs(next)
     api.setTitle(
       diffTitle(next, metadata.defaultBranch, metadata.remotes ?? []),

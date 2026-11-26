@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 import {
   carriedFolds,
+  carriedKeys,
   changedFilesLabel,
   fileIdentity,
   formatBytes,
@@ -14,6 +15,7 @@ import {
   isViewedFile,
   NARROW_DIFF_PANEL_WIDTH,
   persistedDiffPanelParams,
+  sameMarks,
   svgContent,
   toggledDiffFileTree,
   type ChangedFile,
@@ -302,6 +304,28 @@ describe("carriedFolds", () => {
         ["opened", false],
       ]),
     )
+  })
+
+  test("hands back the same folds when every folded file is still listed", () => {
+    const folds = new Map([["folded", true]])
+    expect(carriedFolds(folds, ["folded", "added"])).toBe(folds)
+  })
+})
+
+describe("carriedKeys", () => {
+  test("keeps the keys still listed and hands back the same set when none left", () => {
+    const held = new Set(["kept", "gone"])
+    expect(carriedKeys(held, ["kept"])).toEqual(new Set(["kept"]))
+    expect(carriedKeys(held, ["kept", "gone", "added"])).toBe(held)
+  })
+})
+
+describe("sameMarks", () => {
+  test("compares the files marked and the identity each was marked at", () => {
+    const marks = new Map([["a.ts", "1"]])
+    expect(sameMarks(marks, new Map([["a.ts", "1"]]))).toBe(true)
+    expect(sameMarks(marks, new Map([["a.ts", "2"]]))).toBe(false)
+    expect(sameMarks(marks, new Map())).toBe(false)
   })
 })
 

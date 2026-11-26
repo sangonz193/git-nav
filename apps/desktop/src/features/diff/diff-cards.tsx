@@ -34,6 +34,8 @@ import {
   estimatedBodyHeight,
   isLargeDiff,
   isSvgFile,
+  mirrorSplitScroll,
+  preparedDiffFile,
   statusLetter,
   type BinaryContent,
   type DiffEntry,
@@ -316,8 +318,20 @@ export function FileDiffCard({
   theme: "light" | "dark"
   wrap: boolean
 }) {
+  const card = useRef<HTMLElement>(null)
   const diffView = useRef<ComponentRef<typeof DiffView>>(null)
   const loaded = entry?.state === "loaded"
+  const diffFile = useMemo(
+    () => (entry?.state === "loaded" ? preparedDiffFile(entry.data) : null),
+    [entry],
+  )
+  useEffect(() => () => diffFile?.clearId(), [diffFile])
+
+  useEffect(() => {
+    const element = card.current
+    element?.addEventListener("scroll", mirrorSplitScroll, true)
+    return () => element?.removeEventListener("scroll", mirrorSplitScroll, true)
+  }, [])
   const svg = useMemo(
     () =>
       entry?.state === "loaded" ?
@@ -352,7 +366,7 @@ export function FileDiffCard({
     } else if (!allExpanded && isExpanded) {
       instance.onAllCollapse(modeName)
     }
-  }, [allExpanded, collapsed, loaded, mode])
+  }, [allExpanded, collapsed, diffFile, mode])
 
   const body = () => {
     if (entry?.state === "binary") {
@@ -389,7 +403,7 @@ export function FileDiffCard({
         </p>
       )
     }
-    if (entry?.state === "loaded") {
+    if (diffFile) {
       return (
         <>
           {(svg.oldBinary || svg.newBinary) && (
@@ -403,7 +417,7 @@ export function FileDiffCard({
             />
           )}
           <DiffView
-            data={entry.data}
+            diffFile={diffFile}
             diffViewFontSize={DIFF_FONT_SIZE}
             diffViewHighlight
             diffViewMode={mode}
@@ -438,7 +452,7 @@ export function FileDiffCard({
   }
 
   return (
-    <article className={cn("diff-file-card", dimmed && "is-viewed")}>
+    <article className={cn("diff-file-card", dimmed && "is-viewed")} ref={card}>
       <header className="diff-file-card-header">
         <button
           aria-expanded={!collapsed}

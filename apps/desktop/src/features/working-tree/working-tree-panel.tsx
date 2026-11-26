@@ -452,7 +452,7 @@ export function WorkingTreePanel({
   )
   const areaOf = (file: ChangedFile) => (file as WorkingTreeFile).area
 
-  // A file's diff belongs to the snapshot it was read from, so each snapshot reads its files afresh.
+  // Each snapshot rereads its files; cards keep their diff until the reread lands.
   const loadDiff = useMemo(
     () =>
       tree &&
@@ -467,7 +467,7 @@ export function WorkingTreePanel({
         })),
     [params.path, tree],
   )
-  const { entries, request } = useDiffLoader(keyOf, loadDiff)
+  const { entries, request } = useDiffLoader(keyOf, loadDiff, params.path)
   const isFolded = useCallback(
     (file: ChangedFile) => handFolds.get(keyOf(file)) ?? false,
     [handFolds, keyOf],

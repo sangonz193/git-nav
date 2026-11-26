@@ -1,6 +1,6 @@
 import { highlighter } from "@git-diff-view/lowlight"
-import { DiffModeEnum } from "@git-diff-view/react"
-import { useVirtualizer } from "@tanstack/react-virtual"
+import { DiffFile, DiffModeEnum } from "@git-diff-view/react"
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual"
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
 import { imageUrl } from "@/lib/ipc"
@@ -69,6 +69,65 @@ type DiffData = {
   oldFile: { fileName: string | null; content: string | null }
   newFile: { fileName: string | null; content: string | null }
   hunks: string[]
+}
+
+// Handed raw data, the diff view builds its rows in an effect and paints a frame with none, collapsing the card.
+export function preparedDiffFile(data: DiffData) {
+  const file = new DiffFile(
+    data.oldFile.fileName ?? "",
+    data.oldFile.content ?? "",
+    data.newFile.fileName ?? "",
+    data.newFile.content ?? "",
+    data.hunks,
+  )
+  file.init()
+  file.buildSplitDiffLines()
+  file.buildUnifiedDiffLines()
+  return file
+}
+
+function sameDiff(left: DiffEntry, right: DiffEntry) {
+  return (
+    left.state === "loaded" &&
+    right.state === "loaded" &&
+    left.data.oldFile.fileName === right.data.oldFile.fileName &&
+    left.data.oldFile.content === right.data.oldFile.content &&
+    left.data.newFile.fileName === right.data.newFile.fileName &&
+    left.data.newFile.content === right.data.newFile.content &&
+    left.data.hunks.length === right.data.hunks.length &&
+    left.data.hunks.every((hunk, index) => hunk === right.data.hunks[index])
+  )
+}
+
+const mirroredScrollLeft = new WeakMap<Element, number>()
+
+// The diff view's own split-side mirroring reacts to the echo of its mirroring, dragging the scrolled side back.
+export function mirrorSplitScroll(event: Event) {
+  const source = event.target
+  if (
+    !(source instanceof Element) ||
+    !source.classList.contains("diff-table-scroll-container")
+  ) {
+    return
+  }
+  event.stopPropagation()
+  if (mirroredScrollLeft.get(source) === source.scrollLeft) {
+    mirroredScrollLeft.delete(source)
+    return
+  }
+  for (const side of source.parentElement?.children ?? []) {
+    if (
+      side === source ||
+      !side.classList.contains("diff-table-scroll-container")
+    ) {
+      continue
+    }
+    const before = side.scrollLeft
+    side.scrollLeft = source.scrollLeft
+    if (side.scrollLeft !== before) {
+      mirroredScrollLeft.set(side, side.scrollLeft)
+    }
+  }
 }
 
 export type DiffEntry =
@@ -192,17 +251,33 @@ function freshLoader(load: Loader | null): LoaderState {
 
 const NO_ENTRIES: Record<string, DiffEntry> = {}
 
-// A loaded diff belongs to the loader that read it, so handing over a new loader is what empties the cards.
+type LoadedEntries = {
+  scope: unknown
+  entries: Record<string, DiffEntry>
+}
+
+export function withLoadedEntry(
+  loaded: LoadedEntries,
+  scope: unknown,
+  key: string,
+  entry: DiffEntry,
+) {
+  const entries = loaded.scope === scope ? loaded.entries : {}
+  const shown = entries[key]
+  return shown && sameDiff(shown, entry) ? loaded : (
+      { scope, entries: { ...entries, [key]: entry } }
+    )
+}
+
+// A new `scope` empties the cards. A new loader in the same scope keeps each diff on screen until its reread lands.
 export function useDiffLoader(
   keyOf: (file: ChangedFile) => string,
   load: Loader | null,
+  scope: unknown,
 ) {
-  const [loaded, setLoaded] = useState<{
-    load: Loader | null
-    entries: Record<string, DiffEntry>
-  }>({ load, entries: {} })
+  const [loaded, setLoaded] = useState<LoadedEntries>({ scope, entries: {} })
   const loader = useRef(freshLoader(load))
-  const entries = loaded.load === load ? loaded.entries : NO_ENTRIES
+  const entries = loaded.scope === scope ? loaded.entries : NO_ENTRIES
 
   // A request replaces the queue, so files scrolled past before a worker picked them up free their slot.
   const request = useCallback(
@@ -253,13 +328,7 @@ export function useDiffLoader(
           if (loader.current !== state) {
             return
           }
-          setLoaded((current) => ({
-            load,
-            entries: {
-              ...(current.load === load ? current.entries : {}),
-              [key]: entry,
-            },
-          }))
+          setLoaded((current) => withLoadedEntry(current, scope, key, entry))
         }
       }
       while (
@@ -272,7 +341,7 @@ export function useDiffLoader(
         })
       }
     },
-    [keyOf, load],
+    [keyOf, load, scope],
   )
 
   return { entries, request }
@@ -335,24 +404,43 @@ export function useDiffCards({
   // sizes a measurement is compared against. Cards above the scroller stay at their estimates until they
   // come back, which would move everything below them by the difference, so the card at the top of the
   // scroller is put back where it was. A fold that moved what sits above the scroller asks for its own card
-  // instead, and a file leaving the list takes its card out before it can be aimed at.
+  // instead, and a file leaving the list takes its card out before it can be aimed at. A list only read
+  // again keeps its heights, or every card above the scroller would jump as it scrolls back in. Its new
+  // counts can still move the estimate of a card above that was never measured, so the top card is found
+  // where the previous render laid it out.
+  const layout = useRef({ allExpanded, isFolded, mode, wrap })
+  const committed = useRef<{
+    files: ChangedFile[]
+    rows: VirtualItem[]
+  } | null>(null)
   useEffect(() => {
+    const previous = layout.current
+    layout.current = { allExpanded, isFolded, mode, wrap }
+    const isRelaid =
+      previous.allExpanded !== allExpanded ||
+      previous.isFolded !== isFolded ||
+      previous.mode !== mode ||
+      previous.wrap !== wrap
     const scrollTop = scrollElement.current?.scrollTop ?? 0
-    const top = rowVirtualizer
-      .getVirtualItems()
-      .find((row) => row.end > scrollTop)
+    const shown = isRelaid ? null : committed.current
+    const shownFiles = shown?.files ?? files
+    const top = (shown?.rows ?? rowVirtualizer.getVirtualItems()).find(
+      (row) => row.end > scrollTop,
+    )
     const anchor =
       pendingAnchor.current !== null ? { key: pendingAnchor.current, offset: 0 }
-      : top && files[top.index] ?
-        { key: keyOf(files[top.index]), offset: top.start - scrollTop }
+      : top && shownFiles[top.index] ?
+        { key: keyOf(shownFiles[top.index]), offset: top.start - scrollTop }
       : null
     pendingAnchor.current = null
-    rowVirtualizer.measure()
-    rowVirtualizer.getTotalSize()
-    scrollElement.current
-      ?.querySelectorAll<HTMLElement>(".diff-file-row")
-      .forEach((row) => rowVirtualizer.measureElement(row))
-    rowVirtualizer.getTotalSize()
+    if (isRelaid) {
+      rowVirtualizer.measure()
+      rowVirtualizer.getTotalSize()
+      scrollElement.current
+        ?.querySelectorAll<HTMLElement>(".diff-file-row")
+        .forEach((row) => rowVirtualizer.measureElement(row))
+      rowVirtualizer.getTotalSize()
+    }
     const index =
       anchor === null ? -1 : (
         files.findIndex((file) => keyOf(file) === anchor.key)
@@ -371,6 +459,10 @@ export function useDiffCards({
     scrollElement,
     wrap,
   ])
+
+  useEffect(() => {
+    committed.current = { files, rows: rowVirtualizer.measurementsCache }
+  })
 
   useEffect(() => {
     request(
