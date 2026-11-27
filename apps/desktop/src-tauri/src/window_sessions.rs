@@ -1,14 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, path::PathBuf};
+use std::{collections::HashSet, fs, path::Path, path::PathBuf};
 use crate::storage::{data_dir, with_locked_file, write_json_atomically};
 
 pub(crate) const MAIN_WINDOW: &str = "main";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ProjectWorktree {
+pub(crate) struct ActiveProject {
     pub(crate) project: String,
-    pub(crate) worktree: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -16,7 +15,7 @@ pub(crate) struct ProjectWorktree {
 pub(crate) struct WindowSession {
     pub(crate) label: String,
     #[serde(default)]
-    pub(crate) active: Option<ProjectWorktree>,
+    pub(crate) active: Option<ActiveProject>,
 }
 
 fn window_sessions_path() -> Result<PathBuf, String> {
@@ -50,15 +49,18 @@ fn upsert_session(sessions: &mut Vec<WindowSession>, session: WindowSession) {
     }
 }
 
-fn restorable_sessions(sessions: Vec<WindowSession>) -> Vec<WindowSession> {
-    let mut sessions = sessions
-        .into_iter()
-        .filter(|session| session.active.is_some())
-        .collect::<Vec<_>>();
+fn restorable_sessions(mut sessions: Vec<WindowSession>) -> Vec<WindowSession> {
     if let Some(index) = sessions.iter().position(|session| session.label == MAIN_WINDOW) {
         let main = sessions.remove(index);
         sessions.insert(0, main);
     }
+    let mut shown = HashSet::new();
+    sessions.retain(|session| {
+        session
+            .active
+            .as_ref()
+            .is_some_and(|active| shown.insert(active.project.clone()))
+    });
     sessions
 }
 
@@ -90,12 +92,11 @@ mod tests {
     use super::*;
     use std::env;
 
-    fn session(label: &str, worktree: Option<&str>) -> WindowSession {
+    fn session(label: &str, project: Option<&str>) -> WindowSession {
         WindowSession {
             label: label.to_string(),
-            active: worktree.map(|path| ProjectWorktree {
-                project: path.to_string(),
-                worktree: path.to_string(),
+            active: project.map(|project| ActiveProject {
+                project: project.to_string(),
             }),
         }
     }
@@ -150,6 +151,47 @@ mod tests {
     fn empty_sessions_leave_no_windows_to_restore() {
         assert!(restorable_sessions(Vec::new()).is_empty());
         assert!(restorable_sessions(vec![session(MAIN_WINDOW, None)]).is_empty());
+    }
+
+    #[test]
+    fn restores_one_window_per_project_preferring_the_main_window() {
+        assert_eq!(
+            restorable_sessions(vec![
+                session("window-2", Some("/repo/a/.git")),
+                session("window-3", Some("/repo/b/.git")),
+                session(MAIN_WINDOW, Some("/repo/a/.git")),
+                session("window-4", Some("/repo/b/.git")),
+            ]),
+            vec![
+                session(MAIN_WINDOW, Some("/repo/a/.git")),
+                session("window-3", Some("/repo/b/.git")),
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrites_sessions_saved_with_a_worktree_without_it() {
+        let path = env::temp_dir().join(format!(
+            "git-nav-window-sessions-worktree-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"[{"label":"main","active":{"project":"/repo/a/.git","worktree":"/repo/a-fix"}}]"#,
+        )
+        .unwrap();
+
+        update_sessions_at(&path, |sessions| {
+            *sessions = restorable_sessions(std::mem::take(sessions))
+        })
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"[{"label":"main","active":{"project":"/repo/a/.git"}}]"#
+        );
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("lock"));
     }
 
     #[test]

@@ -5,7 +5,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks"
 import { Window } from "happy-dom"
 import { act, useLayoutEffect } from "react"
 import { createRoot } from "react-dom/client"
-import type { ProjectWorktree, WorkspaceState } from "../workspace"
+import type { ActiveProject, WorkspaceState } from "../workspace"
 
 const window = new Window()
 Object.assign(globalThis, {
@@ -13,13 +13,12 @@ Object.assign(globalThis, {
   document: window.document,
   IS_REACT_ACT_ENVIRONMENT: true,
 })
-const first = { project: "/code/app/.git", worktree: "/code/app-fix" }
-const second = { project: "/code/other/.git", worktree: "/code/other" }
-let projects = [first, second].map((active) => ({
-  id: active.project,
-  path: active.worktree,
-}))
-const routes = new Map<string, ProjectWorktree | null>([["main", first]])
+const app = { id: "/code/app/.git", path: "/code/app" }
+const other = { id: "/code/other/.git", path: "/code/other" }
+const first = { project: app.id }
+const second = { project: other.id }
+let projects = [app, other]
+const routes = new Map<string, ActiveProject | null>([["main", first]])
 const saved: WorkspaceState[] = []
 const cleared: string[] = []
 const pending = [first]
@@ -28,9 +27,9 @@ let flushGate = new Promise<void>((resolve) => (releaseFlush = resolve))
 const layoutFlush = { current: () => flushGate }
 const requests: string[] = []
 
-function select(target: ProjectWorktree, source: string) {
+function select(target: ActiveProject, source: string) {
   const existing = [...routes].find(
-    ([, active]) => active?.worktree === target.worktree,
+    ([, active]) => active?.project === target.project,
   )?.[0]
   const label = existing ?? source
   routes.set(label, target)
@@ -44,19 +43,19 @@ mockIPC(
     if (command === "sidebar_projects") return projects
     if (command === "window_session") return { active: null }
     if (command === "take_opened_repositories") return pending.splice(0)
-    if (command === "save_window_worktree") {
+    if (command === "save_window_project") {
       saved.push(args as WorkspaceState)
       return
     }
-    if (command === "clear_window_worktree") {
-      const { worktree } = args as { worktree: string }
-      cleared.push(worktree)
-      if (routes.get("main")?.worktree === worktree) routes.set("main", null)
+    if (command === "clear_window_project") {
+      const { project } = args as { project: string }
+      cleared.push(project)
+      if (routes.get("main")?.project === project) routes.set("main", null)
       return
     }
     if (command === "open_repository") {
       const target =
-        (args as { path: string }).path === first.worktree ? first : second
+        (args as { path: string }).path === app.path ? first : second
       if (select(target, "main") === "main") {
         pending.push(target)
         await emit("repositories-opened")
@@ -112,37 +111,37 @@ assert.deepEqual(workspace.state, { active: first })
 assert.deepEqual(saved, [{ active: null }, { active: first }])
 assert.equal(select(first, "other-window"), "main")
 
-await act(async () => workspace!.show(second))
+await act(async () => workspace!.show(other))
 assert.deepEqual(workspace.state, { active: second })
 assert.equal(select(second, "other-window"), "main")
 assert.deepEqual(cleared, [])
 
 await act(async () => workspace!.show(null))
 assert.deepEqual(workspace.state, { active: null })
-assert.deepEqual(cleared, [second.worktree])
+assert.deepEqual(cleared, [second.project])
 assert.equal(routes.get("main"), null)
 assert.deepEqual(saved.at(-1), { active: null })
 
-await act(async () => workspace!.show(first))
-await act(async () => workspace!.remove(first.project))
+await act(async () => workspace!.show(app))
+await act(async () => workspace!.remove(app.id))
 assert.deepEqual(workspace.state, { active: second })
 assert.deepEqual(routes.get("main"), second)
-assert.deepEqual(cleared, [second.worktree, first.worktree])
-await act(async () => workspace!.remove(second.project))
+assert.deepEqual(cleared, [second.project, first.project])
+await act(async () => workspace!.remove(other.id))
 assert.deepEqual(workspace.state, { active: null })
 assert.equal(routes.get("main"), null)
-assert.deepEqual(cleared, [second.worktree, first.worktree, second.worktree])
+assert.deepEqual(cleared, [second.project, first.project, second.project])
 
-await act(async () => workspace!.show(first))
-await act(async () => workspace!.openInNewWindow(first))
+await act(async () => workspace!.show(app))
+await act(async () => workspace!.openInNewWindow(app))
 assert.deepEqual(workspace.state, { active: null })
 assert.equal(routes.get("main"), null)
 assert.equal(select(first, "other-window"), "window-2")
 assert.deepEqual(cleared, [
-  second.worktree,
-  first.worktree,
-  second.worktree,
-  first.worktree,
+  second.project,
+  first.project,
+  second.project,
+  first.project,
 ])
 
 await act(async () => root.unmount())

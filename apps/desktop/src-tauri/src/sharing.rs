@@ -11,7 +11,7 @@ use tauri::{menu::Menu, menu::MenuEvent, menu::MenuItem, tray::TrayIconBuilder};
 use std::os::windows::process::CommandExt;
 use crate::server;
 use crate::storage::{load_settings, save_setting, set_setting};
-use crate::projects::OpenWorktrees;
+use crate::projects::WindowProjects;
 #[cfg(target_os = "windows")]
 use crate::process::CREATE_NO_WINDOW;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -464,7 +464,7 @@ fn start_sharing_on_main_thread(
             token: arguments.token,
             public_url: arguments.public_url,
         },
-        app.state::<OpenWorktrees>().inner().clone(),
+        app.state::<WindowProjects>().inner().clone(),
     )?;
     let state = server.state();
     if let Err(error) = install_sharing_tray(app) {
@@ -563,7 +563,7 @@ fn restart_sharing_on_main_thread(
         take_sharing_server_for_restart(&mut sharing, |server| change(server.options()))?
     };
     let previous = server.options().clone();
-    let open_worktrees = app.state::<OpenWorktrees>().inner().clone();
+    let window_projects = app.state::<WindowProjects>().inner().clone();
     let (running, error) = match replace_sharing_server(
         server,
         previous,
@@ -573,7 +573,7 @@ fn restart_sharing_on_main_thread(
                 log::warn!("Git Nav sharing server did not release its port within five seconds.");
             }
         },
-        |options| server::start(options, open_worktrees.clone()),
+        |options| server::start(options, window_projects.clone()),
         persist,
     ) {
         Ok(server) => (Some(server), None),

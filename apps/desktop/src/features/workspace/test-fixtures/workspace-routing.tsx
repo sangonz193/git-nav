@@ -48,10 +48,11 @@ renderToStaticMarkup(
 )
 assert.ok(workspace)
 
-await workspace.show({ project: "/code/app/.git", worktree: "/code/app-fix" })
+const app = { id: "/code/app/.git", path: "/code/app" }
+await workspace.show(app)
 if (desktop) {
   assert.deepEqual(requests, [
-    { command: "open_repository", args: { path: "/code/app-fix" } },
+    { command: "open_repository", args: { path: "/code/app" } },
   ])
   assert.equal(flushes, 0)
 } else {
@@ -64,12 +65,9 @@ assert.equal(flushes, desktop ? 1 : 2)
 assert.equal(requests.length, desktop ? 1 : 0)
 
 if (desktop) {
-  await workspace.openInNewWindow({
-    project: "/code/app/.git",
-    worktree: "/code/app-fix",
-  })
+  await workspace.openInNewWindow(app)
   assert.deepEqual(requests.at(-1), {
     command: "open_repository_in_new_window",
-    args: { path: "/code/app-fix" },
+    args: { path: "/code/app" },
   })
 }

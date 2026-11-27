@@ -1,25 +1,23 @@
-import type { ProjectWorktree } from "../features/workspace/workspace"
+import type { ActiveProject } from "../features/workspace/workspace"
 import { invoke, isDesktop } from "./ipc"
 
 export type WorktreeTarget = "vscode" | "terminal" | "finder"
 
-const openedListeners = new Set<(opened: ProjectWorktree) => void>()
+const openedListeners = new Set<(opened: ActiveProject) => void>()
 
 export function repositoryUrl(path: string) {
   return `/?${new URLSearchParams({ repository: path })}`
 }
 
-// Browser tabs receive resolved worktrees locally because only desktop windows share backend routing.
-export function onRepositoryOpened(
-  listener: (opened: ProjectWorktree) => void,
-) {
+// Browser tabs receive resolved projects locally because only desktop windows share backend routing.
+export function onRepositoryOpened(listener: (opened: ActiveProject) => void) {
   openedListeners.add(listener)
   return () => {
     openedListeners.delete(listener)
   }
 }
 
-function announceOpened(opened: ProjectWorktree) {
+function announceOpened(opened: ActiveProject) {
   for (const listener of openedListeners) listener(opened)
 }
 
@@ -27,7 +25,7 @@ export async function openRepository(path: string) {
   if (isDesktop) {
     return invoke<void>("open_repository", { path })
   }
-  announceOpened(await invoke<ProjectWorktree>("open_repository", { path }))
+  announceOpened(await invoke<ActiveProject>("open_repository", { path }))
 }
 
 export async function openRepositoryInNewWindow(path: string) {

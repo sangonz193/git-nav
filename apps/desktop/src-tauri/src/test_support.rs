@@ -37,3 +37,19 @@ pub(crate) fn remove_scratch_repository(path: &str) {
         }
     }
 }
+
+pub(crate) fn rerun_with_explicit_bare_repositories(test: &str) -> bool {
+    if env::var("GIT_CONFIG_KEY_0").is_ok_and(|key| key == "safe.bareRepository") {
+        return false;
+    }
+    let output = std::process::Command::new(env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "safe.bareRepository")
+        .env("GIT_CONFIG_VALUE_0", "explicit")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success() && stdout.contains(" 1 passed"), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    true
+}
