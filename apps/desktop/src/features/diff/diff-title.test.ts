@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test"
 
-import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
+import {
+  EMPTY_TREE_REF,
+  INDEX_REF,
+  WORKTREE_REF,
+} from "@/lib/repository-constants"
 import {
   branchRangeTitle,
   defaultBranchName,
+  dependsOnWorktree,
   diffTitle,
   isDefaultBranch,
   refLabel,
@@ -154,6 +159,42 @@ describe("diffTitle", () => {
         REMOTES,
       ),
     ).toBe("origin/main..25745feb")
+  })
+})
+
+describe("dependsOnWorktree", () => {
+  test.each([
+    ["HEAD", WORKTREE_REF],
+    [INDEX_REF, "main"],
+    ["HEAD", "abc123"],
+    ["HEAD~1", "HEAD"],
+    ["HEAD^", "main"],
+    ["@", "main"],
+    ["@~2", "main"],
+    ["HEAD@{1}", "main"],
+    ["ORIG_HEAD", "main"],
+    ["main", "MERGE_HEAD"],
+    ["FETCH_HEAD~1", "main"],
+    ["CHERRY_PICK_HEAD^", "main"],
+    ["REVERT_HEAD", "main"],
+    ["REBASE_HEAD~2", "main"],
+    ["refs/bisect/bad", "main"],
+    ["refs/worktree/notes~1", "main"],
+  ])("reads the worktree when comparing %s with %s", (base, head) => {
+    expect(dependsOnWorktree({ base, head })).toBe(true)
+  })
+
+  test.each([
+    ["main", "feature/x"],
+    ["abc123", "def456"],
+    ["main~1", "main"],
+    ["HEAD-notes", "main"],
+    ["ORIG_HEAD-notes", "main"],
+    ["refs/heads/MERGE_HEAD", "main"],
+    ["refs/bisect", "main"],
+    [EMPTY_TREE_REF, "abc123^"],
+  ])("keeps the comparison of %s with %s in the repository", (base, head) => {
+    expect(dependsOnWorktree({ base, head })).toBe(false)
   })
 })
 

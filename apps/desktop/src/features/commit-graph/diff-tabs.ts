@@ -12,7 +12,12 @@ import {
   type RowWorktree,
   type StashEntry,
 } from "./commit-graph"
-import { branchRangeTitle, refLabel, selectedRefs } from "../diff/diff-title"
+import {
+  branchRangeTitle,
+  diffTitle,
+  refLabel,
+  selectedRefs,
+} from "../diff/diff-title"
 import { rangeBaseHash } from "./selection-diff"
 
 type BranchSelection = { baseRef: string; headRef: string }
@@ -101,7 +106,7 @@ export function diffTabs({
       },
       position: { direction: "within", referencePanel },
       tabComponent: "diff",
-      title: worktree.name,
+      title: diffTitle(selectedRefs("HEAD", WORKTREE_REF, false), null, []),
     })
   }
 
