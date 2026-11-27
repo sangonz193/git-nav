@@ -20,6 +20,7 @@ const testingStash = mode === "stash"
 const filtered = mode === "filtered" || linked || rename
 const testingRefresh = mode === "refresh" || filtered
 const browser = mode === "browser"
+const choosingWorktree = mode === "worktree"
 const window = new Window({ url: "http://localhost" })
 Object.assign(globalThis, {
   window,
@@ -52,6 +53,7 @@ onlineManager.setOnline(mode !== "offline")
 
 const repoPath = "/code/app"
 const worktree = { branch: "feature", head: "abc123", path: "/code/feature" }
+const mainWorktree = { branch: "main", head: "def456", path: repoPath }
 const cleanOptions = {
   deleteMergedPullRequestBranches: false,
   deleteMergedBranches: true,
@@ -108,7 +110,9 @@ const mockCommands = {
       case "project_snapshot":
         return {
           worktrees:
-            testingRefresh || testingStash || browser ? [] : [worktree],
+            choosingWorktree ? [mainWorktree, worktree]
+            : testingRefresh || testingStash || browser ? []
+            : [worktree],
         }
       case "worktree_status":
         return testingRefresh || testingStash || browser ? [] : status.promise
@@ -226,6 +230,13 @@ const container = document.createElement("div")
 document.body.append(container)
 const root = createRoot(container)
 
+async function waitUntil(condition: () => boolean) {
+  for (let attempt = 0; attempt < 40 && !condition(); attempt++) {
+    await act(async () => Bun.sleep(5))
+  }
+  assert.ok(condition())
+}
+
 async function waitForBadge(expected: string) {
   for (
     let attempt = 0;
@@ -295,7 +306,9 @@ function batch(start: number, count: number) {
 }
 
 async function testStashMenu() {
-  const trigger = container.querySelector('[aria-haspopup="menu"]')!
+  const trigger = [
+    ...container.querySelectorAll('[aria-haspopup="menu"]'),
+  ].find((element) => element.textContent === String(stashes.length))!
   const key = (value: string) =>
     new KeyboardEvent("keydown", { bubbles: true, key: value })
   const stashTrigger = (index: number) =>
@@ -516,9 +529,66 @@ async function testBrowserWindows() {
   assert.equal(graph.graphVersion, 3)
 }
 
+async function testWorktreeSelector() {
+  const { CommitGraphPanel } = await import("../commit-graph-panel")
+  const { TooltipProvider } =
+    await import("@workspace/shadcn/components/tooltip")
+  const updates: GraphPanelParams[] = []
+  const props = {
+    api: {
+      id: "app",
+      onDidVisibilityChange: () => ({ dispose() {} }),
+      updateParameters: (params: GraphPanelParams) => updates.push(params),
+    },
+    containerApi: {},
+    params: {
+      name: "app",
+      path: repoPath,
+      selectedCommitHashes: ["commit-1"],
+    },
+  } as unknown as IDockviewPanelProps<GraphPanelParams>
+  const key = (value: string) =>
+    new KeyboardEvent("keydown", { bubbles: true, key: value })
+  const trigger = () =>
+    [...container.querySelectorAll('[aria-haspopup="menu"]')].find((element) =>
+      element.textContent.startsWith("app"),
+    )!
+  const item = (name: string) =>
+    [...document.querySelectorAll('[role="menuitem"]')].find((element) =>
+      element.textContent.startsWith(name),
+    )!
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <CommitGraphPanel {...props} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+  })
+  await waitUntil(() => container.textContent.includes(mainWorktree.branch))
+  const before = updates.length
+
+  await act(async () => trigger().dispatchEvent(key("Enter")))
+  await act(async () => item("app").dispatchEvent(key("Enter")))
+  assert.equal(
+    updates.length,
+    before,
+    "choosing the current worktree does nothing",
+  )
+
+  await act(async () => trigger().dispatchEvent(key("Enter")))
+  await act(async () => item("feature").dispatchEvent(key("Enter")))
+  assert.deepEqual(updates.slice(before), [
+    { name: "app", path: worktree.path, selectedCommitHashes: [] },
+  ])
+}
+
 try {
   if (testingRefresh || testingStash) await testRefresh()
   else if (browser) await testBrowserWindows()
+  else if (choosingWorktree) await testWorktreeSelector()
   else await testBadges()
 } finally {
   await act(async () => root.unmount())
