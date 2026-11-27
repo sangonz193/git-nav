@@ -455,6 +455,7 @@ export function useGraphData({
     stashesByBase,
     sync,
     worktreeState,
+    worktrees,
     worktreesByHead,
   }
 }

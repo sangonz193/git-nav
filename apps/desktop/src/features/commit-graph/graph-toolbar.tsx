@@ -32,6 +32,7 @@ import {
 } from "@workspace/shadcn/components/tooltip"
 import { cn } from "@workspace/shadcn/lib/utils"
 import {
+  AppWindow,
   Archive,
   Broom,
   ChevronDown,
@@ -43,11 +44,13 @@ import {
   SlidersHorizontal,
 } from "lucide-react"
 
+import { worktreeName } from "../working-tree/working-tree-state"
 import {
   PULL_REQUEST_STATE_LABELS,
   relativeDate,
   stashChips,
   type PullRequestState,
+  type RowWorktree,
   type StashEntry,
 } from "./commit-graph"
 import {
@@ -77,6 +80,69 @@ import type { SyncStatus } from "./repository-sync"
 import { BROWSER_GRAPH_WINDOW_SIZE } from "./use-graph-data"
 import type { useGraphSearch } from "./use-graph-search"
 
+function worktreeDetail(worktree: RowWorktree) {
+  const changes = worktree.changedFiles + worktree.untrackedFiles
+  return [
+    worktree.branch ?? "Detached",
+    changes > 0 && `${changes.toLocaleString()} uncommitted`,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+}
+
+function WorktreeSelector({
+  onSelect,
+  path,
+  worktrees,
+}: {
+  onSelect: (path: string) => void
+  path: string
+  worktrees: RowWorktree[]
+}) {
+  const current = worktrees.find((worktree) => worktree.path === path)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          className="max-w-60 min-w-0 shrink justify-between"
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <AppWindow className="shrink-0 text-muted-foreground" />
+            <span className="truncate">{worktreeName(path)}</span>
+            {current && (
+              <span className="truncate text-xs text-muted-foreground">
+                {current.branch ?? "Detached"}
+              </span>
+            )}
+          </span>
+          <ChevronDown />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-72">
+        <DropdownMenuLabel>Worktrees</DropdownMenuLabel>
+        {worktrees.map((worktree) => (
+          <DropdownMenuItem
+            className={cn(worktree.path === path && "bg-muted")}
+            key={worktree.path}
+            onSelect={() => onSelect(worktree.path)}
+          >
+            <AppWindow />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{worktreeName(worktree.path)}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {worktreeDetail(worktree)}
+              </span>
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export function GraphToolbar({
   cleanup,
   collapseUnmarked,
@@ -92,6 +158,7 @@ export function GraphToolbar({
   menus,
   onActivateSearchHit,
   onCollapseUnmarked,
+  onSelectWorktree,
   pullRequestCount,
   refreshGraph,
   search,
@@ -101,6 +168,8 @@ export function GraphToolbar({
   syncStatus,
   updateConfig,
   updateFilters,
+  worktreePath,
+  worktrees,
 }: {
   cleanup: ReturnType<typeof useBranchCleanup>
   collapseUnmarked: boolean
@@ -116,6 +185,7 @@ export function GraphToolbar({
   menus: ChipMenuContext
   onActivateSearchHit: (hit: SearchHit) => void
   onCollapseUnmarked: (collapse: boolean) => void
+  onSelectWorktree: (path: string) => void
   pullRequestCount: number
   refreshGraph: () => void
   search: ReturnType<typeof useGraphSearch>
@@ -125,11 +195,13 @@ export function GraphToolbar({
   syncStatus: SyncStatus | null
   updateConfig: (change: ViewConfigChange) => void
   updateFilters: (change: Partial<BranchFilters>) => void
+  worktreePath: string
+  worktrees: RowWorktree[]
 }) {
   const filterCount = activeFilterCount(filters)
   return (
     <div className="flex items-center justify-between gap-1 border-b px-2 py-1">
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-1">
         <Popover
           onOpenChange={(open) =>
             open ? search.open() : search.setIsOpen(false)
@@ -179,6 +251,11 @@ export function GraphToolbar({
             />
           </PopoverContent>
         </Popover>
+        <WorktreeSelector
+          onSelect={onSelectWorktree}
+          path={worktreePath}
+          worktrees={worktrees}
+        />
       </div>
       <div className="flex items-center gap-1">
         <FoldButtons

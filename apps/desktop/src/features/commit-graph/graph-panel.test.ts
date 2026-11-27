@@ -11,6 +11,7 @@ const modes = [
   "filtered",
   "linked",
   "stash",
+  "worktree",
 ]
 
 test.each([...modes, ...renameModes])(

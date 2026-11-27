@@ -244,6 +244,7 @@ function CommitGraphPanelContent({
     stashesByBase,
     sync,
     worktreeState,
+    worktrees,
     worktreesByHead,
   } = useGraphData({
     onError: setError,
@@ -1115,6 +1116,11 @@ function CommitGraphPanelContent({
         menus={menus}
         onActivateSearchHit={activateSearchHit}
         onCollapseUnmarked={collapseUnmarkedCommits}
+        onSelectWorktree={(path) => {
+          if (path === params.path) return
+          toast.dismiss(operationToastId)
+          api.updateParameters({ ...params, path, selectedCommitHashes: [] })
+        }}
         pullRequestCount={pullRequests.size}
         refreshGraph={refreshGraph}
         search={search}
@@ -1124,6 +1130,8 @@ function CommitGraphPanelContent({
         syncStatus={sync.status}
         updateConfig={updateConfig}
         updateFilters={updateFilters}
+        worktreePath={params.path}
+        worktrees={worktrees}
       />
       <GraphFilterStrip
         filters={filters}
