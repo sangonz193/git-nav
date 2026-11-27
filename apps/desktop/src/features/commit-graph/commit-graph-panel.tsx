@@ -583,6 +583,7 @@ function CommitGraphPanelContent({
     openRangeDiff,
     openRefDiff,
     openStashDiff,
+    openWorktreeGraph,
     openWorkingTree,
     openWorktreeDiff,
   } = useMemo(
@@ -1051,6 +1052,7 @@ function CommitGraphPanelContent({
       openPullRequest: mutatePullRequest,
       openRefDiff,
       openStashDiff,
+      openWorktreeGraph,
       openWorkingTree,
       openWorktree: triggerWorktree,
       openWorktreeDiff,
@@ -1065,6 +1067,7 @@ function CommitGraphPanelContent({
       mutatePullRequest,
       openRefDiff,
       openStashDiff,
+      openWorktreeGraph,
       openWorkingTree,
       triggerWorktree,
       openWorktreeDiff,

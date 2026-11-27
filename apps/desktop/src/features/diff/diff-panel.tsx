@@ -65,13 +65,18 @@ import {
   type StashEntry,
 } from "../commit-graph/commit-graph"
 import {
+  headHitLabel,
   isRevisionExpression,
   searchReferences,
+  workingTreeHitLabel,
   type HitKind,
   type Reference,
   type ReferenceHit,
   type ResolvedRevision,
+  type WorktreeSource,
 } from "./reference-search"
+import type { Project, Worktree } from "../repository/project"
+import { worktreeName } from "../working-tree/working-tree-state"
 import {
   branchRangeTitle,
   defaultBranchName,
@@ -146,6 +151,7 @@ type ViewedFile = {
 type LoadedComparison = {
   comparison: Comparison
   ignoreWhitespace: boolean
+  path: string
   refs: SelectedRefs
 }
 
@@ -167,11 +173,13 @@ function HeadPickerLabel({
   return (
     <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
       <span className="truncate">{label || "(no subject)"}</span>
-      {shortRef !== reference && shortRef !== label && (
-        <code className="shrink-0 text-xs text-muted-foreground">
-          {shortRef}
-        </code>
-      )}
+      {reference !== WORKTREE_REF &&
+        shortRef !== reference &&
+        shortRef !== label && (
+          <code className="shrink-0 text-xs text-muted-foreground">
+            {shortRef}
+          </code>
+        )}
     </span>
   )
 }
@@ -225,6 +233,28 @@ function useRepositoryMetadata(path: string, version: number) {
   )
 }
 
+function worktreeSource({ branch, isDetached, path }: Worktree) {
+  return {
+    headDetail: isDetached ? "Detached head" : branch,
+    name: worktreeName(path),
+    path,
+  }
+}
+
+// A side that reads a worktree keeps naming the worktree it reads once the comparison moves to another.
+function labelsForWorktree(refs: SelectedRefs, path: string) {
+  const name = worktreeName(path)
+  const sideLabel = (reference: string, label: string) =>
+    reference === WORKTREE_REF ? workingTreeHitLabel(name)
+    : reference === "HEAD" ? headHitLabel(name)
+    : label
+  return {
+    ...refs,
+    baseLabel: sideLabel(refs.base, refs.baseLabel),
+    headLabel: sideLabel(refs.head, refs.headLabel),
+  }
+}
+
 /**
  * Everything a diff side can be pointed at. Refs come from the repository rather than the graph window,
  * so a branch is reachable however far back its tip sits.
@@ -233,6 +263,7 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
   const [commits, setCommits] = useState<Commit[]>([])
   const [references, setReferences] = useState<Reference[]>([])
   const [stashes, setStashes] = useState<StashEntry[]>([])
+  const [worktrees, setWorktrees] = useState<WorktreeSource[]>([])
 
   useEffect(() => {
     if (!enabled) {
@@ -250,14 +281,24 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
     invoke<CommitBatch>("reference_picker_commits", { repoPath: path })
       .then((batch) => settle(batch.map(commitFromTuple), setCommits))
       .catch(() => undefined)
+    invoke<Project>("project_snapshot", { path })
+      .then((project) =>
+        settle(
+          project.worktrees
+            .filter((worktree) => !worktree.isPrunable)
+            .map(worktreeSource),
+          setWorktrees,
+        ),
+      )
+      .catch(() => undefined)
     return () => {
       cancelled = true
     }
   }, [enabled, path, version])
 
   return useMemo(
-    () => ({ commits, references, stashes }),
-    [commits, references, stashes],
+    () => ({ commits, references, stashes, worktrees }),
+    [commits, references, stashes, worktrees],
   )
 }
 
@@ -275,6 +316,7 @@ export function DiffPanel({
       params.headLabel,
     ),
   )
+  const [worktreePath, setWorktreePath] = useState(params.path)
   const [loadedComparison, setLoadedComparison] =
     useState<LoadedComparison | null>(null)
   const comparison = loadedComparison?.comparison ?? null
@@ -333,14 +375,14 @@ export function DiffPanel({
       loadedComparison &&
       ((file: ChangedFile) =>
         invoke<FileDiff>("diff_file", {
-          repoPath: params.path,
+          repoPath: loadedComparison.path,
           baseSha: loadedComparison.comparison.baseSha,
           headSha: loadedComparison.comparison.headSha,
           oldPath: file.oldPath,
           newPath: file.newPath,
           ignoreWhitespace: loadedComparison.ignoreWhitespace,
         })),
-    [loadedComparison, params.path],
+    [loadedComparison],
   )
   // Only moving an end starts the list over; a reread keeps the scroll position and the loaded diffs.
   const comparisonScope = loadedComparison?.refs ?? null
@@ -350,8 +392,8 @@ export function DiffPanel({
     comparisonScope,
     comparison?.files,
   )
-  const metadata = useRepositoryMetadata(params.path, version)
-  const sources = useReferenceSources(params.path, picker !== null, version)
+  const metadata = useRepositoryMetadata(worktreePath, version)
+  const sources = useReferenceSources(worktreePath, picker !== null, version)
   const shownFiles = useMemo(
     () =>
       hideViewed ?
@@ -442,13 +484,13 @@ export function DiffPanel({
   useEffect(() => {
     api.updateParameters(
       persistedDiffPanelParams(
-        { name: params.name, path: params.path },
+        { name: params.name, path: worktreePath },
         refs,
         selectedFilePath,
         userPreferences,
       ),
     )
-  }, [api, params.name, params.path, refs, selectedFilePath, userPreferences])
+  }, [api, params.name, worktreePath, refs, selectedFilePath, userPreferences])
 
   const {
     activeKey,
@@ -481,7 +523,7 @@ export function DiffPanel({
     const marked = new Map<string, string | null>()
     marksDuringLoad.current = marked
     invoke<ViewedFile[]>("viewed_files", {
-      repoPath: params.path,
+      repoPath: worktreePath,
       baseRef: refs.base,
       headRef: refs.head,
       mergeBase: refs.mergeBase,
@@ -510,7 +552,7 @@ export function DiffPanel({
     return () => {
       cancelled = true
     }
-  }, [params.path, refs.base, refs.head, refs.mergeBase, version])
+  }, [worktreePath, refs.base, refs.head, refs.mergeBase, version])
 
   // Fingerprint first, so a change landing during the comparison is caught by the next poll.
   useEffect(() => {
@@ -518,13 +560,13 @@ export function DiffPanel({
     let compared = false
     shownFingerprint.current = null
     // A joined fingerprint always holds a ":", so an empty string never matches one and the next poll reloads.
-    const fingerprint = comparisonFingerprint(params.path, refs.head).catch(
+    const fingerprint = comparisonFingerprint(worktreePath, refs.head).catch(
       () => "",
     )
     fingerprint
       .then(() =>
         invoke<Comparison>("compare_refs", {
-          repoPath: params.path,
+          repoPath: worktreePath,
           baseRef: refs.base,
           headRef: refs.head,
           mergeBase: refs.mergeBase,
@@ -542,10 +584,16 @@ export function DiffPanel({
             (
               current?.refs === refs &&
               current.ignoreWhitespace === ignoreWhitespace &&
+              current.path === worktreePath &&
               isSameComparison(current.comparison, nextComparison)
             ) ?
               current
-            : { comparison: nextComparison, ignoreWhitespace, refs },
+            : {
+                comparison: nextComparison,
+                ignoreWhitespace,
+                path: worktreePath,
+                refs,
+              },
           )
           setError(null)
         }
@@ -565,7 +613,7 @@ export function DiffPanel({
     return () => {
       cancelled = true
     }
-  }, [ignoreWhitespace, params.path, refs, version])
+  }, [ignoreWhitespace, worktreePath, refs, version])
 
   useEffect(() => {
     let disposed = false
@@ -576,7 +624,7 @@ export function DiffPanel({
         return
       }
       inFlight = true
-      comparisonFingerprint(params.path, refs.head)
+      comparisonFingerprint(worktreePath, refs.head)
         .then((fingerprint) => {
           if (
             !disposed &&
@@ -603,7 +651,7 @@ export function DiffPanel({
       window.removeEventListener("focus", poll)
       visibility.dispose()
     }
-  }, [api, params.path, refs.head])
+  }, [api, refs.head, worktreePath])
 
   // A drawer laid over the diff is transient, while side-by-side columns honor an explicit preference.
   useLayoutEffect(() => {
@@ -666,7 +714,7 @@ export function DiffPanel({
     }
     let cancelled = false
     invoke<ResolvedRevision>("resolve_revision", {
-      repoPath: params.path,
+      repoPath: worktreePath,
       revision: searchQuery.trim(),
     })
       .then(
@@ -677,7 +725,7 @@ export function DiffPanel({
     return () => {
       cancelled = true
     }
-  }, [params.path, searchQuery])
+  }, [worktreePath, searchQuery])
   const revision =
     resolvedRevision?.query === searchQuery ? resolvedRevision.revision : null
 
@@ -687,11 +735,15 @@ export function DiffPanel({
         []
       : searchReferences(searchQuery, {
           ...sources,
-          ...metadata,
           allowWorktree: picker === "head",
+          currentWorktree: {
+            headDetail: metadata.headDetail,
+            name: worktreeName(worktreePath),
+            path: worktreePath,
+          },
           revision,
         }),
-    [metadata, picker, revision, searchQuery, sources],
+    [metadata.headDetail, picker, revision, searchQuery, sources, worktreePath],
   )
   const clearFileSelection = useCallback(() => {
     pendingRestoredFilePath.current = null
@@ -699,25 +751,32 @@ export function DiffPanel({
     setSelectedFilePath(null)
   }, [clearPendingScroll])
   const selectAheadRange = useCallback(
-    (reference: string) => {
+    (reference: string, path: string) => {
       invoke<BranchSelection>("select_branch_range", {
-        repoPath: params.path,
+        repoPath: path,
         reference,
       })
         .then((selection) => {
-          const range = selectedRefs(selection.baseRef, selection.headRef, true)
+          const selected = selectedRefs(
+            selection.baseRef,
+            selection.headRef,
+            true,
+          )
+          const range =
+            path === worktreePath ? selected : labelsForWorktree(selected, path)
           clearFileSelection()
           setViewed(new Map())
           setHandFolds(new Map())
           setExpanded(new Set())
           setAllExpanded(new Set())
           setRefs(range)
+          setWorktreePath(path)
           api.setTitle(branchRangeTitle(range))
         })
         .catch((message: unknown) => setError(String(message)))
       setPicker(null)
     },
-    [api, clearFileSelection, params.path],
+    [api, clearFileSelection, worktreePath],
   )
   // Measuring a branch from where it forked moves both ends of the comparison, which is only what the
   // head end is asking for. Naming the branch it forked from is what keeps that from being a surprise.
@@ -743,7 +802,11 @@ export function DiffPanel({
               hint: `Changes on ${hit.label} since it forked from ${forkBase || "the default branch"}`,
               icon: GitCompareArrows,
               label: forkBase ? `vs ${forkBase}` : "vs default",
-              onSelect: () => selectAheadRange(hit.branch as string),
+              onSelect: () =>
+                selectAheadRange(
+                  hit.branch as string,
+                  hit.worktreePath ?? worktreePath,
+                ),
             },
         detail: hit.detail,
         icon: HIT_ICONS[hit.kind],
@@ -757,6 +820,7 @@ export function DiffPanel({
       metadata.remotes,
       picker,
       selectAheadRange,
+      worktreePath,
     ],
   )
 
@@ -806,7 +870,7 @@ export function DiffPanel({
     setHandFolds(next)
     if (identity) {
       invoke("set_file_viewed", {
-        repoPath: params.path,
+        repoPath: worktreePath,
         baseRef: refs.base,
         headRef: refs.head,
         mergeBase: refs.mergeBase,
@@ -873,15 +937,17 @@ export function DiffPanel({
   // comparison can be pointed back at the ends it opened from. Moving an end is what retitles the tab.
   // Moving either end of the comparison leaves behind marks, folds and expanded files that were made against
   // a different one.
-  function moveRefs(next: SelectedRefs) {
+  function moveRefs(next: SelectedRefs, path: string) {
+    const moved = path === worktreePath ? next : labelsForWorktree(next, path)
     clearFileSelection()
     setViewed(new Map())
     setHandFolds(new Map())
     setExpanded(new Set())
     setAllExpanded(new Set())
-    setRefs(next)
+    setRefs(moved)
+    setWorktreePath(path)
     api.setTitle(
-      diffTitle(next, metadata.defaultBranch, metadata.remotes ?? []),
+      diffTitle(moved, metadata.defaultBranch, metadata.remotes ?? []),
     )
   }
 
@@ -890,6 +956,7 @@ export function DiffPanel({
       picker === "base" ?
         { ...refs, base: hit.reference, baseLabel: hit.label }
       : { ...refs, head: hit.reference, headLabel: hit.label },
+      hit.worktreePath ?? worktreePath,
     )
     setPicker(null)
   }
@@ -1086,7 +1153,9 @@ export function DiffPanel({
             aria-label="Compare since the two sides forked"
             aria-pressed={refs.mergeBase}
             disabled={refs.base === EMPTY_TREE_REF}
-            onClick={() => moveRefs({ ...refs, mergeBase: !refs.mergeBase })}
+            onClick={() =>
+              moveRefs({ ...refs, mergeBase: !refs.mergeBase }, worktreePath)
+            }
             size="sm"
             type="button"
             variant="ghost"

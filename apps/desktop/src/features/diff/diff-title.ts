@@ -1,6 +1,13 @@
-import { EMPTY_TREE_REF, WORKTREE_REF } from "@/lib/repository-constants"
+import {
+  EMPTY_TREE_REF,
+  INDEX_REF,
+  WORKTREE_REF,
+} from "@/lib/repository-constants"
 
 const REF_NAMESPACE = /^refs\/(?:heads|remotes|tags)\//
+const HEAD_RELATIVE = /^(?:HEAD|@)(?:$|[~^:@{])/
+const PER_WORKTREE_REF =
+  /^(?:(?:ORIG_HEAD|MERGE_HEAD|FETCH_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|REBASE_HEAD)|refs\/(?:bisect|worktree)\/\S+?)(?:[~^]\d*)*$/
 
 export type SelectedRefs = {
   base: string
@@ -13,6 +20,24 @@ export type SelectedRefs = {
 
 export function rangeMarker({ mergeBase }: SelectedRefs) {
   return mergeBase ? "..." : ".."
+}
+
+// Revisions relative to HEAD, and the pseudo-refs each worktree keeps for itself, resolve against whichever
+// worktree the diff belongs to, so they read its state.
+export function dependsOnWorktree({
+  base,
+  head,
+}: {
+  base: string
+  head: string
+}) {
+  return [base, head].some(
+    (reference) =>
+      reference === WORKTREE_REF ||
+      reference === INDEX_REF ||
+      HEAD_RELATIVE.test(reference) ||
+      PER_WORKTREE_REF.test(reference),
+  )
 }
 
 // The default branch is named after whichever remote holds it, but the branch it names is the same one

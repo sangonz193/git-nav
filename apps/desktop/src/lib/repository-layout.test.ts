@@ -47,93 +47,87 @@ function storedLayout(params: Record<string, unknown> = {}) {
 
 describe("usableRepositoryLayout", () => {
   test("accepts a current layout for the same worktree", () => {
-    expect(usableRepositoryLayout(storedLayout(), path)).not.toBeNull()
+    expect(usableRepositoryLayout(storedLayout())).not.toBeNull()
   })
 
   test("rejects the addPanel component key that dockview does not serialize", () => {
     const value = storedLayout()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: {
-            ...value.layout,
-            panels: {
-              graph: { id: "graph", component: "graph", params: { path } },
-            },
+      usableRepositoryLayout({
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            graph: { id: "graph", component: "graph", params: { path } },
           },
         },
-        path,
-      ),
+      }),
     ).toBeNull()
   })
 
-  test("rejects layouts from another version or worktree", () => {
+  test("rejects layouts from another version", () => {
+    expect(usableRepositoryLayout({ ...storedLayout(), version: 2 })).toBeNull()
+  })
+
+  test("accepts a graph tab on a linked worktree", () => {
     expect(
-      usableRepositoryLayout({ ...storedLayout(), version: 2 }, path),
-    ).toBeNull()
-    expect(
-      usableRepositoryLayout(storedLayout({ path: "/moved/git-nav" }), path),
-    ).toBeNull()
+      usableRepositoryLayout(
+        storedLayout({
+          name: "git-nav-feature",
+          path: "/projects/git-nav-feature",
+        }),
+      ),
+    ).not.toBeNull()
   })
 
   test("rejects a grid root that Dockview cannot restore", () => {
     const value = storedLayout()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: { ...value.layout, grid: { ...value.layout.grid, root: {} } },
-        },
-        path,
-      ),
+      usableRepositoryLayout({
+        ...value,
+        layout: { ...value.layout, grid: { ...value.layout.grid, root: {} } },
+      }),
     ).toBeNull()
   })
 
   test("accepts a diff scoped to a sibling worktree", () => {
     const value = storedLayout()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: {
-            ...value.layout,
-            panels: {
-              ...value.layout.panels,
-              diff: serializedPanel("diff", "diff", {
-                baseRef: "HEAD",
-                headRef: ":worktree",
-                name: "git-nav",
-                path: "/projects/git-nav-feature",
-              }),
-            },
-          },
-        },
-        path,
-      ),
-    ).not.toBeNull()
-  })
-
-  test("keeps a diff against the empty tree", async () => {
-    const value = storedLayout()
-    const layout = usableRepositoryLayout(
-      {
+      usableRepositoryLayout({
         ...value,
         layout: {
           ...value.layout,
           panels: {
             ...value.layout.panels,
             diff: serializedPanel("diff", "diff", {
-              baseRef: EMPTY_TREE_REF,
-              headRef: "HEAD",
+              baseRef: "HEAD",
+              headRef: ":worktree",
               name: "git-nav",
-              path,
+              path: "/projects/git-nav-feature",
             }),
           },
         },
+      }),
+    ).not.toBeNull()
+  })
+
+  test("keeps a diff against the empty tree", async () => {
+    const value = storedLayout()
+    const layout = usableRepositoryLayout({
+      ...value,
+      layout: {
+        ...value.layout,
+        panels: {
+          ...value.layout.panels,
+          diff: serializedPanel("diff", "diff", {
+            baseRef: EMPTY_TREE_REF,
+            headRef: "HEAD",
+            name: "git-nav",
+            path,
+          }),
+        },
       },
-      path,
-    )
+    })
     const revisions: string[] = []
 
     expect(
@@ -141,7 +135,7 @@ describe("usableRepositoryLayout", () => {
         revisions.push(revision)
       }),
     ).toEqual([])
-    expect(revisions).toEqual(["HEAD"])
+    expect(revisions).toEqual([":worktree", "HEAD"])
   })
 
   test("accepts a working tree tab and rejects preferences it cannot read back", () => {
@@ -166,13 +160,11 @@ describe("usableRepositoryLayout", () => {
           selectedFilePath: "src/main.rs",
           userPreferences: { fileTreeOpen: false, mode: "unified", wrap: true },
         }),
-        path,
       ),
     ).not.toBeNull()
     expect(
       usableRepositoryLayout(
         withWorkingTree({ userPreferences: { hideViewed: true } }),
-        path,
       ),
     ).toBeNull()
     for (const draft of [
@@ -196,7 +188,7 @@ describe("usableRepositoryLayout", () => {
       },
       { amendHeadSha: null },
     ]) {
-      const restored = usableRepositoryLayout(withWorkingTree(draft), path)
+      const restored = usableRepositoryLayout(withWorkingTree(draft))
       expect(restored).not.toBeNull()
       expect(restored?.panels.tree.params).toMatchObject(draft)
     }
@@ -209,59 +201,58 @@ describe("usableRepositoryLayout", () => {
       { amendBranch: true },
       { amendHeadMessage: [] },
     ]) {
-      expect(usableRepositoryLayout(withWorkingTree(draft), path)).toBeNull()
+      expect(usableRepositoryLayout(withWorkingTree(draft))).toBeNull()
     }
   })
 
   test("drops a working tree tab whose worktree is gone", async () => {
     const value = storedLayout()
-    const layout = usableRepositoryLayout(
-      {
-        ...value,
-        layout: {
-          ...value.layout,
-          panels: {
-            ...value.layout.panels,
-            tree: serializedPanel("tree", "working-tree", {
-              name: "git-nav",
-              path: "/projects/removed",
-            }),
-          },
+    const layout = usableRepositoryLayout({
+      ...value,
+      layout: {
+        ...value.layout,
+        panels: {
+          ...value.layout.panels,
+          tree: serializedPanel("tree", "working-tree", {
+            name: "git-nav",
+            path: "/projects/removed",
+          }),
         },
       },
-      path,
-    )
+    })
     const revisions: [string, string][] = []
     expect(
       await unresolvablePanelIds(layout!, async (panelPath, revision) => {
         revisions.push([panelPath, revision])
-        throw new Error("no such worktree")
+        if (panelPath === "/projects/removed") {
+          throw new Error("no such worktree")
+        }
       }),
     ).toEqual(["tree"])
-    expect(revisions).toEqual([["/projects/removed", ":worktree"]])
+    expect(revisions).toEqual([
+      [path, ":worktree"],
+      ["/projects/removed", ":worktree"],
+    ])
   })
 
   test("identifies only panels with unresolvable persisted revisions", async () => {
     const value = storedLayout({ selectedCommitHashes: ["abc"] })
-    const layout = usableRepositoryLayout(
-      {
-        ...value,
-        layout: {
-          ...value.layout,
-          panels: {
-            ...value.layout.panels,
-            diff: serializedPanel("diff", "diff", {
-              baseRef: "main",
-              headRef: "feature",
-              mergeBase: true,
-              name: "git-nav",
-              path: "/projects/git-nav-feature",
-            }),
-          },
+    const layout = usableRepositoryLayout({
+      ...value,
+      layout: {
+        ...value.layout,
+        panels: {
+          ...value.layout.panels,
+          diff: serializedPanel("diff", "diff", {
+            baseRef: "main",
+            headRef: "feature",
+            mergeBase: true,
+            name: "git-nav",
+            path: "/projects/git-nav-feature",
+          }),
         },
       },
-      path,
-    )
+    })
     const revisions: [string, string][] = []
     expect(
       await unresolvablePanelIds(layout!, async (panelPath, revision) => {
@@ -272,6 +263,7 @@ describe("usableRepositoryLayout", () => {
       }),
     ).toEqual(["diff"])
     expect(revisions).toEqual([
+      [path, ":worktree"],
       ["/projects/git-nav-feature", "main"],
       ["/projects/git-nav-feature", "feature"],
     ])
@@ -280,40 +272,53 @@ describe("usableRepositoryLayout", () => {
   test("keeps a graph panel when its persisted selection no longer resolves", async () => {
     const layout = usableRepositoryLayout(
       storedLayout({ selectedCommitHashes: ["deleted-a", "deleted-b"] }),
-      path,
     )
-    let resolutions = 0
+    const revisions: [string, string][] = []
 
     expect(
-      await unresolvablePanelIds(layout!, async () => {
-        resolutions++
-        throw new Error("deleted")
+      await unresolvablePanelIds(layout!, async (panelPath, revision) => {
+        revisions.push([panelPath, revision])
+        if (revision !== ":worktree") {
+          throw new Error("deleted")
+        }
       }),
     ).toEqual([])
-    expect(resolutions).toBe(0)
+    expect(revisions).toEqual([[path, ":worktree"]])
+  })
+
+  test("drops a graph tab whose worktree is gone", async () => {
+    const layout = usableRepositoryLayout(
+      storedLayout({ name: "removed", path: "/projects/removed" }),
+    )
+    const revisions: [string, string][] = []
+
+    expect(
+      await unresolvablePanelIds(layout!, async (panelPath, revision) => {
+        revisions.push([panelPath, revision])
+        throw new Error("no such worktree")
+      }),
+    ).toEqual(["graph"])
+    expect(revisions).toEqual([["/projects/removed", ":worktree"]])
   })
 
   test("rejects an invalid persisted merge-base mode", () => {
     const value = storedLayout()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: {
-            ...value.layout,
-            panels: {
-              graph: serializedPanel("graph", "diff", {
-                baseRef: "main",
-                headRef: "feature",
-                mergeBase: "yes",
-                name: "git-nav",
-                path,
-              }),
-            },
+      usableRepositoryLayout({
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            graph: serializedPanel("graph", "diff", {
+              baseRef: "main",
+              headRef: "feature",
+              mergeBase: "yes",
+              name: "git-nav",
+              path,
+            }),
           },
         },
-        path,
-      ),
+      }),
     ).toBeNull()
   })
 
@@ -321,133 +326,112 @@ describe("usableRepositoryLayout", () => {
     expect(
       usableRepositoryLayout(
         storedLayout({ userPreferences: { columnWidths: { subject: 300 } } }),
-        path,
       ),
     ).not.toBeNull()
     expect(
       usableRepositoryLayout(
         storedLayout({ userPreferences: { columnWidths: { subject: -1 } } }),
-        path,
       ),
     ).toBeNull()
     expect(
-      usableRepositoryLayout(
-        storedLayout({ columnWidths: { subject: 300 } }),
-        path,
-      ),
+      usableRepositoryLayout(storedLayout({ columnWidths: { subject: 300 } })),
     ).toBeNull()
     expect(
       usableRepositoryLayout(
         storedLayout({ userPreferences: { collapseUnmarked: false } }),
-        path,
       ),
     ).not.toBeNull()
     expect(
       usableRepositoryLayout(
         storedLayout({ userPreferences: { collapseUnmarked: "no" } }),
-        path,
       ),
     ).toBeNull()
     expect(
       usableRepositoryLayout(
         storedLayout({ userPreferences: { detailsExpanded: true } }),
-        path,
       ),
     ).not.toBeNull()
     expect(
       usableRepositoryLayout(
         storedLayout({ userPreferences: { detailsExpanded: "yes" } }),
-        path,
       ),
     ).toBeNull()
 
     const value = storedLayout()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: {
-            ...value.layout,
-            panels: {
-              diff: serializedPanel("diff", "diff", {
-                baseLabel: "Base subject",
-                baseRef: "a".repeat(40),
-                headLabel: "Stash changes",
-                headRef: "b".repeat(40),
-                name: "git-nav",
-                path,
-                selectedFilePath: "src/index.ts",
-                userPreferences: {
-                  fileTreeOpen: true,
-                  hideViewed: true,
-                  ignoreWhitespace: true,
-                  mode: "unified",
-                  wrap: true,
-                },
-              }),
-            },
+      usableRepositoryLayout({
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            diff: serializedPanel("diff", "diff", {
+              baseLabel: "Base subject",
+              baseRef: "a".repeat(40),
+              headLabel: "Stash changes",
+              headRef: "b".repeat(40),
+              name: "git-nav",
+              path,
+              selectedFilePath: "src/index.ts",
+              userPreferences: {
+                fileTreeOpen: true,
+                hideViewed: true,
+                ignoreWhitespace: true,
+                mode: "unified",
+                wrap: true,
+              },
+            }),
           },
         },
-        path,
-      ),
+      }),
     ).not.toBeNull()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: {
-            ...value.layout,
-            panels: {
-              diff: serializedPanel("diff", "diff", {
-                baseRef: "main",
-                headRef: "feature",
-                name: "git-nav",
-                path,
-                userPreferences: { wrap: "yes" },
-              }),
-            },
+      usableRepositoryLayout({
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            diff: serializedPanel("diff", "diff", {
+              baseRef: "main",
+              headRef: "feature",
+              name: "git-nav",
+              path,
+              userPreferences: { wrap: "yes" },
+            }),
           },
         },
-        path,
-      ),
+      }),
     ).toBeNull()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: {
-            ...value.layout,
-            panels: {
-              diff: serializedPanel("diff", "diff", {
-                headRef: "feature",
-                name: "git-nav",
-                path,
-              }),
-            },
+      usableRepositoryLayout({
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            diff: serializedPanel("diff", "diff", {
+              headRef: "feature",
+              name: "git-nav",
+              path,
+            }),
           },
         },
-        path,
-      ),
+      }),
     ).toBeNull()
     expect(
-      usableRepositoryLayout(
-        {
-          ...value,
-          layout: {
-            ...value.layout,
-            panels: {
-              diff: serializedPanel("diff", "diff", {
-                baseRef: "main",
-                headRef: "feature",
-                mode: "split",
-                name: "git-nav",
-                path,
-              }),
-            },
+      usableRepositoryLayout({
+        ...value,
+        layout: {
+          ...value.layout,
+          panels: {
+            diff: serializedPanel("diff", "diff", {
+              baseRef: "main",
+              headRef: "feature",
+              mode: "split",
+              name: "git-nav",
+              path,
+            }),
           },
         },
-        path,
-      ),
+      }),
     ).toBeNull()
   })
 })
@@ -953,7 +937,7 @@ describe("restoreRepositoryLayout", () => {
     const container = restorableContainer(["graph", "diff", "other"], "diff")
 
     expect(
-      restoreRepositoryLayout(container, usableRepositoryLayout(value, path)!, [
+      restoreRepositoryLayout(container, usableRepositoryLayout(value)!, [
         "diff",
       ]),
     ).toBe(true)
@@ -969,7 +953,7 @@ describe("restoreRepositoryLayout", () => {
     const container = restorableContainer(["graph", "diff"], "graph")
 
     expect(
-      restoreRepositoryLayout(container, usableRepositoryLayout(value, path)!, [
+      restoreRepositoryLayout(container, usableRepositoryLayout(value)!, [
         "graph",
         "diff",
       ]),

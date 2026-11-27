@@ -2,10 +2,8 @@ use serde::Serialize;
 use std::env;
 #[cfg(any(target_os = "macos", all(unix, test)))]
 use std::{fs, path::Path};
-use tauri::AppHandle;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use crate::window::open_repository_window;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::desktop_process;
 #[cfg(target_os = "windows")]
@@ -298,15 +296,7 @@ fn is_https_url(url: &str) -> bool {
 }
 
 #[tauri::command(async)]
-pub(crate) fn open_worktree(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-    path: String,
-    target: String,
-) -> Result<(), String> {
-    if target == "git-nav" {
-        return open_repository_window(&app, &path, Some(window.label()));
-    }
+pub(crate) fn open_worktree(path: String, target: String) -> Result<(), String> {
     launch_worktree(&path, &target)
 }
 

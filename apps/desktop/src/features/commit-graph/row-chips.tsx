@@ -37,6 +37,7 @@ import {
   FilePen,
   FolderOpen,
   GitBranch,
+  GitGraph,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -85,6 +86,7 @@ export type ChipMenuContext = {
   openStashDiff: (entry: StashEntry) => void
   openWorkingTree: (worktree: RowWorktree) => void
   openWorktree: (path: string, target: WorktreeTarget) => void
+  openWorktreeGraph: (worktree: RowWorktree) => void
   openWorktreeDiff: (worktree: RowWorktree) => void
   repository: RepositoryState | null
   selectRef: (ref: DisplayRef, sha: string) => void
@@ -228,13 +230,15 @@ export function refMenuActions(
               const suffix =
                 ref.worktrees.length > 1 ? ` (${worktree.name})` : ""
               return [
-                <Item
-                  key={`${worktree.path}-git-nav`}
-                  onSelect={() => menus.openWorktree(worktree.path, "git-nav")}
-                >
-                  <AppWindow />
-                  {`Git Nav${suffix}`}
-                </Item>,
+                worktree.isCurrent ? null : (
+                  <Item
+                    key={`${worktree.path}-graph`}
+                    onSelect={() => menus.openWorktreeGraph(worktree)}
+                  >
+                    <GitGraph />
+                    {`Graph tab${suffix}`}
+                  </Item>
+                ),
                 <Item
                   key={`${worktree.path}-vscode`}
                   onSelect={() => menus.openWorktree(worktree.path, "vscode")}
@@ -270,6 +274,17 @@ export function refMenuActions(
           {ref.worktrees.length > 1 ?
             `Stage and commit (${worktree.name})`
           : "Stage and commit"}
+        </Item>
+      ))}
+      {ref.worktrees.map((worktree) => (
+        <Item
+          key={`${worktree.path}-copy-path`}
+          onSelect={() => menus.copyText(worktree.path)}
+        >
+          <Copy />
+          {ref.worktrees.length > 1 ?
+            `Copy path (${worktree.name})`
+          : "Copy path"}
         </Item>
       ))}
       <OperationMenuItems
@@ -433,10 +448,12 @@ function worktreeOpenItems(
         Open in
       </SubTrigger>
       <SubContent>
-        <Item onSelect={() => menus.openWorktree(worktree.path, "git-nav")}>
-          <AppWindow />
-          Git Nav
-        </Item>
+        {!worktree.isCurrent && (
+          <Item onSelect={() => menus.openWorktreeGraph(worktree)}>
+            <GitGraph />
+            Graph tab
+          </Item>
+        )}
         <Item onSelect={() => menus.openWorktree(worktree.path, "vscode")}>
           <CodeXml />
           VS Code
@@ -477,6 +494,10 @@ function worktreeMenuItems(
       <Item onSelect={() => menus.openWorkingTree(worktree)}>
         <FilePen />
         Stage and commit
+      </Item>
+      <Item onSelect={() => menus.copyText(worktree.path)}>
+        <Copy />
+        Copy path
       </Item>
       {worktreeOpenItems(menus, worktree, components)}
     </>

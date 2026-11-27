@@ -1,5 +1,4 @@
 import {
-  DockviewDefaultTab,
   DockviewReact,
   type DockviewApi,
   type IDockviewHeaderActionsProps,
@@ -16,7 +15,9 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentType,
+  type ReactNode,
 } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
@@ -41,6 +42,7 @@ import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
 import { DiffPanel } from "../diff/diff-panel"
 import { WorkingTreePanel } from "../working-tree/working-tree-panel"
 import { closedTabHistory, reopenedPanel } from "../../lib/closed-tabs"
+import { dependsOnWorktree } from "../diff/diff-title"
 import { panelId } from "../../lib/panel-id"
 import { tabsToClose, type TabCloseScope } from "../../lib/tab-closing"
 import { useTabShortcuts } from "../../lib/tab-shortcuts"
@@ -59,18 +61,26 @@ import {
   RepositoryLayoutDraftsContext,
 } from "../../lib/repository-layout-drafts"
 import { settingsClientId } from "../../lib/settings"
-import type { RepositoryPanelParams } from "../../lib/panel-params"
+import type {
+  DiffPanelParams,
+  RepositoryPanelParams,
+} from "../../lib/panel-params"
+import { worktreeName } from "../working-tree/working-tree-state"
+import type { Project } from "./project"
 
 // The icon names the panel, not what it is pointed at, which the selectors and the title already say.
 // It leaves the title free to be only the thing itself: a comparison, a worktree or a stash.
-function panelTab(Icon: ComponentType<{ className?: string }>) {
+function panelTab(
+  Icon: ComponentType<{ className?: string }>,
+  Hint?: ComponentType<IDockviewPanelHeaderProps>,
+) {
   return function PanelTab(props: IDockviewPanelHeaderProps) {
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div className="flex h-full w-full min-w-0 items-center gap-1.5">
             <Icon className="pointer-events-none size-3.5 shrink-0" />
-            <DockviewDefaultTab {...props} />
+            <PanelTabLabel api={props.api} hint={Hint && <Hint {...props} />} />
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
@@ -79,6 +89,70 @@ function panelTab(Icon: ComponentType<{ className?: string }>) {
       </ContextMenu>
     )
   }
+}
+
+function usePanelTitle(api: IDockviewPanelHeaderProps["api"]) {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const disposable = api.onDidTitleChange(onChange)
+      return () => disposable.dispose()
+    },
+    [api],
+  )
+  return useSyncExternalStore(subscribe, () => api.title)
+}
+
+// Dockview's default tab, with room between the title and the close action that it does not leave.
+function PanelTabLabel({
+  api,
+  hint,
+}: {
+  api: IDockviewPanelHeaderProps["api"]
+  hint: ReactNode
+}) {
+  const title = usePanelTitle(api)
+  const middlePressed = useRef(false)
+  return (
+    <div
+      className="dv-default-tab"
+      onPointerDown={(event) => {
+        middlePressed.current = event.button === 1
+      }}
+      onPointerLeave={() => {
+        middlePressed.current = false
+      }}
+      onPointerUp={(event) => {
+        if (middlePressed.current && event.button === 1) {
+          event.preventDefault()
+          api.close()
+        }
+        middlePressed.current = false
+      }}
+    >
+      <span className="dv-default-tab-content">{title}</span>
+      {hint}
+      <button
+        aria-label="Close tab"
+        className="dv-default-tab-action"
+        onClick={(event) => {
+          event.preventDefault()
+          api.close()
+        }}
+        onPointerDown={(event) => event.preventDefault()}
+        type="button"
+      >
+        <svg
+          aria-hidden
+          className="dv-svg"
+          height="11"
+          viewBox="0 0 28 28"
+          width="11"
+        >
+          <path d="M2.1 27.3L0 25.2L11.55 13.65L0 2.1L2.1 0L13.65 11.55L25.2 0L27.3 2.1L15.75 13.65L27.3 25.2L25.2 27.3L13.65 15.75L2.1 27.3Z" />
+        </svg>
+      </button>
+    </div>
+  )
 }
 
 // The menu reads the group when it opens: siblings come and go without this tab rendering again.
@@ -123,9 +197,48 @@ function TabMenuItems({ api }: { api: IDockviewPanelHeaderProps["api"] }) {
   )
 }
 
+function useProjectHomePath(path: string) {
+  const [homePath, setHomePath] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    invoke<Project>("project_snapshot", { path })
+      .then((project) => {
+        if (!cancelled) {
+          setHomePath(project.path)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [path])
+  return homePath
+}
+
+function WorktreeHint({ path }: { path: string }) {
+  return (
+    <span className="shrink-0 text-muted-foreground">{worktreeName(path)}</span>
+  )
+}
+
+function DiffTabHint({ params }: IDockviewPanelHeaderProps) {
+  const { baseRef, headRef, path } = params as DiffPanelParams
+  return dependsOnWorktree({ base: baseRef, head: headRef }) ?
+      <WorktreeHint path={path} />
+    : null
+}
+
+function GraphTabHint({ params }: IDockviewPanelHeaderProps) {
+  const { path } = params as RepositoryPanelParams
+  const homePath = useProjectHomePath(path)
+  return homePath !== null && homePath !== path ?
+      <WorktreeHint path={path} />
+    : null
+}
+
 const repositoryTabs = {
-  diff: panelTab(FileDiff),
-  graph: panelTab(GitGraph),
+  diff: panelTab(FileDiff, DiffTabHint),
+  graph: panelTab(GitGraph, GraphTabHint),
   "working-tree": panelTab(FilePen),
 }
 
@@ -524,10 +637,7 @@ export const RepositoryView = memo(function RepositoryView({
                         path: stored.path,
                       }
                       setRepositoryPath(stored.path)
-                      const layout = usableRepositoryLayout(
-                        stored.layout,
-                        stored.path,
-                      )
+                      const layout = usableRepositoryLayout(stored.layout)
                       if (layout) {
                         const invalidPanelIds = await unresolvablePanelIds(
                           layout,
