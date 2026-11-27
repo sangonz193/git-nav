@@ -64,14 +64,47 @@ fn finish_patch_block(files: &mut [FileStat], deletions: &mut u32, additions: &m
     }
 }
 
+// Unchanged lines above a hunk, which the view folds behind a hunk row. A side with no lines in the hunk
+// names the line before it rather than its first.
+fn lines_before_hunk(header: &str) -> Option<u32> {
+    let old = header.strip_prefix("@@ -")?.split(' ').next()?;
+    let (start, length) = old.split_once(',').unwrap_or((old, "1"));
+    let (start, length) = (start.parse::<u32>().ok()?, length.parse::<u32>().ok()?);
+    Some(if length == 0 { start } else { start.saturating_sub(1) })
+}
+
+// Matches `--unified=3` in PATCH_ARGUMENTS: a last hunk that ends on fewer unchanged lines ran into the
+// end of the file.
+const PATCH_CONTEXT_LINES: u32 = 3;
+
+#[derive(Default)]
+struct HunkTail {
+    seen: bool,
+    trailing_context: u32,
+    reaches_end: bool,
+}
+
+fn finish_hunk_rows(files: &mut [FileStat], tail: &HunkTail) {
+    if let Some(file) = files.last_mut() {
+        if tail.seen && !tail.reaches_end && tail.trailing_context >= PATCH_CONTEXT_LINES {
+            file.hunk_rows += 1;
+        }
+    }
+}
+
 /// Counts the rows `@git-diff-view` renders for one file: every patch body line becomes a unified
-/// row, while split mode pairs a run of deletions with the additions that follow it.
+/// row, while split mode pairs a run of deletions with the additions that follow it. A hunk row is only
+/// rendered where unchanged lines are folded away, so a file whose changes reach its first or last line
+/// has none there.
 fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
     let mut files: Vec<FileStat> = Vec::new();
     let (mut deletions, mut additions) = (0u32, 0u32);
+    let mut tail = HunkTail::default();
     for line in patch.lines() {
         if line.starts_with("diff --git ") {
             finish_patch_block(&mut files, &mut deletions, &mut additions);
+            finish_hunk_rows(&mut files, &tail);
+            tail = HunkTail::default();
             files.push(FileStat::default());
             continue;
         }
@@ -88,35 +121,36 @@ fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
             continue;
         }
         if line.starts_with("@@ ") {
-            file.hunk_rows += 1;
+            if tail.seen || lines_before_hunk(line).map_or(true, |lines| lines > 0) {
+                file.hunk_rows += 1;
+            }
+            tail = HunkTail { seen: true, ..HunkTail::default() };
             continue;
         }
-        if file.hunk_rows == 0 {
+        if !tail.seen {
             continue;
         }
         match line.as_bytes().first() {
             Some(b'+') => {
                 additions += 1;
                 file.unified_rows += 1;
+                tail.trailing_context = 0;
             }
             Some(b'-') => {
                 deletions += 1;
                 file.unified_rows += 1;
+                tail.trailing_context = 0;
             }
-            Some(b'\\') => {}
+            Some(b'\\') => tail.reaches_end = true,
             _ => {
                 file.split_rows += 1;
                 file.unified_rows += 1;
+                tail.trailing_context += 1;
             }
         }
     }
     finish_patch_block(&mut files, &mut deletions, &mut additions);
-    for file in &mut files {
-        // The view closes every file that still hides lines with one more expandable row.
-        if file.hunk_rows > 0 {
-            file.hunk_rows += 1;
-        }
-    }
+    finish_hunk_rows(&mut files, &tail);
     files
 }
 
@@ -343,7 +377,7 @@ pub(crate) fn untracked_files(path: &str) -> Result<Vec<ChangedFile>, String> {
             is_binary,
             split_rows: lines,
             unified_rows: lines,
-            hunk_rows: u32::from(lines > 0),
+            hunk_rows: 0,
         });
     }
     Ok(files)
@@ -857,9 +891,30 @@ mod tests {
         // Three context rows, a paired two-for-one replacement, and a lone addition.
         assert_eq!(stats[0].split_rows, 6);
         assert_eq!(stats[0].unified_rows, 7);
-        assert_eq!(stats[0].hunk_rows, 3);
+        // The first hunk starts at line 1 and the last one ends the file, so only the gap between them folds.
+        assert_eq!(stats[0].hunk_rows, 1);
         assert!(stats[1].is_binary);
         assert_eq!(stats[1].hunk_rows, 0);
+    }
+
+    #[test]
+    fn counts_a_hunk_row_only_where_unchanged_lines_are_folded() {
+        let stats = parse_patch_stats(concat!(
+            "diff --git a/middle.rs b/middle.rs\n",
+            "@@ -10,7 +10,7 @@\n",
+            " a\n b\n c\n-old\n+new\n d\n e\n f\n",
+            "diff --git a/last.rs b/last.rs\n",
+            "@@ -10,4 +10,4 @@\n",
+            " a\n b\n c\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n",
+            "diff --git a/added.rs b/added.rs\n",
+            "@@ -0,0 +1,2 @@\n",
+            "+one\n+two\n",
+            "diff --git a/short.rs b/short.rs\n",
+            "@@ -3 +3 @@\n",
+            "-old\n+new\n",
+        ));
+
+        assert_eq!(stats.iter().map(|stat| stat.hunk_rows).collect::<Vec<_>>(), [2, 1, 0, 1]);
     }
 
     #[test]
