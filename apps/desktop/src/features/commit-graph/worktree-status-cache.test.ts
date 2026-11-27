@@ -30,7 +30,6 @@ function fixture(path: string) {
     isDetached: false,
     isLocked: false,
     isPrunable: false,
-    isOpen: true,
   }
   return {
     project_snapshot: {

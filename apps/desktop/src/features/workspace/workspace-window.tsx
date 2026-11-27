@@ -9,13 +9,11 @@ import {
 } from "../app-menu/app-menu-shortcuts"
 import { Launcher } from "../launcher/launcher-window"
 import { RepositoryView } from "../repository/repository-view"
-import { worktreeName } from "../working-tree/working-tree-state"
 import { RepositorySidebar } from "./repository-sidebar"
 import { SidebarHandle } from "./sidebar-handle"
 import { SidebarToggleContext } from "./sidebar-toggle-context"
 import { useSidebar } from "./use-sidebar"
 import { useWorkspace } from "./use-workspace"
-import { projectHome, sidebarProjects } from "./workspace"
 
 export function WorkspaceWindow() {
   const layoutFlush = useRef<(() => Promise<void>) | null>(null)
@@ -30,7 +28,6 @@ export function WorkspaceWindow() {
   } = useWorkspace(layoutFlush)
   const active = state?.active ?? null
   const sidebar = useSidebar()
-  const listedProjects = useMemo(() => sidebarProjects(projects), [projects])
   const repositorySidebar = useMemo(
     () => (
       <RepositorySidebar
@@ -39,13 +36,13 @@ export function WorkspaceWindow() {
         onOpenInNewWindow={(target) => void openInNewWindow(target)}
         onRemove={(project) => void remove(project)}
         onSelect={(target) => void show(target)}
-        projects={listedProjects}
+        projects={projects}
         projectsError={projectsError}
       />
     ),
     [
       active,
-      listedProjects,
+      projects,
       projectsError,
       openInNewWindow,
       remove,
@@ -73,13 +70,14 @@ export function WorkspaceWindow() {
     if (state) document.getElementById("splash")?.remove()
   }, [state])
 
-  const activeWorktree = active?.worktree
+  const activeName = projects.find(
+    (project) => project.id === active?.project,
+  )?.name
   useEffect(() => {
-    const title =
-      activeWorktree ? `${worktreeName(activeWorktree)} · Git Nav` : "Git Nav"
+    const title = activeName ? `${activeName} · Git Nav` : "Git Nav"
     if (isDesktop) void getCurrentWindow().setTitle(title)
     else document.title = title
-  }, [activeWorktree])
+  }, [activeName])
 
   useEffect(() => {
     if (!isDesktop) return
@@ -116,7 +114,7 @@ export function WorkspaceWindow() {
       )
       if (index === null) return
       event.preventDefault()
-      void show(projectHome(projectsRef.current[index]))
+      void show(projectsRef.current[index])
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
@@ -146,9 +144,9 @@ export function WorkspaceWindow() {
         <div className="h-full min-w-0 flex-1">
           {active ?
             <RepositoryView
-              key={active.worktree}
+              key={active.project}
               onCloseRepository={closeActive}
-              path={active.worktree}
+              project={active.project}
               registerLayoutFlush={registerLayoutFlush}
             />
           : <Launcher

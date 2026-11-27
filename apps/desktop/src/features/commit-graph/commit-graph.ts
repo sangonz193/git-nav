@@ -42,7 +42,6 @@ export type RowWorktree = {
   changedFiles: number
   head: string
   isCurrent: boolean
-  isOpen: boolean
   name: string
   path: string
   pendingOperation: PendingOperation | null
@@ -777,8 +776,8 @@ export function worktreeDescription(worktree: RowWorktree) {
     .filter(Boolean)
     .join(", ")
   return [
-    worktree.isCurrent ? `${worktree.name} is the worktree shown here`
-    : worktree.isOpen ? `${worktree.name} is open in Git Nav`
+    worktree.isCurrent ?
+      `${worktree.name} is the worktree shown here`
     : `Checked out at ${worktree.name}`,
     worktree.branch ? null : "Not on a branch",
     worktree.pendingOperation &&
@@ -791,12 +790,7 @@ export function worktreeDescription(worktree: RowWorktree) {
 
 export function worktreeTooltipFacts(worktree: RowWorktree) {
   const [, ...details] = worktreeDescription(worktree).split("\n")
-  return [
-    worktree.isCurrent ? "Shown here"
-    : worktree.isOpen ? "Open in Git Nav"
-    : null,
-    ...details,
-  ].filter(Boolean)
+  return [worktree.isCurrent ? "Shown here" : null, ...details].filter(Boolean)
 }
 
 export function splitRefLabel(label: string) {

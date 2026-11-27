@@ -150,7 +150,16 @@ pub(crate) fn worktree_path(path: &str) -> Result<String, String> {
 }
 
 pub(crate) fn project_id(path: &str) -> Result<String, String> {
-    let common_dir = git_output(path, &["rev-parse", "--git-common-dir"])
+    common_dir(path, &["rev-parse", "--git-common-dir"])
+}
+
+// An id is a git directory, and `safe.bareRepository=explicit` refuses a bare one unless it is named with `--git-dir`.
+pub(crate) fn resolve_project_id(id: &str) -> Result<String, String> {
+    common_dir(id, &["--git-dir", ".", "rev-parse", "--git-common-dir"])
+}
+
+fn common_dir(path: &str, arguments: &[&str]) -> Result<String, String> {
+    let common_dir = git_output(path, arguments)
         .ok_or_else(|| "Choose a Git repository.".to_string())?;
     let common_dir = PathBuf::from(common_dir);
     let common_dir = if common_dir.is_absolute() {

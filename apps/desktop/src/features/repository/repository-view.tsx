@@ -445,16 +445,23 @@ const repositoryDockviewTheme = {
   tabGroupIndicator: "none" as const,
 }
 
+function repositoryParamsAt(path: string) {
+  return {
+    name: path.split("/").filter(Boolean).at(-1) ?? path,
+    path,
+  }
+}
+
 export const RepositoryView = memo(function RepositoryView({
-  path,
+  project,
   onCloseRepository,
   registerLayoutFlush,
 }: {
-  path: string
+  project: string
   onCloseRepository: () => void
   registerLayoutFlush: (flush: () => Promise<void>) => () => void
 }) {
-  const [repositoryPath, setRepositoryPath] = useState(path)
+  const [repositoryPath, setRepositoryPath] = useState<string | null>(null)
   const [layoutDrafts] = useState(repositoryLayoutDrafts)
   const activeDockview = useRef<DockviewApi | null>(null)
   const container = useRef<HTMLElement | null>(null)
@@ -462,9 +469,8 @@ export const RepositoryView = memo(function RepositoryView({
   const closedTabs = useRef<ReturnType<typeof closedTabHistory> | null>(null)
   const [canReopenTab, setCanReopenTab] = useState(false)
   const [restorePending, setRestorePending] = useState(true)
-  const name =
-    repositoryPath.split("/").filter(Boolean).at(-1) ?? repositoryPath
-  const params = { name, path: repositoryPath }
+  const params =
+    repositoryPath === null ? null : repositoryParamsAt(repositoryPath)
 
   useLayoutEffect(
     () => () => {
@@ -538,7 +544,7 @@ export const RepositoryView = memo(function RepositoryView({
                     () =>
                       isCurrent() && layoutRestore.canSave ?
                         {
-                          path: repositoryParams.path,
+                          project,
                           layout: {
                             version: REPOSITORY_LAYOUT_VERSION,
                             layout: event.api.toJSON(),
@@ -547,7 +553,7 @@ export const RepositoryView = memo(function RepositoryView({
                       : null,
                     (snapshot, keepalive) =>
                       invoke<void>(
-                        "save_repository_layout",
+                        "save_project_layout",
                         {
                           clientId,
                           ...snapshot,
@@ -618,6 +624,7 @@ export const RepositoryView = memo(function RepositoryView({
                     layoutSave.dispose()
                   }
                   const addFallbackPanel = () => {
+                    if (!repositoryParams) return
                     event.api.addPanel({
                       component: "graph",
                       id: "repository-graph",
@@ -631,19 +638,14 @@ export const RepositoryView = memo(function RepositoryView({
                       const stored = await invoke<{
                         path: string
                         layout: unknown
-                      }>("repository_layout", {
+                      }>("project_layout", {
                         clientId,
-                        path: repositoryParams.path,
+                        project,
                       })
                       if (!isCurrent() || !layoutRestore.pending) {
                         return
                       }
-                      repositoryParams = {
-                        name:
-                          stored.path.split("/").filter(Boolean).at(-1) ??
-                          stored.path,
-                        path: stored.path,
-                      }
+                      repositoryParams = repositoryParamsAt(stored.path)
                       setRepositoryPath(stored.path)
                       const layout = usableRepositoryLayout(stored.layout)
                       if (layout) {
@@ -676,10 +678,18 @@ export const RepositoryView = memo(function RepositoryView({
                       }
                       layoutRestore.restored(addFallbackPanel)
                     } catch (error) {
-                      if (
-                        !isCurrent() ||
-                        !layoutRestore.failed(addFallbackPanel)
-                      ) {
+                      if (!isCurrent()) return
+                      if (!repositoryParams) {
+                        const home = await invoke<Project>("project_by_id", {
+                          project,
+                        }).catch(() => null)
+                        if (!isCurrent()) return
+                        if (home) {
+                          repositoryParams = repositoryParamsAt(home.path)
+                          setRepositoryPath(home.path)
+                        }
+                      }
+                      if (!layoutRestore.failed(addFallbackPanel)) {
                         return
                       }
                       toast.error("Could not load repository layout", {

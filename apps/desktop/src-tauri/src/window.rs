@@ -15,11 +15,11 @@ use tauri::{
 use crate::storage::{
     SETTING_CHANGED_EVENT, SettingChanged, load_settings, save_setting_at_then, settings_path,
 };
-use crate::projects::{OpenWorktrees, remember_repository};
-use crate::git::{project_id, worktree_path};
+use crate::projects::remember_repository;
+use crate::git::resolve_project_id;
 use crate::sharing::TrayExit;
 use crate::window_sessions::{
-    MAIN_WINDOW, ProjectWorktree, WindowSession, forget_window_session, load_window_sessions,
+    ActiveProject, MAIN_WINDOW, WindowSession, forget_window_session, load_window_sessions,
     save_window_session,
     take_restorable_window_sessions,
 };
@@ -211,11 +211,7 @@ pub(crate) fn update_recent_menu(app: Option<&AppHandle>) {
     let generation = state.rebuild_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let list_app = app.clone();
-        let projects = tauri::async_runtime::spawn_blocking(move || {
-            recent_project_list(&list_app.state::<OpenWorktrees>())
-        })
-        .await;
+        let projects = tauri::async_runtime::spawn_blocking(recent_project_list).await;
         let projects = match projects {
             Ok(Ok(projects)) => projects,
             Ok(Err(error)) => {
@@ -391,13 +387,16 @@ fn disable_browser_accelerator_keys(window: &WebviewWindow) -> Result<(), String
 }
 
 #[derive(Default)]
-pub(crate) struct PendingRepositories(Mutex<HashMap<String, Vec<ProjectWorktree>>>);
+pub(crate) struct WindowProjects(Mutex<HashMap<String, WindowSession>>);
+
+#[derive(Default)]
+pub(crate) struct PendingRepositories(Mutex<HashMap<String, Vec<ActiveProject>>>);
 
 impl PendingRepositories {
-    fn deliver(&self, open_worktrees: &OpenWorktrees, label: &str, opened: ProjectWorktree) -> Result<(), String> {
-        let mut worktrees = open_worktrees.0.lock().map_err(|error| error.to_string())?;
+    fn deliver(&self, window_projects: &WindowProjects, label: &str, opened: ActiveProject) -> Result<(), String> {
+        let mut window_projects = window_projects.0.lock().map_err(|error| error.to_string())?;
         let mut pending = self.0.lock().map_err(|error| error.to_string())?;
-        worktrees.insert(label.to_string(), WindowSession {
+        window_projects.insert(label.to_string(), WindowSession {
             label: label.to_string(),
             active: Some(opened.clone()),
         });
@@ -423,28 +422,28 @@ struct WindowSessionLifecycle {
 }
 
 impl WindowSessionLifecycle {
-    fn save_worktree(
+    fn save_project(
         &self,
-        open_worktrees: &OpenWorktrees,
+        window_projects: &WindowProjects,
         session: WindowSession,
         save: impl FnOnce(WindowSession) -> Result<(), String>,
     ) -> Result<(), String> {
         if !self.live.contains(&session.label) {
             return Ok(());
         }
-        // Delivered worktrees are authoritative because an older frontend save can arrive afterward.
-        let mut worktrees = open_worktrees.0.lock().map_err(|error| error.to_string())?;
-        worktrees.entry(session.label.clone()).or_insert_with(|| session.clone());
+        // Delivered projects are authoritative because an older frontend save can arrive afterward.
+        let mut window_projects = window_projects.0.lock().map_err(|error| error.to_string())?;
+        window_projects.entry(session.label.clone()).or_insert_with(|| session.clone());
         save(session)
     }
 
-    fn clear_worktree(&self, open_worktrees: &OpenWorktrees, label: &str, worktree: &str) -> Result<(), String> {
+    fn clear_project(&self, window_projects: &WindowProjects, label: &str, project: &str) -> Result<(), String> {
         if !self.live.contains(label) {
             return Ok(());
         }
-        let mut worktrees = open_worktrees.0.lock().map_err(|error| error.to_string())?;
-        if let Some(session) = worktrees.get_mut(label) {
-            if session.active.as_ref().is_some_and(|active| active.worktree == worktree) {
+        let mut window_projects = window_projects.0.lock().map_err(|error| error.to_string())?;
+        if let Some(session) = window_projects.get_mut(label) {
+            if session.active.as_ref().is_some_and(|active| active.project == project) {
                 session.active = None;
             }
         }
@@ -518,8 +517,8 @@ fn watch_window_session(window: &WebviewWindow) {
                     log::error!("Could not forget the closed window's repositories: {error}");
                 }
             }
-            if let Ok(mut worktrees) = app.state::<OpenWorktrees>().0.lock() {
-                worktrees.remove(&label);
+            if let Ok(mut window_projects) = app.state::<WindowProjects>().0.lock() {
+                window_projects.remove(&label);
             }
             if let Ok(mut pending) = app.state::<PendingRepositories>().0.lock() {
                 pending.remove(&label);
@@ -561,9 +560,9 @@ pub(crate) fn restore_windows(app: &AppHandle) -> Result<WebviewWindow, String> 
         log::error!("Could not restore the previous windows: {error}");
         Vec::new()
     });
-    if let Ok(mut worktrees) = app.state::<OpenWorktrees>().0.lock() {
+    if let Ok(mut window_projects) = app.state::<WindowProjects>().0.lock() {
         for session in &sessions {
-            worktrees.insert(session.label.clone(), session.clone());
+            window_projects.insert(session.label.clone(), session.clone());
         }
     }
     let labels = if sessions.is_empty() {
@@ -857,26 +856,23 @@ pub(crate) fn install_app_menu(app: &AppHandle) -> Result<(), String> {
 fn deliver_repository(
     app: &AppHandle,
     window: &WebviewWindow,
-    opened: ProjectWorktree,
+    opened: ActiveProject,
 ) -> Result<(), String> {
     app.state::<PendingRepositories>()
-        .deliver(&app.state::<OpenWorktrees>(), window.label(), opened)?;
+        .deliver(&app.state::<WindowProjects>(), window.label(), opened)?;
     app.emit_to(window.label(), REPOSITORIES_OPENED_EVENT, ())
         .map_err(|error| error.to_string())?;
     reveal_window(window)
 }
 
-fn resolve_opened(app: &AppHandle, path: &str) -> Result<ProjectWorktree, String> {
-    let project = remember_repository(path, &app.state::<OpenWorktrees>(), Some(app))?;
-    Ok(ProjectWorktree {
-        project: project.id,
-        worktree: worktree_path(path)?,
-    })
+fn resolve_opened(app: &AppHandle, path: &str) -> Result<ActiveProject, String> {
+    let project = remember_repository(path, Some(app))?;
+    Ok(ActiveProject { project: project.id })
 }
 
 fn window_showing_label(
     sessions: &HashMap<String, WindowSession>,
-    worktree: &str,
+    project: &str,
     excluded: Option<&str>,
     closing: &HashSet<String>,
 ) -> Option<String> {
@@ -888,17 +884,17 @@ fn window_showing_label(
                 && session
                     .active
                     .as_ref()
-                    .is_some_and(|active| active.worktree == worktree)
+                    .is_some_and(|active| active.project == project)
         })
         .map(|(label, _)| label.clone())
 }
 
-fn window_showing(app: &AppHandle, worktree: &str, excluded: Option<&str>) -> Option<WebviewWindow> {
+fn window_showing(app: &AppHandle, project: &str, excluded: Option<&str>) -> Option<WebviewWindow> {
     let labels = app.state::<WindowLabels>();
     let sessions = labels.sessions.lock().ok()?;
     let label = window_showing_label(
-        &*app.state::<OpenWorktrees>().0.lock().ok()?,
-        worktree,
+        &*app.state::<WindowProjects>().0.lock().ok()?,
+        project,
         excluded,
         &sessions.closing,
     )?;
@@ -911,12 +907,12 @@ pub(crate) fn open_repository_window(
     preferred: Option<&str>,
 ) -> Result<(), String> {
     let opened = resolve_opened(app, path)?;
-    let window = match window_showing(app, &opened.worktree, None).or_else(|| target_window(app, preferred)) {
+    let window = match window_showing(app, &opened.project, None).or_else(|| target_window(app, preferred)) {
         Some(window) => window,
         None if !app.webview_windows().is_empty() => create_new_window(app)?,
         None => {
             let restored = restore_windows(app)?;
-            window_showing(app, &opened.worktree, None).unwrap_or(restored)
+            window_showing(app, &opened.project, None).unwrap_or(restored)
         }
     };
     deliver_repository(app, &window, opened)
@@ -944,18 +940,16 @@ pub(crate) fn open_repository(app: AppHandle, window: WebviewWindow, path: Strin
 #[tauri::command(async)]
 pub(crate) fn open_repository_in_new_window(app: AppHandle, window: WebviewWindow, path: String) -> Result<(), String> {
     let opened = resolve_opened(&app, &path)?;
-    if let Some(existing) = window_showing(&app, &opened.worktree, Some(window.label())) {
+    if let Some(existing) = window_showing(&app, &opened.project, Some(window.label())) {
         return reveal_window(&existing);
     }
     let window = create_new_window(&app)?;
     deliver_repository(&app, &window, opened)
 }
 
-fn restored_window_worktree(active: ProjectWorktree) -> Option<ProjectWorktree> {
-    let worktree = worktree_path(&active.worktree).ok()?;
-    Some(ProjectWorktree {
-        project: project_id(&worktree).ok()?,
-        worktree,
+fn restored_window_project(active: ActiveProject) -> Option<ActiveProject> {
+    Some(ActiveProject {
+        project: resolve_project_id(&active.project).ok()?,
     })
 }
 
@@ -966,7 +960,7 @@ pub(crate) fn window_session(window: WebviewWindow) -> Result<WindowSession, Str
         .into_iter()
         .find(|session| session.label == label)
         .unwrap_or_default();
-    let active = session.active.and_then(restored_window_worktree);
+    let active = session.active.and_then(restored_window_project);
     Ok(WindowSession {
         active,
         label: label.to_string(),
@@ -974,11 +968,11 @@ pub(crate) fn window_session(window: WebviewWindow) -> Result<WindowSession, Str
 }
 
 #[tauri::command(async)]
-pub(crate) fn save_window_worktree(
+pub(crate) fn save_window_project(
     window: WebviewWindow,
     labels: tauri::State<WindowLabels>,
-    open_worktrees: tauri::State<OpenWorktrees>,
-    active: Option<ProjectWorktree>,
+    window_projects: tauri::State<WindowProjects>,
+    active: Option<ActiveProject>,
 ) -> Result<(), String> {
     let session = WindowSession {
         label: window.label().to_string(),
@@ -986,25 +980,25 @@ pub(crate) fn save_window_worktree(
     };
     // Serialize saves with closing and destruction so a late save cannot resurrect a session.
     let sessions = labels.sessions.lock().map_err(|error| error.to_string())?;
-    sessions.save_worktree(&open_worktrees, session, save_window_session)
+    sessions.save_project(&window_projects, session, save_window_session)
 }
 
 #[tauri::command]
-pub(crate) fn clear_window_worktree(
+pub(crate) fn clear_window_project(
     window: WebviewWindow,
     labels: tauri::State<WindowLabels>,
-    open_worktrees: tauri::State<OpenWorktrees>,
-    worktree: String,
+    window_projects: tauri::State<WindowProjects>,
+    project: String,
 ) -> Result<(), String> {
     let sessions = labels.sessions.lock().map_err(|error| error.to_string())?;
-    sessions.clear_worktree(&open_worktrees, window.label(), &worktree)
+    sessions.clear_project(&window_projects, window.label(), &project)
 }
 
 #[tauri::command]
 pub(crate) fn take_opened_repositories(
     window: WebviewWindow,
     pending: tauri::State<PendingRepositories>,
-) -> Result<Vec<ProjectWorktree>, String> {
+) -> Result<Vec<ActiveProject>, String> {
     Ok(pending
         .0
         .lock()
@@ -1016,190 +1010,172 @@ pub(crate) fn take_opened_repositories(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::project_id;
     use std::env;
 
+    fn active(project: &str) -> ActiveProject {
+        ActiveProject { project: project.to_string() }
+    }
+
     #[test]
-    fn restores_missing_worktrees_empty_even_when_the_project_home_exists() {
+    fn restores_existing_projects_and_leaves_unresolvable_projects_empty() {
         use crate::test_support::{remove_scratch_repository, scratch_repository};
 
-        let (path, run) = scratch_repository("window-missing-worktree");
+        let (path, run) = scratch_repository("window-restore-project");
         run(&["commit", "--allow-empty", "--quiet", "-m", "init"]);
-        let linked = format!("{path}-linked");
-        run(&["worktree", "add", "--quiet", "-b", "linked", &linked]);
-        let active = ProjectWorktree {
-            project: project_id(&path).unwrap(),
-            worktree: worktree_path(&linked).unwrap(),
-        };
-        run(&["worktree", "remove", &linked]);
-
-        assert!(worktree_path(&path).is_ok());
-        assert_eq!(restored_window_worktree(active), None);
+        let project = active(&project_id(&path).unwrap());
+        assert_eq!(restored_window_project(project.clone()), Some(project));
+        assert_eq!(restored_window_project(active(&format!("{path}/missing-project"))), None);
         remove_scratch_repository(&path);
     }
 
     #[test]
-    fn restores_existing_worktrees_and_leaves_unresolvable_projects_empty() {
-        use crate::test_support::{remove_scratch_repository, scratch_repository};
+    fn restores_a_bare_repository_project_when_bare_repositories_must_be_explicit() {
+        use crate::test_support::{remove_scratch_repository, rerun_with_explicit_bare_repositories, scratch_repository};
 
-        let (path, run) = scratch_repository("window-restore-worktree");
+        if rerun_with_explicit_bare_repositories(
+            "window::tests::restores_a_bare_repository_project_when_bare_repositories_must_be_explicit",
+        ) {
+            return;
+        }
+        let (path, run) = scratch_repository("window-restore-explicit-bare");
         run(&["commit", "--allow-empty", "--quiet", "-m", "init"]);
-        let linked = format!("{path}-linked");
-        run(&["worktree", "add", "--quiet", "-b", "linked", &linked]);
-        let home = ProjectWorktree {
-            project: project_id(&path).unwrap(),
-            worktree: worktree_path(&path).unwrap(),
-        };
-        let active = ProjectWorktree {
-            project: home.project.clone(),
-            worktree: worktree_path(&linked).unwrap(),
-        };
-        assert_eq!(restored_window_worktree(home.clone()), Some(home));
-        assert_eq!(restored_window_worktree(active.clone()), Some(active));
-        assert_eq!(
-            restored_window_worktree(ProjectWorktree {
-                project: format!("{path}/missing-project"),
-                worktree: format!("{path}/missing-worktree"),
-            }),
-            None,
-        );
-        remove_scratch_repository(&linked);
+        let bare = format!("{path}-origin.git");
+        let checkout = format!("{path}-checkout");
+        run(&["clone", "--bare", "--quiet", &path, &bare]);
+        run(&["--git-dir", &bare, "worktree", "add", "--quiet", &checkout, "main"]);
+        let project = active(&project_id(&checkout).unwrap());
+        assert_eq!(restored_window_project(project.clone()), Some(project));
+        remove_scratch_repository(&checkout);
+        remove_scratch_repository(&bare);
         remove_scratch_repository(&path);
     }
 
     #[test]
-    fn saves_worktrees_for_live_windows_including_while_closing() {
-        for active in [
-            None,
-            Some(ProjectWorktree {
-                project: "/code/app/.git".to_string(),
-                worktree: "/code/app-fix".to_string(),
-            }),
-        ] {
+    fn saves_projects_for_live_windows_including_while_closing() {
+        for active in [None, Some(active("/code/app/.git"))] {
             let session = WindowSession {
                 label: "window-2".to_string(),
                 active,
             };
-            let open_worktrees = OpenWorktrees::default();
+            let window_projects = WindowProjects::default();
             let mut lifecycle = WindowSessionLifecycle::default();
             lifecycle.live.insert(session.label.clone());
             let mut saved = None;
-            lifecycle.save_worktree(&open_worktrees, session.clone(), |session| {
+            lifecycle.save_project(&window_projects, session.clone(), |session| {
                 saved = Some(session);
                 Ok(())
             }).unwrap();
             assert_eq!(saved, Some(session.clone()));
-            assert_eq!(open_worktrees.0.lock().unwrap().get(&session.label), Some(&session));
+            assert_eq!(window_projects.0.lock().unwrap().get(&session.label), Some(&session));
 
             lifecycle.closing.insert(session.label.clone());
             saved = None;
-            lifecycle.save_worktree(&open_worktrees, session.clone(), |session| {
+            lifecycle.save_project(&window_projects, session.clone(), |session| {
                 saved = Some(session);
                 Ok(())
             }).unwrap();
             assert_eq!(saved, Some(session.clone()));
-            assert_eq!(open_worktrees.0.lock().unwrap().get(&session.label), Some(&session));
+            assert_eq!(window_projects.0.lock().unwrap().get(&session.label), Some(&session));
 
             lifecycle.live.remove(&session.label);
             lifecycle.closing.remove(&session.label);
-            open_worktrees.0.lock().unwrap().remove(&session.label);
-            lifecycle.save_worktree(&open_worktrees, session, |_| {
+            window_projects.0.lock().unwrap().remove(&session.label);
+            lifecycle.save_project(&window_projects, session, |_| {
                 panic!("a destroyed window must not write its session")
             }).unwrap();
-            assert!(open_worktrees.0.lock().unwrap().is_empty());
+            assert!(window_projects.0.lock().unwrap().is_empty());
         }
     }
 
     #[test]
     fn a_stale_save_cannot_replace_a_delivered_routing_assignment() {
         let pending = PendingRepositories::default();
-        let open_worktrees = OpenWorktrees::default();
+        let window_projects = WindowProjects::default();
         let mut lifecycle = WindowSessionLifecycle::default();
         lifecycle.live.insert("main".to_string());
         let previous = WindowSession {
             label: "main".to_string(),
-            active: Some(ProjectWorktree { project: "/project".to_string(), worktree: "/a".to_string() }),
+            active: Some(active("/a")),
         };
-        lifecycle.save_worktree(&open_worktrees, previous.clone(), |_| Ok(())).unwrap();
-        let delivered = ProjectWorktree { project: "/project".to_string(), worktree: "/b".to_string() };
-        pending.deliver(&open_worktrees, "main", delivered.clone()).unwrap();
+        lifecycle.save_project(&window_projects, previous.clone(), |_| Ok(())).unwrap();
+        let delivered = active("/b");
+        pending.deliver(&window_projects, "main", delivered.clone()).unwrap();
         pending.0.lock().unwrap().remove("main");
-        lifecycle.save_worktree(&open_worktrees, WindowSession { label: "main".to_string(), active: None }, |_| Ok(())).unwrap();
-        lifecycle.save_worktree(&open_worktrees, previous, |_| Ok(())).unwrap();
+        lifecycle.save_project(&window_projects, WindowSession { label: "main".to_string(), active: None }, |_| Ok(())).unwrap();
+        lifecycle.save_project(&window_projects, previous, |_| Ok(())).unwrap();
         {
-            let sessions = open_worktrees.0.lock().unwrap();
+            let sessions = window_projects.0.lock().unwrap();
             assert_eq!(sessions["main"].active, Some(delivered.clone()));
             assert_eq!(window_showing_label(&sessions, "/b", None, &HashSet::new()).as_deref(), Some("main"));
         }
-        lifecycle.save_worktree(&open_worktrees, WindowSession { label: "main".to_string(), active: Some(delivered.clone()) }, |_| Ok(())).unwrap();
-        assert_eq!(open_worktrees.0.lock().unwrap()["main"].active, Some(delivered));
+        lifecycle.save_project(&window_projects, WindowSession { label: "main".to_string(), active: Some(delivered.clone()) }, |_| Ok(())).unwrap();
+        assert_eq!(window_projects.0.lock().unwrap()["main"].active, Some(delivered));
     }
 
     #[test]
-    fn explicit_clears_release_only_the_named_worktree_in_the_live_window() {
+    fn explicit_clears_release_only_the_named_project_in_the_live_window() {
         let pending = PendingRepositories::default();
-        let open_worktrees = OpenWorktrees::default();
+        let window_projects = WindowProjects::default();
         let mut lifecycle = WindowSessionLifecycle::default();
         lifecycle.live.extend(["main".to_string(), "window-2".to_string()]);
-        let first = ProjectWorktree { project: "/project".to_string(), worktree: "/a".to_string() };
-        let second = ProjectWorktree { project: "/project".to_string(), worktree: "/b".to_string() };
-        pending.deliver(&open_worktrees, "main", first.clone()).unwrap();
-        pending.deliver(&open_worktrees, "main", second.clone()).unwrap();
-        lifecycle.clear_worktree(&open_worktrees, "main", &first.worktree).unwrap();
-        assert_eq!(open_worktrees.0.lock().unwrap()["main"].active, Some(second.clone()));
+        let first = active("/a");
+        let second = active("/b");
+        pending.deliver(&window_projects, "main", first.clone()).unwrap();
+        pending.deliver(&window_projects, "main", second.clone()).unwrap();
+        lifecycle.clear_project(&window_projects, "main", &first.project).unwrap();
+        assert_eq!(window_projects.0.lock().unwrap()["main"].active, Some(second.clone()));
 
-        pending.deliver(&open_worktrees, "window-2", second.clone()).unwrap();
+        pending.deliver(&window_projects, "window-2", second.clone()).unwrap();
         lifecycle.closing.insert("main".to_string());
-        lifecycle.clear_worktree(&open_worktrees, "main", &second.worktree).unwrap();
+        lifecycle.clear_project(&window_projects, "main", &second.project).unwrap();
         for active in [None, Some(second.clone())] {
-            lifecycle.save_worktree(&open_worktrees, WindowSession { label: "main".to_string(), active }, |_| Ok(())).unwrap();
-            let sessions = open_worktrees.0.lock().unwrap();
+            lifecycle.save_project(&window_projects, WindowSession { label: "main".to_string(), active }, |_| Ok(())).unwrap();
+            let sessions = window_projects.0.lock().unwrap();
             assert!(sessions["main"].active.is_none());
             assert_eq!(window_showing_label(&sessions, "/b", None, &HashSet::new()).as_deref(), Some("window-2"));
         }
 
         lifecycle.closing.remove("main");
-        pending.deliver(&open_worktrees, "main", first).unwrap();
-        assert_eq!(window_showing_label(&open_worktrees.0.lock().unwrap(), "/a", None, &HashSet::new()).as_deref(), Some("main"));
+        pending.deliver(&window_projects, "main", first).unwrap();
+        assert_eq!(window_showing_label(&window_projects.0.lock().unwrap(), "/a", None, &HashSet::new()).as_deref(), Some("main"));
         lifecycle.live.remove("main");
-        open_worktrees.0.lock().unwrap().remove("main");
-        lifecycle.clear_worktree(&open_worktrees, "main", "/a").unwrap();
-        assert!(!open_worktrees.0.lock().unwrap().contains_key("main"));
+        window_projects.0.lock().unwrap().remove("main");
+        lifecycle.clear_project(&window_projects, "main", "/a").unwrap();
+        assert!(!window_projects.0.lock().unwrap().contains_key("main"));
     }
 
     #[test]
-    fn routes_to_the_window_showing_the_exact_worktree() {
+    fn routes_to_the_window_showing_the_project() {
         let sessions = [
-            ("main", Some("/code/app")),
-            ("window-2", Some("/code/app-fix")),
+            ("main", Some("/code/app/.git")),
+            ("window-2", Some("/code/other/.git")),
             ("window-3", None),
         ]
         .into_iter()
-        .map(|(label, worktree)| {
+        .map(|(label, project)| {
             (
                 label.to_string(),
                 WindowSession {
                     label: label.to_string(),
-                    active: worktree.map(|worktree| ProjectWorktree {
-                        project: "/code/app/.git".to_string(),
-                        worktree: worktree.to_string(),
-                    }),
+                    active: project.map(active),
                 },
             )
         })
         .collect();
 
         assert_eq!(
-            window_showing_label(&sessions, "/code/app", None, &HashSet::new()).as_deref(),
+            window_showing_label(&sessions, "/code/app/.git", None, &HashSet::new()).as_deref(),
             Some("main"),
         );
         assert_eq!(
-            window_showing_label(&sessions, "/code/app-fix", None, &HashSet::new()).as_deref(),
+            window_showing_label(&sessions, "/code/other/.git", None, &HashSet::new()).as_deref(),
             Some("window-2"),
         );
-        assert_eq!(window_showing_label(&sessions, "/code/app-other", None, &HashSet::new()), None);
-        assert_eq!(window_showing_label(&sessions, "/code/app", Some("main"), &HashSet::new()), None);
+        assert_eq!(window_showing_label(&sessions, "/code/third/.git", None, &HashSet::new()), None);
+        assert_eq!(window_showing_label(&sessions, "/code/app/.git", Some("main"), &HashSet::new()), None);
         assert_eq!(
-            window_showing_label(&sessions, "/code/app-fix", Some("main"), &HashSet::new()).as_deref(),
+            window_showing_label(&sessions, "/code/other/.git", Some("main"), &HashSet::new()).as_deref(),
             Some("window-2"),
         );
     }
@@ -1223,24 +1199,21 @@ mod tests {
     }
 
     #[test]
-    fn delivered_worktrees_are_routable_before_the_window_saves() {
+    fn delivered_projects_are_routable_before_the_window_saves() {
         let pending = PendingRepositories::default();
-        let open_worktrees = OpenWorktrees::default();
-        let opened = ProjectWorktree {
-            project: "/code/app/.git".to_string(),
-            worktree: "/code/app-fix".to_string(),
-        };
-        pending.deliver(&open_worktrees, "window-2", opened.clone()).unwrap();
-        let sessions = open_worktrees.0.lock().unwrap();
+        let window_projects = WindowProjects::default();
+        let opened = active("/code/app/.git");
+        pending.deliver(&window_projects, "window-2", opened.clone()).unwrap();
+        let sessions = window_projects.0.lock().unwrap();
         assert_eq!(sessions["window-2"].active, Some(opened.clone()));
         assert_eq!(
-            window_showing_label(&sessions, &opened.worktree, None, &HashSet::new()).as_deref(),
+            window_showing_label(&sessions, &opened.project, None, &HashSet::new()).as_deref(),
             Some("window-2"),
         );
         assert_eq!(pending.0.lock().unwrap()["window-2"], vec![opened.clone()]);
 
         let closing = HashSet::from(["window-2".to_string()]);
-        assert_eq!(window_showing_label(&sessions, &opened.worktree, None, &closing), None);
+        assert_eq!(window_showing_label(&sessions, &opened.project, None, &closing), None);
     }
 
     #[test]

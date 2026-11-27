@@ -994,14 +994,6 @@ button.commit-ref-selected:hover {
   position: relative;
 }
 
-.commit-ref-worktree-open {
-  color: var(--commit-ref-color);
-}
-
-.commit-ref-worktree-open .commit-ref-worktree-icon svg {
-  fill: color-mix(in srgb, var(--commit-ref-color) 35%, transparent);
-}
-
 /* An interrupted operation is the one worktree state that has to be answered rather than merely noticed, so
    it is badged instead of taking a colour that uncommitted work already uses. */
 .commit-ref-worktree-pending {

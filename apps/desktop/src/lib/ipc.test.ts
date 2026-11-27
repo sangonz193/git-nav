@@ -21,13 +21,13 @@ describe("invoke", () => {
     }) as typeof fetch
 
     const saving = invoke(
-      "save_repository_layout",
-      { path: "/repo" },
+      "save_project_layout",
+      { project: "/repo/.git" },
       { keepalive: true },
     )
 
     expect(requests).toHaveLength(1)
-    expect(requests[0][0]).toBe("/api/save_repository_layout")
+    expect(requests[0][0]).toBe("/api/save_project_layout")
     expect(requests[0][1]?.keepalive).toBe(true)
     await saving
   })

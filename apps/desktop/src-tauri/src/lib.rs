@@ -30,9 +30,8 @@ mod worktrees;
 mod test_support;
 
 use storage::load_settings;
-use projects::OpenWorktrees;
 use window::{
-    LastFocusedWindow, PendingRepositories, WindowLabels, open_repository_window,
+    LastFocusedWindow, PendingRepositories, WindowLabels, WindowProjects, open_repository_window,
     repository_path_from_args, restore_windows, sharing_survives_window_close,
     should_keep_sharing_without_windows, show_windows, target_window,
 };
@@ -78,8 +77,8 @@ commands![
     window::open_repository_in_new_window,
     window::new_window,
     window::window_session,
-    window::save_window_worktree,
-    window::clear_window_worktree,
+    window::save_window_project,
+    window::clear_window_project,
     window::take_opened_repositories,
     window::choose_repository,
     window::zoom,
@@ -89,6 +88,7 @@ commands![
     desktop::open_worktree,
     desktop::open_url,
     projects::project_snapshot,
+    projects::project_by_id,
     graph::stream_commit_graph,
     graph::repository_fingerprint,
     worktrees::branch_sync,
@@ -145,8 +145,8 @@ commands![
     working_tree::commit_changes,
     storage::settings,
     storage::set_setting,
-    storage::repository_layout,
-    storage::save_repository_layout,
+    storage::project_layout,
+    storage::save_project_layout,
     sharing::start_sharing,
     sharing::stop_sharing,
     sharing::sharing_state,
@@ -159,6 +159,9 @@ commands![
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<_> = env::args().collect();
+    if let Err(error) = storage::migrate_repository_layouts() {
+        eprintln!("Could not migrate saved tab layouts: {error}");
+    }
 
     let serve_request = if args.get(1).is_some_and(|argument| argument == "serve") {
         let (readiness_path, options) = match internal_serve_request(&args[2..]) {
@@ -279,7 +282,7 @@ pub fn run() {
 
     let app = match builder
         .plugin(tauri_plugin_dialog::init())
-        .manage(OpenWorktrees::default())
+        .manage(WindowProjects::default())
         .manage(PendingRepositories::default())
         .manage(LastFocusedWindow::default())
         .manage(WindowLabels::default())

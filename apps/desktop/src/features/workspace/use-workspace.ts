@@ -20,10 +20,10 @@ import {
 } from "@/lib/navigation"
 import type { Project } from "../repository/project"
 import {
-  activeAfterRemoving,
   EMPTY_WORKSPACE,
   isWorkspaceState,
-  type ProjectWorktree,
+  projectAfterRemoving,
+  type ActiveProject,
   type WorkspaceState,
 } from "./workspace"
 
@@ -90,19 +90,17 @@ export function useWorkspace(
     clearTimeout(timeout)
   }, [layoutFlush])
 
-  const clear = useCallback(async (active: ProjectWorktree) => {
+  const clear = useCallback(async (active: ActiveProject) => {
     if (isDesktop) {
-      await invoke<void>("clear_window_worktree", { worktree: active.worktree })
+      await invoke<void>("clear_window_project", { project: active.project })
     }
     setState((current) =>
-      current?.active?.worktree === active.worktree ?
-        { active: null }
-      : current,
+      current?.active?.project === active.project ? { active: null } : current,
     )
   }, [])
 
   const showLocally = useCallback(
-    async (active: ProjectWorktree | null) => {
+    async (active: ActiveProject | null) => {
       await flushLayout()
       if (!active && currentState.current?.active) {
         await clear(currentState.current.active)
@@ -114,13 +112,13 @@ export function useWorkspace(
   )
 
   const show = useCallback(
-    async (active: ProjectWorktree | null) => {
-      if (isDesktop && active) {
-        await openRepository(active.worktree).catch(
+    async (project: Pick<Project, "id" | "path"> | null) => {
+      if (isDesktop && project) {
+        await openRepository(project.path).catch(
           reportError("Could not open the repository"),
         )
       } else {
-        await showLocally(active).catch(
+        await showLocally(project && { project: project.id }).catch(
           reportError("Could not close the repository"),
         )
       }
@@ -154,7 +152,7 @@ export function useWorkspace(
 
   useEffect(() => {
     let disposed = false
-    const showOpened = (opened: ProjectWorktree[]) => {
+    const showOpened = (opened: ActiveProject[]) => {
       const last = opened.at(-1)
       if (!disposed && last) void showLocally(last)
     }
@@ -166,7 +164,7 @@ export function useWorkspace(
       })
       if (requestedRepository) {
         window.history.replaceState(null, "", window.location.pathname)
-        invoke<ProjectWorktree>("open_repository", {
+        invoke<ActiveProject>("open_repository", {
           path: requestedRepository,
         })
           .then((opened) => {
@@ -184,7 +182,7 @@ export function useWorkspace(
     let loaded = false
     let unlisten: (() => void) | undefined
     const drain = () =>
-      invoke<ProjectWorktree[]>("take_opened_repositories")
+      invoke<ActiveProject[]>("take_opened_repositories")
         .then(showOpened)
         .catch(reportError("Could not open the repository"))
     void (async () => {
@@ -223,7 +221,7 @@ export function useWorkspace(
     if (!state || state === EMPTY_WORKSPACE) return
     if (isDesktop) {
       saving.current = saving.current.then(() =>
-        invoke<void>("save_window_worktree", state).catch(
+        invoke<void>("save_window_project", state).catch(
           reportError("Could not save what this window shows"),
         ),
       )
@@ -249,6 +247,7 @@ export function useWorkspace(
       await flushLayout()
       const active = currentState.current?.active
       if (active?.project !== project) return
+      const next = projectAfterRemoving(listed, project)
       if (isDesktop) {
         try {
           await clear(active)
@@ -256,14 +255,12 @@ export function useWorkspace(
           reportError("Could not close the repository")(error)
           return
         }
-        const next = activeAfterRemoving(active, listed, project)
         if (next) await show(next)
       } else {
-        setState(
-          (current) =>
-            current && {
-              active: activeAfterRemoving(current.active, listed, project),
-            },
+        setState((current) =>
+          current?.active?.project === project ?
+            { active: next ? { project: next.id } : null }
+          : current,
         )
       }
     },
@@ -271,14 +268,14 @@ export function useWorkspace(
   )
 
   const openInNewWindow = useCallback(
-    async (target: ProjectWorktree) => {
-      const showsTarget = state?.active?.worktree === target.worktree
+    async (target: Pick<Project, "id" | "path">) => {
+      const showsTarget = state?.active?.project === target.id
       try {
         if (isDesktop && showsTarget) await flushLayout()
-        await openRepositoryInNewWindow(target.worktree)
+        await openRepositoryInNewWindow(target.path)
         if (showsTarget) {
           if (!isDesktop) await flushLayout()
-          await clear(target)
+          await clear({ project: target.id })
         }
       } catch (error) {
         reportError("Could not open a new window")(error)

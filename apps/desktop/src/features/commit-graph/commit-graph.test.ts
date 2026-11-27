@@ -52,7 +52,6 @@ function worktree(overrides: Partial<RowWorktree>) {
     changedFiles: 0,
     head: "a",
     isCurrent: false,
-    isOpen: false,
     name: "wt",
     path: "/wt",
     pendingOperation: null,
@@ -1552,21 +1551,13 @@ describe("overflowHasSelectedRef", () => {
 })
 
 describe("worktreeTooltipFacts", () => {
-  test("shows the current worktree status ahead of its open status", () => {
+  test("shows the worktree shown here", () => {
     expect(
-      worktreeTooltipFacts(
-        worktree({ branch: "main", isCurrent: true, isOpen: true }),
-      ),
+      worktreeTooltipFacts(worktree({ branch: "main", isCurrent: true })),
     ).toEqual(["Shown here"])
   })
 
-  test("shows when a worktree is open in Git Nav", () => {
-    expect(
-      worktreeTooltipFacts(worktree({ branch: "main", isOpen: true })),
-    ).toEqual(["Open in Git Nav"])
-  })
-
-  test("omits status for a worktree that is neither current nor open", () => {
+  test("omits status for a worktree that is not shown here", () => {
     expect(worktreeTooltipFacts(worktree({ branch: "main" }))).toEqual([])
   })
 

@@ -295,7 +295,6 @@ describe("unavailable", () => {
       changedFiles: 0,
       head: "b",
       isCurrent: false,
-      isOpen: false,
       name: "feature-tree",
       path: "/tmp/feature-tree",
       pendingOperation: null,

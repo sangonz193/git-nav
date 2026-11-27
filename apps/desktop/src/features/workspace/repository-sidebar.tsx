@@ -1,10 +1,8 @@
 import {
   AppWindow,
-  ChevronRight,
   CodeXml,
   Ellipsis,
   FolderOpen,
-  GitBranch,
   PanelLeftClose,
   Plus,
   Terminal,
@@ -43,16 +41,13 @@ import {
 import { AppMenuButton } from "../app-menu/app-menu"
 import { FolderPicker } from "../launcher/folder-picker"
 import { SharingIndicator } from "../sharing/sharing-controls"
-import {
-  projectHome,
-  type ProjectWorktree,
-  type SidebarProject,
-} from "./workspace"
+import type { Project } from "../repository/project"
+import type { ActiveProject } from "./workspace"
 
 type ProjectActions = {
-  onOpenInNewWindow: (target: ProjectWorktree) => void
+  onOpenInNewWindow: (project: Project) => void
   onRemove: (project: string) => void
-  onSelect: (target: ProjectWorktree) => void
+  onSelect: (project: Project) => void
 }
 
 type MenuComponents = {
@@ -83,28 +78,26 @@ function ProjectMenuItems({
   onOpenInNewWindow,
   onRemove,
   project,
-  target,
 }: Omit<ProjectActions, "onSelect"> & {
   components: MenuComponents
-  project: SidebarProject
-  target: ProjectWorktree
+  project: Project
 }) {
   return (
     <>
-      <Item onSelect={() => openIn(target.worktree, "finder")}>
+      <Item onSelect={() => openIn(project.path, "finder")}>
         <FolderOpen />
         Open in File Manager
       </Item>
-      <Item onSelect={() => openIn(target.worktree, "vscode")}>
+      <Item onSelect={() => openIn(project.path, "vscode")}>
         <CodeXml />
         Open in VS Code
       </Item>
-      <Item onSelect={() => openIn(target.worktree, "terminal")}>
+      <Item onSelect={() => openIn(project.path, "terminal")}>
         <Terminal />
         Open in Terminal
       </Item>
       <Separator />
-      <Item onSelect={() => onOpenInNewWindow(target)}>
+      <Item onSelect={() => onOpenInNewWindow(project)}>
         <AppWindow />
         Open in New Window
       </Item>
@@ -119,32 +112,15 @@ function ProjectMenuItems({
 
 function ProjectItem({
   active,
-  expanded,
   onOpenInNewWindow,
   onRemove,
   onSelect,
-  onToggle,
   project,
 }: ProjectActions & {
-  active: ProjectWorktree | null
-  expanded: boolean
-  onToggle: () => void
-  project: SidebarProject
+  active: boolean
+  project: Project
 }) {
-  const activeWorktree = active?.project === project.id ? active.worktree : null
-  const shownWorktree =
-    activeWorktree && activeWorktree !== project.path ?
-      project.worktrees.find((worktree) => worktree.path === activeWorktree)
-    : undefined
-  const rowActive =
-    activeWorktree !== null &&
-    (!expanded ||
-      !project.worktrees.some((worktree) => worktree.path === activeWorktree))
-  const target = {
-    project: project.id,
-    worktree: activeWorktree ?? project.path,
-  }
-  const menu = { onOpenInNewWindow, onRemove, project, target }
+  const menu = { onOpenInNewWindow, onRemove, project }
 
   return (
     <li>
@@ -152,39 +128,20 @@ function ProjectItem({
         <ContextMenuTrigger asChild>
           <div
             className={cn(
-              "group flex h-8 items-center gap-0.5 rounded-md pr-1 pl-0.5 text-sm",
-              rowActive ?
+              "group flex h-8 items-center gap-0.5 rounded-md pr-1 pl-2 text-sm",
+              active ?
                 "bg-sidebar-accent text-sidebar-accent-foreground"
               : "hover:bg-sidebar-accent/60",
             )}
           >
             <button
-              aria-expanded={expanded}
-              aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name}`}
-              className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              onClick={onToggle}
-              type="button"
-            >
-              <ChevronRight
-                className={cn(
-                  "size-3.5 transition-transform",
-                  expanded && "rotate-90",
-                )}
-              />
-            </button>
-            <button
-              aria-current={rowActive ? "page" : undefined}
+              aria-current={active ? "page" : undefined}
               className="flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => onSelect(projectHome(project))}
+              onClick={() => onSelect(project)}
               title={project.path}
               type="button"
             >
               <span className="truncate font-medium">{project.name}</span>
-              {!expanded && shownWorktree && (
-                <span className="truncate text-xs text-muted-foreground">
-                  {shownWorktree.label}
-                </span>
-              )}
             </button>
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -203,38 +160,6 @@ function ProjectItem({
           <ProjectMenuItems components={CONTEXT_COMPONENTS} {...menu} />
         </ContextMenuContent>
       </ContextMenu>
-      {expanded && (
-        <ul aria-label={`${project.name} worktrees`}>
-          {project.worktrees.map((worktree) => (
-            <li key={worktree.path}>
-              <button
-                aria-current={
-                  worktree.path === activeWorktree ? "page" : undefined
-                }
-                className={cn(
-                  "flex h-8 w-full items-center gap-2 rounded-md pr-2 pl-8 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  worktree.path === activeWorktree ?
-                    "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "hover:bg-sidebar-accent/60",
-                )}
-                onClick={() =>
-                  onSelect({ project: project.id, worktree: worktree.path })
-                }
-                title={worktree.path}
-                type="button"
-              >
-                <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">{worktree.label}</span>
-                {worktree.detail && (
-                  <span className="truncate text-xs text-muted-foreground">
-                    {worktree.detail}
-                  </span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
     </li>
   )
 }
@@ -246,12 +171,11 @@ export function RepositorySidebar({
   projectsError,
   ...actions
 }: ProjectActions & {
-  active: ProjectWorktree | null
+  active: ActiveProject | null
   onCollapse: () => void
-  projects: SidebarProject[]
+  projects: Project[]
   projectsError: string | null
 }) {
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [isPickerOpen, setIsPickerOpen] = useState(false)
 
   function chooseRepository() {
@@ -260,15 +184,6 @@ export function RepositorySidebar({
     } else {
       setIsPickerOpen(true)
     }
-  }
-
-  function toggle(project: string) {
-    setExpanded((current) => {
-      const next = new Set(current)
-      if (next.has(project)) next.delete(project)
-      else next.add(project)
-      return next
-    })
   }
 
   return (
@@ -321,10 +236,8 @@ export function RepositorySidebar({
       <ul className="flex-1 overflow-y-auto px-1.5 pb-2">
         {projects.map((project) => (
           <ProjectItem
-            active={active}
-            expanded={expanded.has(project.id)}
+            active={active?.project === project.id}
             key={project.id}
-            onToggle={() => toggle(project.id)}
             project={project}
             {...actions}
           />

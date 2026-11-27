@@ -416,7 +416,6 @@ function worktreeMarker(worktree: RowWorktree) {
   const changes = worktreeChanges(worktree)
   const classes = [
     "commit-ref-worktree",
-    worktree.isOpen && "commit-ref-worktree-open",
     worktree.pendingOperation && "commit-ref-worktree-pending",
   ]
     .filter(Boolean)
