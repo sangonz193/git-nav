@@ -92,6 +92,64 @@ function deferred<T>() {
 }
 
 describe("worktree status cache", () => {
+  test("refreshes diff repository metadata without reading other datasets", async () => {
+    const path = "/cache/diff-refresh"
+    const { data, requests } = transport(path)
+    const cache = getWorktreeStatusCache(path)
+    await cache.refresh("repository")
+    expect(cache.getDiffSnapshot()).toEqual({
+      currentBranch: "main",
+      defaultBranch: "main",
+      remotes: ["origin"],
+      worktrees: [],
+    })
+
+    await cache.refresh("project")
+    const previous = cache.getDiffSnapshot()
+    data.repository_state.currentBranch = "feature"
+    await cache.refresh("repository", true)
+
+    expect(requests.map(({ command }) => command)).toEqual([
+      "repository_state",
+      "project_snapshot",
+      "repository_state",
+    ])
+    const current = cache.getDiffSnapshot()
+    expect(current.currentBranch).toBe("feature")
+    expect(current.remotes).toBe(previous.remotes)
+    expect(current.worktrees).toBe(previous.worktrees)
+  })
+
+  test("retains the diff snapshot through publishes unrelated to labels and search", async () => {
+    const path = "/cache/diff-snapshot"
+    const { data } = transport(path)
+    const cache = getWorktreeStatusCache(path)
+    await cache.refresh()
+    const previous = cache.getDiffSnapshot()
+    const updates: (typeof previous)[] = []
+    const unsubscribe = cache.subscribe(() =>
+      updates.push(cache.getDiffSnapshot()),
+    )
+    data.worktree_status = [status(path, 3)]
+    data.stash_list = []
+    data.repository_state.isDirty = false
+    data.project_snapshot.worktrees[0]!.head = "def"
+    await cache.refresh()
+    unsubscribe()
+
+    expect(updates).toHaveLength(4)
+    for (const update of updates) expect(update).toBe(previous)
+
+    data.project_snapshot.worktrees[0]!.isDetached = true
+    await cache.refresh("project")
+    const current = cache.getDiffSnapshot()
+    expect(current.worktrees).toEqual([
+      { path, branch: "main", isDetached: true },
+    ])
+    expect(current.worktrees).not.toBe(previous.worktrees)
+    expect(current.remotes).toBe(previous.remotes)
+  })
+
   test("is loaded only once every worktree has been read", async () => {
     const path = "/cache/loaded"
     transport(path)
@@ -116,6 +174,7 @@ describe("worktree status cache", () => {
     expect(remounted).toBe(cache)
     expect(remounted.getSnapshot()).toEqual({
       isLoaded: true,
+      projectHomePath: path,
       projectWorktrees: [data.project_snapshot.worktrees[0]],
       worktreeStatuses: data.worktree_status,
       repository: data.repository_state,
@@ -124,6 +183,7 @@ describe("worktree status cache", () => {
     expect(updates).toBe(5)
     expect(getWorktreeStatusCache("/cache/other").getSnapshot()).toEqual({
       isLoaded: false,
+      projectHomePath: null,
       projectWorktrees: [],
       worktreeStatuses: [],
       repository: null,
@@ -190,6 +250,7 @@ describe("worktree status cache", () => {
     expect(requests).toHaveLength(8)
     expect(cache.getSnapshot()).toEqual({
       isLoaded: true,
+      projectHomePath: path,
       projectWorktrees: [data.project_snapshot.worktrees[0]],
       worktreeStatuses: data.worktree_status,
       repository: data.repository_state,

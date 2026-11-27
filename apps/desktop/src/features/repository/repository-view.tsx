@@ -40,6 +40,7 @@ import {
 import { usesNativeMenu } from "../app-menu/app-menu-shortcuts"
 import { ShowSidebarControls } from "../workspace/sidebar-toggle"
 import { CommitGraphPanel } from "../commit-graph/commit-graph-panel"
+import { getWorktreeStatusCache } from "../commit-graph/worktree-status-cache"
 import { DiffPanel } from "../diff/diff-panel"
 import { WorkingTreePanel } from "../working-tree/working-tree-panel"
 import { closedTabHistory, reopenedPanel } from "../../lib/closed-tabs"
@@ -67,7 +68,10 @@ import {
   type DiffPanelParams,
   type RepositoryPanelParams,
 } from "../../lib/panel-params"
-import { worktreeName } from "../working-tree/working-tree-state"
+import {
+  worktreeDisplayName,
+  worktreeTooltip,
+} from "../working-tree/working-tree-state"
 import type { Project } from "./project"
 import { worktreeGraphPanelId } from "./worktree-graph-tab"
 import type { OpenedRepository } from "../workspace/workspace"
@@ -201,27 +205,32 @@ function TabMenuItems({ api }: { api: IDockviewPanelHeaderProps["api"] }) {
   )
 }
 
-function useProjectHomePath(path: string) {
-  const [homePath, setHomePath] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    invoke<Project>("project_snapshot", { path })
-      .then((project) => {
-        if (!cancelled) {
-          setHomePath(project.path)
-        }
+function WorktreeHint({
+  path,
+  hideForHome = false,
+}: {
+  path: string
+  hideForHome?: boolean
+}) {
+  const cache = getWorktreeStatusCache(path)
+  const { projectHomePath, projectWorktrees, repository } =
+    useSyncExternalStore(cache.subscribe, cache.getSnapshot, cache.getSnapshot)
+  if (hideForHome && (projectHomePath === null || projectHomePath === path)) {
+    return null
+  }
+  const worktree =
+    repository ?
+      { branch: repository.currentBranch, path }
+    : (projectWorktrees.find((candidate) => candidate.path === path) ?? {
+        path,
       })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [path])
-  return homePath
-}
-
-function WorktreeHint({ path }: { path: string }) {
   return (
-    <span className="shrink-0 text-muted-foreground">{worktreeName(path)}</span>
+    <span
+      className="shrink-0 text-muted-foreground"
+      title={worktreeTooltip(worktree)}
+    >
+      {worktreeDisplayName(worktree)}
+    </span>
   )
 }
 
@@ -234,16 +243,34 @@ function DiffTabHint({ params }: IDockviewPanelHeaderProps) {
 
 function GraphTabHint({ params }: IDockviewPanelHeaderProps) {
   const { path } = params as RepositoryPanelParams
-  const homePath = useProjectHomePath(path)
-  return homePath !== null && homePath !== path ?
-      <WorktreeHint path={path} />
-    : null
+  return <WorktreeHint path={path} hideForHome />
+}
+
+const WorkingTreeTabLabel = panelTab(FilePen)
+
+function WorkingTreeTab(props: IDockviewPanelHeaderProps) {
+  const { path } = props.params as RepositoryPanelParams
+  const cache = getWorktreeStatusCache(path)
+  const { currentBranch } = useSyncExternalStore(
+    cache.subscribe,
+    cache.getDiffSnapshot,
+  )
+  useEffect(() => {
+    void cache.refresh("repository")
+  }, [cache])
+  useEffect(() => {
+    const title = worktreeDisplayName({ path, branch: currentBranch })
+    if (currentBranch !== undefined && props.api.title !== title) {
+      props.api.setTitle(title)
+    }
+  }, [currentBranch, path, props.api])
+  return <WorkingTreeTabLabel {...props} />
 }
 
 const repositoryTabs = {
   diff: panelTab(FileDiff, DiffTabHint),
   graph: panelTab(GitGraph, GraphTabHint),
-  "working-tree": panelTab(FilePen),
+  "working-tree": WorkingTreeTab,
 }
 
 const RepositoryContext = createContext<RepositoryPanelParams | null>(null)
@@ -297,7 +324,11 @@ function addWorkingTreePanel(
     params,
     position: { direction: "within", referencePanel },
     tabComponent: "working-tree",
-    title: worktreeName(params.path),
+    title: worktreeDisplayName({
+      path: params.path,
+      branch: getWorktreeStatusCache(params.path).getDiffSnapshot()
+        .currentBranch,
+    }),
   })
 }
 

@@ -5,9 +5,11 @@ import { isDefaultBranch } from "./diff-title"
 import {
   isRevisionExpression,
   searchReferences,
+  worktreeRefLabel,
   type Reference,
   type ReferenceSources,
 } from "./reference-search"
+import { WORKTREE_REF } from "@/lib/repository-constants"
 
 function commit(hash: string, subject: string, refs: string[] = []): Commit {
   return {
@@ -42,10 +44,36 @@ function reference(
 }
 
 const WORKTREE = {
-  headDetail: "main",
-  name: "git-nav",
+  branch: "main",
   path: "/projects/git-nav",
 }
+
+describe("worktreeRefLabel", () => {
+  test("uses the current branch or folder for HEAD and the working tree", () => {
+    const checkedOut = { ...WORKTREE, branch: "topic" }
+    const detached = { ...WORKTREE, branch: null }
+    const unread = { ...WORKTREE, branch: undefined }
+
+    expect(worktreeRefLabel("HEAD", "HEAD (main)", checkedOut)).toBe(
+      "HEAD (topic)",
+    )
+    expect(
+      worktreeRefLabel(WORKTREE_REF, "Working tree (main)", checkedOut),
+    ).toBe("Working tree (topic)")
+    expect(worktreeRefLabel("HEAD", "HEAD (main)", detached)).toBe(
+      "HEAD (git-nav)",
+    )
+    expect(worktreeRefLabel(WORKTREE_REF, "Working tree (main)", unread)).toBe(
+      "Working tree (git-nav)",
+    )
+  })
+
+  test("keeps the stored label for other refs", () => {
+    expect(worktreeRefLabel("HEAD~1", "Parent commit", WORKTREE)).toBe(
+      "Parent commit",
+    )
+  })
+})
 
 function sources(overrides: Partial<ReferenceSources> = {}): ReferenceSources {
   return {
@@ -205,8 +233,8 @@ describe("searchReferences", () => {
         worktrees: [
           WORKTREE,
           {
-            headDetail: "Detached head",
-            name: "git-nav-fix",
+            branch: "old-branch",
+            isDetached: true,
             path: "/projects/git-nav-fix",
           },
         ],
@@ -223,8 +251,8 @@ describe("searchReferences", () => {
     ).toEqual([
       [
         ":worktree",
-        "Working tree (git-nav)",
-        "Uncommitted changes",
+        "Working tree (main)",
+        "Uncommitted changes · git-nav",
         "/projects/git-nav",
       ],
       [
@@ -233,13 +261,20 @@ describe("searchReferences", () => {
         "Uncommitted changes",
         "/projects/git-nav-fix",
       ],
-      ["HEAD", "HEAD (git-nav)", "main", "/projects/git-nav"],
+      ["HEAD", "HEAD (main)", "git-nav", "/projects/git-nav"],
       ["HEAD", "HEAD (git-nav-fix)", "Detached head", "/projects/git-nav-fix"],
     ])
   })
 
+  test("does not match a detached worktree by its branch field", () => {
+    const detached = { branch: "old-branch", isDetached: true, path: "/fix" }
+    expect(
+      searchReferences("old-branch", sources({ worktrees: [detached] })),
+    ).toEqual([])
+  })
+
   test("offers the current worktree's entries first so typing a name keeps it", () => {
-    const other = { headDetail: "topic", name: "fix", path: "/projects/fix" }
+    const other = { branch: "topic", path: "/projects/fix" }
 
     expect(
       searchReferences(
@@ -247,8 +282,8 @@ describe("searchReferences", () => {
         sources({ currentWorktree: other, worktrees: [WORKTREE, other] }),
       ).map((hit) => [hit.label, hit.worktreePath]),
     ).toEqual([
-      ["HEAD (fix)", "/projects/fix"],
-      ["HEAD (git-nav)", "/projects/git-nav"],
+      ["HEAD (topic)", "/projects/fix"],
+      ["HEAD (main)", "/projects/git-nav"],
     ])
     expect(
       searchReferences(
@@ -258,20 +293,93 @@ describe("searchReferences", () => {
     ).toEqual(["/projects/fix", "/projects/git-nav"])
   })
 
-  test("offers a worktree's working tree and HEAD when its name is typed", () => {
-    const other = { headDetail: "topic", name: "fix", path: "/projects/fix" }
+  test("offers a worktree's working tree and HEAD when its folder name is typed", () => {
+    const other = { branch: "topic", path: "/projects/fix" }
 
     expect(
       searchReferences("FIX", sources({ worktrees: [WORKTREE, other] })).map(
         (hit) => [hit.label, hit.worktreePath],
       ),
     ).toEqual([
-      ["Working tree (fix)", "/projects/fix"],
-      ["HEAD (fix)", "/projects/fix"],
+      ["Working tree (topic)", "/projects/fix"],
+      ["HEAD (topic)", "/projects/fix"],
     ])
   })
 
+  test("offers a worktree's working tree and HEAD when its branch name is typed", () => {
+    const other = { branch: "feat/tab-actions", path: "/projects/fix" }
+
+    expect(
+      searchReferences(
+        "tab-act",
+        sources({ worktrees: [WORKTREE, other] }),
+      ).map((hit) => [hit.label, hit.worktreePath]),
+    ).toEqual([
+      ["Working tree (feat/tab-actions)", "/projects/fix"],
+      ["HEAD (feat/tab-actions)", "/projects/fix"],
+    ])
+  })
+
+  test.each([
+    {
+      side: "base",
+      query: "main",
+      expected: ["refs/heads/main", "refs/tags/main", "HEAD"],
+    },
+    {
+      side: "head",
+      query: "feat/x",
+      expected: ["refs/heads/feat/x", "refs/tags/feat/x", WORKTREE_REF, "HEAD"],
+    },
+  ])(
+    "ranks matching refs before branch-only worktree matches on the $side side",
+    ({ side, query, expected }) => {
+      const hits = searchReferences(
+        query,
+        sources({
+          allowWorktree: side === "head",
+          currentWorktree: { branch: "feat/x", path: "/projects/fix" },
+          references: [
+            reference(query, "branch", "aaa", `refs/heads/${query}`),
+          ],
+          commits: [commit("aaa", "update", [`refs/tags/${query}`])],
+        }),
+      )
+      expect(hits.map((hit) => hit.reference)).toEqual([...expected])
+    },
+  )
+
+  test.each([
+    ["git-nav", [WORKTREE_REF, "HEAD", "refs/heads/git-nav"]],
+    ["head", ["HEAD", "refs/heads/head"]],
+    ["working", [WORKTREE_REF, "refs/heads/working"]],
+  ] as const)(
+    "keeps worktree matches ahead of refs for %s",
+    (query, expected) => {
+      const hits = searchReferences(
+        query,
+        sources({
+          references: [
+            reference(query, "branch", "aaa", `refs/heads/${query}`),
+          ],
+        }),
+      )
+      expect(hits.map((hit) => hit.reference)).toEqual([...expected])
+    },
+  )
+
   test("offers the current worktree while the others are still being read", () => {
+    expect(
+      searchReferences(
+        "",
+        sources({
+          currentWorktree: { branch: undefined, path: "/projects/git-nav" },
+          worktrees: [],
+        }),
+      ).map((hit) => [hit.label, hit.detail, hit.worktreePath]),
+    ).toEqual([
+      ["Working tree (git-nav)", "Uncommitted changes", "/projects/git-nav"],
+    ])
     expect(
       searchReferences("", sources({ worktrees: [] })).map((hit) => [
         hit.label,
@@ -279,26 +387,30 @@ describe("searchReferences", () => {
         hit.worktreePath,
       ]),
     ).toEqual([
-      ["Working tree (git-nav)", "Uncommitted changes", "/projects/git-nav"],
-      ["HEAD (git-nav)", "main", "/projects/git-nav"],
+      [
+        "Working tree (main)",
+        "Uncommitted changes · git-nav",
+        "/projects/git-nav",
+      ],
+      ["HEAD (main)", "git-nav", "/projects/git-nav"],
     ])
   })
 
   test("puts the current worktree first once the others are read and holds back its HEAD until read", () => {
-    const other = { headDetail: "topic", name: "fix", path: "/projects/fix" }
+    const other = { branch: "topic", path: "/projects/fix" }
 
     expect(
       searchReferences(
         "",
         sources({
-          currentWorktree: { ...other, headDetail: null },
+          currentWorktree: { branch: undefined, path: "/projects/fix" },
           worktrees: [WORKTREE, other],
         }),
       ).map((hit) => [hit.label, hit.worktreePath]),
     ).toEqual([
       ["Working tree (fix)", "/projects/fix"],
-      ["Working tree (git-nav)", "/projects/git-nav"],
-      ["HEAD (git-nav)", "/projects/git-nav"],
+      ["Working tree (main)", "/projects/git-nav"],
+      ["HEAD (main)", "/projects/git-nav"],
     ])
   })
 
@@ -307,10 +419,7 @@ describe("searchReferences", () => {
       "",
       sources({
         allowWorktree: false,
-        worktrees: [
-          WORKTREE,
-          { headDetail: "topic", name: "fix", path: "/fix" },
-        ],
+        worktrees: [WORKTREE, { branch: "topic", path: "/fix" }],
       }),
     )
 

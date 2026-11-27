@@ -59,6 +59,29 @@ export function worktreeName(path: string) {
   return path.split("/").filter(Boolean).at(-1) ?? path
 }
 
+type WorktreeBranch = {
+  branch?: string | null
+  isDetached?: boolean
+}
+
+type WorktreeLabel = WorktreeBranch & {
+  path: string
+}
+
+export function worktreeBranch({ branch, isDetached }: WorktreeBranch) {
+  return isDetached ? null : branch
+}
+
+export function worktreeDisplayName(worktree: WorktreeLabel) {
+  return worktreeBranch(worktree) || worktreeName(worktree.path)
+}
+
+export function worktreeTooltip(worktree: WorktreeLabel) {
+  const folder = worktreeName(worktree.path)
+  const branch = worktreeBranch(worktree)
+  return branch ? `${folder} · ${branch}` : folder
+}
+
 // The same path can sit on both sides when only part of it is staged, so the side is part of the key.
 export function workingTreeFileKey(file: WorkingTreeFile) {
   return `${file.area}:${file.status}:${file.oldPath}:${file.newPath}`

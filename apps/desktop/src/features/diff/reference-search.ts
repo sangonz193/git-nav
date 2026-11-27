@@ -5,6 +5,11 @@ import {
   type StashEntry,
 } from "../commit-graph/commit-graph"
 import { searchGraph } from "../commit-graph/commit-graph-view"
+import {
+  worktreeBranch,
+  worktreeDisplayName,
+  worktreeName,
+} from "../working-tree/working-tree-state"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 
 const HIT_LIMIT = 50
@@ -36,9 +41,9 @@ export type ReferenceHit = {
 }
 
 export type WorktreeSource = {
-  /** What the worktree's HEAD is on, unknown until read. */
-  headDetail: string | null
-  name: string
+  /** Null when detached, undefined until the worktree's HEAD is read. */
+  branch: string | null | undefined
+  isDetached?: boolean
   path: string
 }
 
@@ -59,36 +64,42 @@ export function isRevisionExpression(query: string) {
   return revision !== WORKTREE_REF && REVISION_EXPRESSION.test(revision)
 }
 
-export function workingTreeHitLabel(name: string) {
-  return `Working tree (${name})`
+export function worktreeRefLabel(
+  reference: string,
+  label: string,
+  worktree: WorktreeSource,
+) {
+  return (
+    reference === WORKTREE_REF ?
+      `Working tree (${worktreeDisplayName(worktree)})`
+    : reference === "HEAD" ? `HEAD (${worktreeDisplayName(worktree)})`
+    : label
+  )
 }
 
-export function headHitLabel(name: string) {
-  return `HEAD (${name})`
-}
-
-function worktreeHit({ name, path }: WorktreeSource): ReferenceHit {
+function worktreeHit(worktree: WorktreeSource): ReferenceHit {
   return {
     branch: null,
-    detail: "Uncommitted changes",
+    detail:
+      worktreeBranch(worktree) ?
+        `Uncommitted changes · ${worktreeName(worktree.path)}`
+      : "Uncommitted changes",
     kind: "worktree",
-    label: workingTreeHitLabel(name),
+    label: worktreeRefLabel(WORKTREE_REF, "", worktree),
     reference: WORKTREE_REF,
-    worktreePath: path,
+    worktreePath: worktree.path,
   }
 }
 
-function headHit(
-  { name, path }: WorktreeSource,
-  headDetail: string,
-): ReferenceHit {
+function headHit(worktree: WorktreeSource): ReferenceHit {
   return {
     branch: "HEAD",
-    detail: headDetail,
+    detail:
+      worktreeBranch(worktree) ? worktreeName(worktree.path) : "Detached head",
     kind: "branch",
-    label: headHitLabel(name),
+    label: worktreeRefLabel("HEAD", "", worktree),
     reference: "HEAD",
-    worktreePath: path,
+    worktreePath: worktree.path,
   }
 }
 
@@ -144,18 +155,29 @@ export function searchReferences(
     currentWorktree,
     ...worktrees.filter((worktree) => worktree.path !== currentWorktree.path),
   ]
-  const offers = (keyword: string, { name }: WorktreeSource) =>
-    keyword.includes(needle) || name.toLowerCase().includes(needle)
+  const branchMatches: ReferenceHit[] = []
+  function offerWorktree(
+    keyword: string,
+    worktree: WorktreeSource,
+    hit: ReferenceHit,
+  ) {
+    if (
+      keyword.includes(needle) ||
+      worktreeName(worktree.path).toLowerCase().includes(needle)
+    ) {
+      hits.push(hit)
+    } else if (worktreeBranch(worktree)?.toLowerCase().includes(needle)) {
+      branchMatches.push(hit)
+    }
+  }
   if (allowWorktree) {
     for (const worktree of worktreesCurrentFirst) {
-      if (offers("working tree", worktree)) {
-        hits.push(worktreeHit(worktree))
-      }
+      offerWorktree("working tree", worktree, worktreeHit(worktree))
     }
   }
   for (const worktree of worktreesCurrentFirst) {
-    if (worktree.headDetail !== null && offers("head", worktree)) {
-      hits.push(headHit(worktree, worktree.headDetail))
+    if (worktreeBranch(worktree) !== undefined) {
+      offerWorktree("head", worktree, headHit(worktree))
     }
   }
 
@@ -170,6 +192,7 @@ export function searchReferences(
     }
   }
 
+  let afterRefs = hits.length
   // The graph's search covers what a ref list cannot: commit subjects, authors and stash messages.
   for (const hit of searchGraph(commits, query, { stashesByBase })) {
     const commit = commits[hit.commitIndex]
@@ -205,9 +228,11 @@ export function searchReferences(
           label: hit.label,
           reference,
         })
+        afterRefs = hits.length
       }
     }
   }
 
+  hits.splice(afterRefs, 0, ...branchMatches)
   return hits.slice(0, HIT_LIMIT)
 }

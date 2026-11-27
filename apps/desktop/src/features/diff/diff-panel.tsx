@@ -26,6 +26,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react"
 
 import { Button } from "@workspace/shadcn/components/button"
@@ -64,19 +65,16 @@ import {
   type CommitBatch,
   type StashEntry,
 } from "../commit-graph/commit-graph"
+import { getWorktreeStatusCache } from "../commit-graph/worktree-status-cache"
 import {
-  headHitLabel,
   isRevisionExpression,
   searchReferences,
-  workingTreeHitLabel,
+  worktreeRefLabel,
   type HitKind,
   type Reference,
   type ReferenceHit,
   type ResolvedRevision,
-  type WorktreeSource,
 } from "./reference-search"
-import type { Project, Worktree } from "../repository/project"
-import { worktreeName } from "../working-tree/working-tree-state"
 import {
   branchRangeTitle,
   defaultBranchName,
@@ -199,63 +197,6 @@ function comparisonFingerprint(path: string, head: string) {
 }
 
 /**
- * What the repository itself is, rather than what it holds. A title names a comparison the moment it is
- * chosen, so this is read up front instead of alongside the picker it would otherwise be tied to.
- */
-function useRepositoryMetadata(path: string, version: number) {
-  const [defaultBranch, setDefaultBranch] = useState<string | null>(null)
-  const [headDetail, setHeadDetail] = useState<string | null>(null)
-  const [remotes, setRemotes] = useState<string[]>()
-
-  useEffect(() => {
-    let cancelled = false
-    invoke<{
-      currentBranch: string | null
-      defaultBranch: string | null
-      remotes: string[]
-    }>("repository_state", { repoPath: path })
-      .then((state) => {
-        if (!cancelled) {
-          setDefaultBranch(state.defaultBranch)
-          setRemotes(state.remotes)
-          setHeadDetail(state.currentBranch ?? "Detached head")
-        }
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [path, version])
-
-  return useMemo(
-    () => ({ defaultBranch, headDetail, remotes }),
-    [defaultBranch, headDetail, remotes],
-  )
-}
-
-function worktreeSource({ branch, isDetached, path }: Worktree) {
-  return {
-    headDetail: isDetached ? "Detached head" : branch,
-    name: worktreeName(path),
-    path,
-  }
-}
-
-// A side that reads a worktree keeps naming the worktree it reads once the comparison moves to another.
-function labelsForWorktree(refs: SelectedRefs, path: string) {
-  const name = worktreeName(path)
-  const sideLabel = (reference: string, label: string) =>
-    reference === WORKTREE_REF ? workingTreeHitLabel(name)
-    : reference === "HEAD" ? headHitLabel(name)
-    : label
-  return {
-    ...refs,
-    baseLabel: sideLabel(refs.base, refs.baseLabel),
-    headLabel: sideLabel(refs.head, refs.headLabel),
-  }
-}
-
-/**
  * Everything a diff side can be pointed at. Refs come from the repository rather than the graph window,
  * so a branch is reachable however far back its tip sits.
  */
@@ -263,7 +204,6 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
   const [commits, setCommits] = useState<Commit[]>([])
   const [references, setReferences] = useState<Reference[]>([])
   const [stashes, setStashes] = useState<StashEntry[]>([])
-  const [worktrees, setWorktrees] = useState<WorktreeSource[]>([])
 
   useEffect(() => {
     if (!enabled) {
@@ -281,24 +221,14 @@ function useReferenceSources(path: string, enabled: boolean, version: number) {
     invoke<CommitBatch>("reference_picker_commits", { repoPath: path })
       .then((batch) => settle(batch.map(commitFromTuple), setCommits))
       .catch(() => undefined)
-    invoke<Project>("project_snapshot", { path })
-      .then((project) =>
-        settle(
-          project.worktrees
-            .filter((worktree) => !worktree.isPrunable)
-            .map(worktreeSource),
-          setWorktrees,
-        ),
-      )
-      .catch(() => undefined)
     return () => {
       cancelled = true
     }
   }, [enabled, path, version])
 
   return useMemo(
-    () => ({ commits, references, stashes, worktrees }),
-    [commits, references, stashes, worktrees],
+    () => ({ commits, references, stashes }),
+    [commits, references, stashes],
   )
 }
 
@@ -392,8 +322,26 @@ export function DiffPanel({
     comparisonScope,
     comparison?.files,
   )
-  const metadata = useRepositoryMetadata(worktreePath, version)
-  const sources = useReferenceSources(worktreePath, picker !== null, version)
+  const worktreeStatusCache = getWorktreeStatusCache(worktreePath)
+  const { currentBranch, defaultBranch, remotes, worktrees } =
+    useSyncExternalStore(
+      worktreeStatusCache.subscribe,
+      worktreeStatusCache.getDiffSnapshot,
+      worktreeStatusCache.getDiffSnapshot,
+    )
+  const currentWorktree = { branch: currentBranch, path: worktreePath }
+  const baseLabel = worktreeRefLabel(refs.base, refs.baseLabel, currentWorktree)
+  const headLabel = worktreeRefLabel(refs.head, refs.headLabel, currentWorktree)
+  const pickerOpen = picker !== null
+  const sources = useReferenceSources(worktreePath, pickerOpen, version)
+
+  useEffect(() => {
+    void worktreeStatusCache.refresh("repository", version > 0)
+  }, [worktreeStatusCache, version])
+  useEffect(() => {
+    if (pickerOpen) void worktreeStatusCache.refresh("project")
+  }, [pickerOpen, worktreeStatusCache, version])
+
   const shownFiles = useMemo(
     () =>
       hideViewed ?
@@ -737,13 +685,21 @@ export function DiffPanel({
           ...sources,
           allowWorktree: picker === "head",
           currentWorktree: {
-            headDetail: metadata.headDetail,
-            name: worktreeName(worktreePath),
+            branch: currentBranch,
             path: worktreePath,
           },
           revision,
+          worktrees,
         }),
-    [metadata.headDetail, picker, revision, searchQuery, sources, worktreePath],
+    [
+      currentBranch,
+      picker,
+      revision,
+      searchQuery,
+      sources,
+      worktreePath,
+      worktrees,
+    ],
   )
   const clearFileSelection = useCallback(() => {
     pendingRestoredFilePath.current = null
@@ -762,28 +718,23 @@ export function DiffPanel({
             selection.headRef,
             true,
           )
-          const range =
-            path === worktreePath ? selected : labelsForWorktree(selected, path)
           clearFileSelection()
           setViewed(new Map())
           setHandFolds(new Map())
           setExpanded(new Set())
           setAllExpanded(new Set())
-          setRefs(range)
+          setRefs(selected)
           setWorktreePath(path)
-          api.setTitle(branchRangeTitle(range))
+          api.setTitle(branchRangeTitle(selected))
         })
         .catch((message: unknown) => setError(String(message)))
       setPicker(null)
     },
-    [api, clearFileSelection, worktreePath],
+    [api, clearFileSelection],
   )
   // Measuring a branch from where it forked moves both ends of the comparison, which is only what the
   // head end is asking for. Naming the branch it forked from is what keeps that from being a surprise.
-  const forkBase = defaultBranchName(
-    metadata.defaultBranch,
-    metadata.remotes ?? [],
-  )
+  const forkBase = defaultBranchName(defaultBranch, remotes)
   const menuItems = useMemo(
     () =>
       hits.map((hit, index): SearchMenuItem => ({
@@ -791,11 +742,7 @@ export function DiffPanel({
           (
             picker !== "head" ||
             hit.branch === null ||
-            isDefaultBranch(
-              hit.branch,
-              metadata.defaultBranch,
-              metadata.remotes ?? [],
-            )
+            isDefaultBranch(hit.branch, defaultBranch, remotes)
           ) ?
             undefined
           : {
@@ -814,11 +761,11 @@ export function DiffPanel({
         label: hit.label,
       })),
     [
+      defaultBranch,
       forkBase,
       hits,
-      metadata.defaultBranch,
-      metadata.remotes,
       picker,
+      remotes,
       selectAheadRange,
       worktreePath,
     ],
@@ -938,17 +885,14 @@ export function DiffPanel({
   // Moving either end of the comparison leaves behind marks, folds and expanded files that were made against
   // a different one.
   function moveRefs(next: SelectedRefs, path: string) {
-    const moved = path === worktreePath ? next : labelsForWorktree(next, path)
     clearFileSelection()
     setViewed(new Map())
     setHandFolds(new Map())
     setExpanded(new Set())
     setAllExpanded(new Set())
-    setRefs(moved)
+    setRefs(next)
     setWorktreePath(path)
-    api.setTitle(
-      diffTitle(moved, metadata.defaultBranch, metadata.remotes ?? []),
-    )
+    api.setTitle(diffTitle(next, defaultBranch, remotes))
   }
 
   function selectHit(hit: ReferenceHit) {
@@ -1133,7 +1077,7 @@ export function DiffPanel({
             type="button"
             variant="outline"
           >
-            <span className="truncate">{refs.baseLabel}</span>
+            <span className="truncate">{baseLabel}</span>
             <ChevronDown />
           </Button>
         </PopoverTrigger>
@@ -1144,8 +1088,8 @@ export function DiffPanel({
           refs.base === EMPTY_TREE_REF ?
             "There is no fork point for an empty base."
           : refs.mergeBase ?
-            `Changes on ${refs.headLabel} since it forked from ${refs.baseLabel}`
-          : `Changes between ${refs.baseLabel} and ${refs.headLabel}`
+            `Changes on ${headLabel} since it forked from ${baseLabel}`
+          : `Changes between ${baseLabel} and ${headLabel}`
         }
       >
         <span className="inline-flex">
@@ -1181,7 +1125,7 @@ export function DiffPanel({
             type="button"
             variant="outline"
           >
-            <HeadPickerLabel label={refs.headLabel} reference={refs.head} />
+            <HeadPickerLabel label={headLabel} reference={refs.head} />
             <ChevronDown />
           </Button>
         </PopoverTrigger>

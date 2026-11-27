@@ -53,6 +53,7 @@ import { Hinted } from "@/components/hinted"
 import { RepositoryLayoutDraftsContext } from "@/lib/repository-layout-drafts"
 import { useTheme } from "@/components/theme-provider"
 import { PENDING_OPERATION_LABELS } from "../commit-graph/commit-graph"
+import { getWorktreeStatusCache } from "../commit-graph/worktree-status-cache"
 import type { OperationResult } from "../commit-graph/commit-operations"
 import { FileDiffCard, FileTree } from "../diff/diff-cards"
 import { FileStat } from "../diff/file-stat"
@@ -90,6 +91,7 @@ import {
   workingTreeDraft,
   workingTreeFileKey,
   workingTreeFiles,
+  worktreeDisplayName,
   worktreeName,
   type Area,
   type AmendingHead,
@@ -232,7 +234,7 @@ function useWorktrees(path: string, enabled: boolean) {
 function worktreeDetail(worktree: WorktreeStatus) {
   const changes = worktree.changedFiles + worktree.untrackedFiles
   return [
-    worktree.isDetached ? "Detached" : worktree.branch,
+    worktree.isDetached ? "Detached" : worktreeName(worktree.path),
     changes > 0 && `${changes.toLocaleString()} uncommitted`,
   ]
     .filter(Boolean)
@@ -383,6 +385,10 @@ export function WorkingTreePanel({
   )
   const applySnapshot = useCallback(
     (snapshot: Snapshot) => {
+      const cache = getWorktreeStatusCache(params.path)
+      if (cache.getDiffSnapshot().currentBranch !== snapshot.tree.branch) {
+        void cache.refresh("repository", true)
+      }
       if (
         amendingHead.current &&
         amendHeadChanged(amendingHead.current, snapshot.tree)
@@ -390,7 +396,7 @@ export function WorkingTreePanel({
         resetAmend(amendingHead.current.headMessage)
       }
     },
-    [resetAmend],
+    [params.path, resetAmend],
   )
   const { error, refresh, tree } = useWorkingTree(
     params.path,
@@ -723,7 +729,7 @@ export function WorkingTreePanel({
       path: worktree.path,
       selectedFilePath: null,
     })
-    api.setTitle(worktreeName(worktree.path))
+    api.setTitle(worktreeDisplayName(worktree))
   }
 
   const stagedCount = tree?.staged.length ?? 0
@@ -911,10 +917,15 @@ export function WorkingTreePanel({
           >
             <span className="flex min-w-0 items-center gap-1.5">
               <AppWindow className="shrink-0 text-muted-foreground" />
-              <span className="truncate">{worktreeName(params.path)}</span>
+              <span className="truncate">
+                {worktreeDisplayName({
+                  branch: tree?.branch,
+                  path: params.path,
+                })}
+              </span>
               {tree && (
                 <span className="truncate text-xs text-muted-foreground">
-                  {tree.branch ?? "Detached"}
+                  {tree.branch ? worktreeName(params.path) : "Detached"}
                 </span>
               )}
             </span>
@@ -931,7 +942,9 @@ export function WorkingTreePanel({
             >
               <AppWindow />
               <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">{worktreeName(worktree.path)}</span>
+                <span className="truncate">
+                  {worktreeDisplayName(worktree)}
+                </span>
                 <span className="truncate text-xs text-muted-foreground">
                   {worktreeDetail(worktree)}
                 </span>
