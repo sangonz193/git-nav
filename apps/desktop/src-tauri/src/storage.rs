@@ -5,7 +5,7 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 use crate::git::resolve_project_id;
-use crate::projects::{WindowProjects, project_at, project_with_id};
+use crate::projects::{project_at, project_with_id};
 
 pub(crate) const APPLICATION_IDENTIFIER: &str = "com.gitnav.desktop";
 pub(crate) const SETTING_CHANGED_EVENT: &str = "setting-changed";
@@ -195,7 +195,7 @@ pub(crate) fn load_project_layout(project: String, client_id: String) -> Result<
 }
 
 fn load_project_layout_at(storage_path: &Path, project: &str, client_id: &str) -> Result<ProjectLayout, String> {
-    let project = project_with_id(project, &WindowProjects::default())?;
+    let project = project_with_id(project)?;
     let contents = match fs::read_to_string(storage_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -255,7 +255,7 @@ pub(crate) fn migrate_repository_layouts() -> Result<(), String> {
 }
 
 fn home_project_id(path: &str) -> Option<String> {
-    project_at(path, &WindowProjects::default())
+    project_at(path)
         .ok()
         .filter(|project| project.path == path)
         .map(|project| project.id)

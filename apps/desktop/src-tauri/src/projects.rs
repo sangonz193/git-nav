@@ -1,13 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap, collections::HashSet, fs, path::Path, path::PathBuf, sync::Arc,
-    sync::Mutex,
-};
+use std::{collections::HashSet, fs, path::Path, path::PathBuf};
 use tauri::{AppHandle, Emitter};
 use crate::storage::{data_dir, malformed_settings_path, with_locked_file, write_json_atomically};
 use crate::git::{git_output_bytes, project_id, resolve_project_id, worktree_name, worktree_path};
 use crate::window::update_recent_menu;
-use crate::window_sessions::WindowSession;
 
 const SIDEBAR_PROJECTS_CHANGED_EVENT: &str = "sidebar-projects-changed";
 
@@ -24,7 +20,6 @@ pub(crate) struct Worktree {
     is_detached: bool,
     is_locked: bool,
     is_prunable: bool,
-    is_open: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -71,9 +66,6 @@ pub(crate) struct DirectoryListing {
     is_repository: bool,
     entries: Vec<DirectoryEntry>,
 }
-
-#[derive(Clone, Default)]
-pub(crate) struct WindowProjects(pub(crate) Arc<Mutex<HashMap<String, WindowSession>>>);
 
 
 #[derive(Default, Deserialize, Serialize)]
@@ -171,7 +163,7 @@ pub(crate) fn remove_sidebar_project_at(id: &str, app: Option<&AppHandle>) -> Re
     Ok(())
 }
 
-pub(crate) fn sidebar_project_list(window_projects: &WindowProjects) -> Result<Vec<Project>, String> {
+pub(crate) fn sidebar_project_list() -> Result<Vec<Project>, String> {
     let path = sidebar_projects_path()?;
     let stored = match read_sidebar(&path)? {
         StoredSidebar::Listed(projects) => projects,
@@ -180,7 +172,7 @@ pub(crate) fn sidebar_project_list(window_projects: &WindowProjects) -> Result<V
     let mut project_ids = HashSet::new();
     Ok(stored
         .into_iter()
-        .filter_map(|id| project_from_id(id, window_projects).ok())
+        .filter_map(|id| project_from_id(id).ok())
         .filter(|project| project_ids.insert(project.id.clone()))
         .collect())
 }
@@ -334,15 +326,15 @@ fn project_name(path: &str) -> String {
     name.strip_suffix(".git").map(str::to_string).unwrap_or(name)
 }
 
-pub(crate) fn project_at(path: &str, window_projects: &WindowProjects) -> Result<Project, String> {
-    project_from_id(project_id(path)?, window_projects)
+pub(crate) fn project_at(path: &str) -> Result<Project, String> {
+    project_from_id(project_id(path)?)
 }
 
-pub(crate) fn project_with_id(id: &str, window_projects: &WindowProjects) -> Result<Project, String> {
-    project_from_id(resolve_project_id(id)?, window_projects)
+pub(crate) fn project_with_id(id: &str) -> Result<Project, String> {
+    project_from_id(resolve_project_id(id)?)
 }
 
-fn project_from_id(id: String, window_projects: &WindowProjects) -> Result<Project, String> {
+fn project_from_id(id: String) -> Result<Project, String> {
     let output = git_output_bytes(&id, &["--git-dir", ".", "worktree", "list", "--porcelain", "-z"])
         .ok_or_else(|| "Could not list Git worktrees.".to_string())?;
     let output = String::from_utf8(output).map_err(|error| error.to_string())?;
@@ -352,7 +344,7 @@ fn project_from_id(id: String, window_projects: &WindowProjects) -> Result<Proje
         .map(|record| project_name(&record.path))
         .ok_or_else(|| "No usable Git worktrees were found.".to_string())?;
     // A bare repository lists itself first without being a worktree anyone can open.
-    let mut worktrees = records
+    let worktrees = records
         .into_iter()
         .filter(|record| !record.is_bare)
         .map(normalize_worktree_record)
@@ -366,7 +358,6 @@ fn project_from_id(id: String, window_projects: &WindowProjects) -> Result<Proje
                 is_detached: worktree.is_detached,
                 is_locked: worktree.is_locked,
                 is_prunable: worktree.is_prunable,
-                is_open: false,
             }
         })
         .collect::<Vec<_>>();
@@ -376,15 +367,6 @@ fn project_from_id(id: String, window_projects: &WindowProjects) -> Result<Proje
         .find(|worktree| !worktree.is_prunable && worktree_path(&worktree.path).is_ok())
         .map(|worktree| worktree.path.clone())
         .ok_or_else(|| "No usable Git worktrees were found.".to_string())?;
-    let shown = window_projects
-        .0
-        .lock()
-        .map_err(|error| error.to_string())?
-        .values()
-        .any(|session| session.active.as_ref().is_some_and(|active| active.project == id));
-    if let Some(worktree) = worktrees.iter_mut().find(|worktree| worktree.path == home) {
-        worktree.is_open = shown;
-    }
     Ok(Project {
         id,
         name,
@@ -393,30 +375,25 @@ fn project_from_id(id: String, window_projects: &WindowProjects) -> Result<Proje
     })
 }
 
-pub(crate) fn recent_project_list(window_projects: &WindowProjects) -> Result<Vec<Project>, String> {
+pub(crate) fn recent_project_list() -> Result<Vec<Project>, String> {
     let mut project_ids = HashSet::new();
     Ok(load_recent_paths()?
         .into_iter()
-        .filter_map(|path| project_at(&path, window_projects).ok())
+        .filter_map(|path| project_at(&path).ok())
         .filter(|project| project_ids.insert(project.id.clone()))
         .collect())
 }
 
-pub(crate) fn remember_repository(
-    path: &str,
-    window_projects: &WindowProjects,
-    app: Option<&AppHandle>,
-) -> Result<Project, String> {
-    let worktree_path = worktree_path(path)?;
-    let project = project_at(&worktree_path, window_projects)?;
+pub(crate) fn remember_repository(path: &str, app: Option<&AppHandle>) -> Result<Project, String> {
+    let project = project_at(&worktree_path(path)?)?;
     add_sidebar_project(&project.id, app)?;
     save_recent_path(&project.path, app)?;
     Ok(project)
 }
 
 #[tauri::command]
-pub(crate) fn recent_projects(window_projects: tauri::State<WindowProjects>) -> Result<Vec<Project>, String> {
-    recent_project_list(&window_projects)
+pub(crate) fn recent_projects() -> Result<Vec<Project>, String> {
+    recent_project_list()
 }
 
 #[tauri::command]
@@ -425,8 +402,8 @@ pub(crate) fn clear_recent_projects(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command(async)]
-pub(crate) fn sidebar_projects(window_projects: tauri::State<WindowProjects>) -> Result<Vec<Project>, String> {
-    sidebar_project_list(&window_projects)
+pub(crate) fn sidebar_projects() -> Result<Vec<Project>, String> {
+    sidebar_project_list()
 }
 
 #[tauri::command(async)]
@@ -435,19 +412,13 @@ pub(crate) fn remove_sidebar_project(app: AppHandle, project: String) -> Result<
 }
 
 #[tauri::command]
-pub(crate) fn project_snapshot(
-    path: String,
-    window_projects: tauri::State<WindowProjects>,
-) -> Result<Project, String> {
-    project_at(&path, &window_projects)
+pub(crate) fn project_snapshot(path: String) -> Result<Project, String> {
+    project_at(&path)
 }
 
 #[tauri::command(async)]
-pub(crate) fn project_by_id(
-    project: String,
-    window_projects: tauri::State<WindowProjects>,
-) -> Result<Project, String> {
-    project_with_id(&project, &window_projects)
+pub(crate) fn project_by_id(project: String) -> Result<Project, String> {
+    project_with_id(&project)
 }
 
 #[cfg(test)]
@@ -474,34 +445,6 @@ mod tests {
             seeded_sidebar(Ok(vec![path.clone(), id.clone(), format!("{path}/missing")])),
             vec![id]
         );
-        remove_scratch_repository(&path);
-    }
-
-    #[test]
-    fn project_marks_only_the_home_of_a_project_shown_in_a_window_as_open() {
-        let (path, run) = scratch_repository("project-open-worktrees");
-        run(&["commit", "--allow-empty", "--quiet", "-m", "init"]);
-        let linked = format!("{path}-linked");
-        run(&["worktree", "add", "--quiet", "-b", "linked", &linked]);
-        let linked = worktree_path(&linked).unwrap();
-        let window_projects = WindowProjects::default();
-        assert!(project_at(&path, &window_projects).unwrap().worktrees.iter().all(|worktree| !worktree.is_open));
-        window_projects.0.lock().unwrap().insert(
-            "main".to_string(),
-            WindowSession {
-                label: "main".to_string(),
-                active: Some(crate::window_sessions::ActiveProject {
-                    project: project_id(&path).unwrap(),
-                }),
-            },
-        );
-
-        let project = project_at(&linked, &window_projects).unwrap();
-        assert_eq!(project.worktrees.len(), 2);
-        assert_eq!(project.worktrees[0].path, project.path);
-        assert!(project.worktrees[0].is_open);
-        assert!(!project.worktrees[1].is_open);
-        remove_scratch_repository(&linked);
         remove_scratch_repository(&path);
     }
 
@@ -613,9 +556,8 @@ mod tests {
             path
         }).collect::<Vec<_>>();
         write_recent_paths(repositories[..8].to_vec()).unwrap();
-        let open = WindowProjects::default();
-        remember_repository(&repositories[8], &open, None).unwrap();
-        let projects = sidebar_project_list(&open).unwrap();
+        remember_repository(&repositories[8], None).unwrap();
+        let projects = sidebar_project_list().unwrap();
         assert_eq!(projects.len(), 9);
         assert_eq!(projects[7].id, project_id(&repositories[7]).unwrap());
         assert_eq!(load_recent_paths().unwrap().len(), MAX_RECENT_REPOSITORIES);
@@ -624,8 +566,8 @@ mod tests {
         assert!(git_result(&repositories[0], &["clone", "--bare", "--quiet", &repositories[0], &bare]).unwrap().status.success());
         assert!(git_result(&repositories[0], &["--git-dir", &bare, "worktree", "add", "--quiet", &checkout, "main"]).unwrap().status.success());
         assert!(project_id(&bare).is_err());
-        let opened = remember_repository(&checkout, &open, None).unwrap();
-        let projects = sidebar_project_list(&open).unwrap();
+        let opened = remember_repository(&checkout, None).unwrap();
+        let projects = sidebar_project_list().unwrap();
         assert!(projects.iter().any(|project| project.id == opened.id && project.path == opened.path));
         for path in repositories { remove_scratch_repository(&path); }
     }
@@ -642,7 +584,7 @@ mod tests {
         fs::write(Path::new(&checkout).join("tracked"), "changed").unwrap();
         let git_dir = project_id(&checkout).unwrap();
         fs::write(Path::new(&git_dir).join("MERGE_HEAD"), "abc").unwrap();
-        let project = project_at(&checkout, &WindowProjects::default()).unwrap();
+        let project = project_at(&checkout).unwrap();
         assert_eq!(project.path, checkout);
         for filter in [None, Some(vec![checkout.clone()])] {
             let statuses = crate::worktrees::worktree_status(checkout.clone(), filter).unwrap();
@@ -668,7 +610,7 @@ mod tests {
         run(&["--git-dir", &bare, "worktree", "add", "--quiet", "-b", "existing", &existing]);
         run(&["--git-dir", &bare, "worktree", "lock", &missing]);
         remove_scratch_repository(&missing);
-        let project = project_from_id(project_id(&existing).unwrap(), &WindowProjects::default()).unwrap();
+        let project = project_from_id(project_id(&existing).unwrap()).unwrap();
         assert!(project.worktrees[0].is_locked);
         assert!(!project.worktrees[0].is_prunable);
         assert_eq!(project.path, worktree_path(&existing).unwrap());
@@ -688,7 +630,7 @@ mod tests {
         assert!(git_result(&path, &["clone", "--bare", "--quiet", &path, &bare]).unwrap().status.success());
         assert!(git_result(&bare, &["worktree", "add", "--quiet", &checkout, "main"]).unwrap().status.success());
 
-        let project = project_at(&checkout, &WindowProjects::default()).unwrap();
+        let project = project_at(&checkout).unwrap();
 
         assert_eq!(project.path, worktree_path(&checkout).unwrap());
         assert_eq!(project.name, format!("{}-origin", worktree_name(&path)));
@@ -696,7 +638,7 @@ mod tests {
         assert!(!project.worktrees[0].is_main);
         assert_eq!(project_id(&bare).unwrap(), project.id);
         assert_eq!(
-            project_from_id(project.id.clone(), &WindowProjects::default()).unwrap().path,
+            project_from_id(project.id.clone()).unwrap().path,
             project.path
         );
         remove_scratch_repository(&checkout);

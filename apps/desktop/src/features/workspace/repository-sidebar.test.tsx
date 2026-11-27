@@ -16,7 +16,6 @@ function worktree(path: string, branch: string, isMain: boolean) {
     isDetached: false,
     isLocked: false,
     isPrunable: false,
-    isOpen: false,
   }
 }
 

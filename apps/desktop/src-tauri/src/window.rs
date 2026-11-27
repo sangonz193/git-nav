@@ -15,7 +15,7 @@ use tauri::{
 use crate::storage::{
     SETTING_CHANGED_EVENT, SettingChanged, load_settings, save_setting_at_then, settings_path,
 };
-use crate::projects::{WindowProjects, remember_repository};
+use crate::projects::remember_repository;
 use crate::git::resolve_project_id;
 use crate::sharing::TrayExit;
 use crate::window_sessions::{
@@ -211,11 +211,7 @@ pub(crate) fn update_recent_menu(app: Option<&AppHandle>) {
     let generation = state.rebuild_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let list_app = app.clone();
-        let projects = tauri::async_runtime::spawn_blocking(move || {
-            recent_project_list(&list_app.state::<WindowProjects>())
-        })
-        .await;
+        let projects = tauri::async_runtime::spawn_blocking(recent_project_list).await;
         let projects = match projects {
             Ok(Ok(projects)) => projects,
             Ok(Err(error)) => {
@@ -389,6 +385,9 @@ fn disable_browser_accelerator_keys(window: &WebviewWindow) -> Result<(), String
         })
         .map_err(|error| error.to_string())
 }
+
+#[derive(Default)]
+pub(crate) struct WindowProjects(Mutex<HashMap<String, WindowSession>>);
 
 #[derive(Default)]
 pub(crate) struct PendingRepositories(Mutex<HashMap<String, Vec<ActiveProject>>>);
@@ -867,7 +866,7 @@ fn deliver_repository(
 }
 
 fn resolve_opened(app: &AppHandle, path: &str) -> Result<ActiveProject, String> {
-    let project = remember_repository(path, &app.state::<WindowProjects>(), Some(app))?;
+    let project = remember_repository(path, Some(app))?;
     Ok(ActiveProject { project: project.id })
 }
 

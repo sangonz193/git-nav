@@ -30,9 +30,8 @@ mod worktrees;
 mod test_support;
 
 use storage::load_settings;
-use projects::WindowProjects;
 use window::{
-    LastFocusedWindow, PendingRepositories, WindowLabels, open_repository_window,
+    LastFocusedWindow, PendingRepositories, WindowLabels, WindowProjects, open_repository_window,
     repository_path_from_args, restore_windows, sharing_survives_window_close,
     should_keep_sharing_without_windows, show_windows, target_window,
 };

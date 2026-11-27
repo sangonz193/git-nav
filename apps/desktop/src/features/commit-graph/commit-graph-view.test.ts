@@ -72,7 +72,6 @@ const worktree: RowWorktree = {
   changedFiles: 0,
   head: "d",
   isCurrent: false,
-  isOpen: false,
   name: "feature",
   path: "/tmp/feature",
   pendingOperation: null,

@@ -148,7 +148,6 @@ export function useGraphData({
         changedFiles: status?.changedFiles ?? 0,
         head: worktree.head,
         isCurrent: worktree.path === repoPath,
-        isOpen: worktree.isOpen,
         name: worktree.name,
         path: worktree.path,
         pendingOperation: status?.pendingOperation ?? null,

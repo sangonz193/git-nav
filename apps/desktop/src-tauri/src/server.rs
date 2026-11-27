@@ -28,7 +28,7 @@ use tower_http::compression::{
 use crate::{
     IpcCommand,
     projects::{
-        WindowProjects, directory_listing, project_at, project_with_id, recent_project_list, remember_repository,
+        directory_listing, project_at, project_with_id, recent_project_list, remember_repository,
         remove_sidebar_project_at, sidebar_project_list,
     },
     graph::walk_commit_graph_page,
@@ -55,7 +55,6 @@ pub(crate) struct Options {
 }
 
 struct ServerState {
-    window_projects: WindowProjects,
     token: Option<String>,
 }
 
@@ -288,7 +287,7 @@ struct BoundServer {
 
 // Binding synchronously lets the single-instance callback start a server from inside the async
 // runtime, where block_on panics.
-fn bind(options: Options, window_projects: WindowProjects) -> Result<BoundServer, String> {
+fn bind(options: Options) -> Result<BoundServer, String> {
     // The assets are embedded from a frontend build that a bare `cargo test` never runs, and the
     // tests that bind a server are about the listener rather than what it serves.
     if !cfg!(test) && asset("index.html").is_none() {
@@ -296,7 +295,6 @@ fn bind(options: Options, window_projects: WindowProjects) -> Result<BoundServer
     }
 
     let state = Arc::new(ServerState {
-        window_projects,
         token: options.token.clone(),
     });
 
@@ -350,8 +348,8 @@ fn bind(options: Options, window_projects: WindowProjects) -> Result<BoundServer
     })
 }
 
-pub(crate) fn start(options: Options, window_projects: WindowProjects) -> Result<RunningServer, String> {
-    let BoundServer { options, state, listener, router } = bind(options, window_projects)?;
+pub(crate) fn start(options: Options) -> Result<RunningServer, String> {
+    let BoundServer { options, state, listener, router } = bind(options)?;
     let (shutdown, stopped) = oneshot::channel();
     let (released_sender, released) = std::sync::mpsc::channel();
     let stopped = async { let _ = stopped.await; }.shared();
@@ -381,7 +379,7 @@ pub(crate) fn start(options: Options, window_projects: WindowProjects) -> Result
 }
 
 pub async fn serve(options: Options) -> Result<(), String> {
-    let BoundServer { state, listener, router, .. } = bind(options, WindowProjects::default())?;
+    let BoundServer { state, listener, router, .. } = bind(options)?;
     for url in &state.entry_urls {
         println!("Git Nav is serving at {url}");
     }
@@ -593,17 +591,16 @@ fn index_html() -> Response {
     }
 }
 
-async fn recent_projects(State(state): State<Arc<ServerState>>) -> CommandResult {
-    ok(recent_project_list(&state.window_projects)?)
+async fn recent_projects() -> CommandResult {
+    ok(recent_project_list()?)
 }
 
 async fn clear_recent_projects() -> CommandResult {
     ok(blocking(|| crate::projects::clear_recent_paths(None)).await?)
 }
 
-async fn sidebar_projects(State(state): State<Arc<ServerState>>) -> CommandResult {
-    let window_projects = state.window_projects.clone();
-    ok(blocking(move || sidebar_project_list(&window_projects)).await?)
+async fn sidebar_projects() -> CommandResult {
+    ok(blocking(sidebar_project_list).await?)
 }
 
 #[derive(Deserialize)]
@@ -677,31 +674,22 @@ async fn save_project_layout(Json(args): Json<SaveProjectLayoutArgs>) -> Command
     )
 }
 
-async fn project_snapshot(
-    State(state): State<Arc<ServerState>>,
-    Json(args): Json<PathArg>,
-) -> CommandResult {
+async fn project_snapshot(Json(args): Json<PathArg>) -> CommandResult {
     let path = args.path.unwrap_or_default();
-    ok(project_at(&path, &state.window_projects)?)
+    ok(project_at(&path)?)
 }
 
-async fn project_by_id(
-    State(state): State<Arc<ServerState>>,
-    Json(args): Json<ProjectArg>,
-) -> CommandResult {
-    ok(blocking(move || project_with_id(&args.project, &state.window_projects)).await?)
+async fn project_by_id(Json(args): Json<ProjectArg>) -> CommandResult {
+    ok(blocking(move || project_with_id(&args.project)).await?)
 }
 
-fn opened_project(path: &str, state: &ServerState) -> Result<Value, String> {
-    let project = remember_repository(path, &state.window_projects, None)?;
+fn opened_project(path: &str) -> Result<Value, String> {
+    let project = remember_repository(path, None)?;
     Ok(json!({ "project": project.id }))
 }
 
-async fn open_repository(
-    State(state): State<Arc<ServerState>>,
-    Json(args): Json<PathArg>,
-) -> CommandResult {
-    ok(opened_project(&args.path.unwrap_or_default(), &state)?)
+async fn open_repository(Json(args): Json<PathArg>) -> CommandResult {
+    ok(opened_project(&args.path.unwrap_or_default())?)
 }
 
 async fn open_worktree(Json(args): Json<WorktreeArgs>) -> CommandResult {
@@ -882,7 +870,6 @@ mod tests {
                 token: None,
                 public_url: None,
             },
-            WindowProjects::default(),
         )
         .unwrap();
 
@@ -901,7 +888,7 @@ mod tests {
 
     #[test]
     fn stopping_waits_for_the_listener_to_close() {
-        let server = start(local_options(0), WindowProjects::default()).unwrap();
+        let server = start(local_options(0)).unwrap();
 
         // Jam every runtime worker so the server task cannot close its listener promptly; a stop()
         // that gave up on the release instead of waiting for it would report false here.
@@ -937,7 +924,7 @@ mod tests {
             path: "shot.png".to_string(),
             mime: "image/png",
         });
-        let server = start(local_options(0), WindowProjects::default()).unwrap();
+        let server = start(local_options(0)).unwrap();
         let port = server.state().port.unwrap();
 
         let (head, body) = http_get(port, &format!("/api/diff_image/{token}"));

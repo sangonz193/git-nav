@@ -7,7 +7,6 @@ export type Worktree = {
   isDetached: boolean
   isLocked: boolean
   isPrunable: boolean
-  isOpen: boolean
 }
 
 export type Project = {
