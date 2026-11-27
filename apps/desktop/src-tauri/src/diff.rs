@@ -64,8 +64,7 @@ fn finish_patch_block(files: &mut [FileStat], deletions: &mut u32, additions: &m
     }
 }
 
-// Unchanged lines above a hunk, which the view folds behind a hunk row. A side with no lines in the hunk
-// names the line before it rather than its first.
+// Git's header for a side with no lines names the line before the hunk.
 fn lines_before_hunk(header: &str) -> Option<u32> {
     let old = header.strip_prefix("@@ -")?.split(' ').next()?;
     let (start, length) = old.split_once(',').unwrap_or((old, "1"));
@@ -73,8 +72,7 @@ fn lines_before_hunk(header: &str) -> Option<u32> {
     Some(if length == 0 { start } else { start.saturating_sub(1) })
 }
 
-// Matches `--unified=3` in PATCH_ARGUMENTS: a last hunk that ends on fewer unchanged lines ran into the
-// end of the file.
+// Must match --unified=3 in PATCH_ARGUMENTS; less trailing context means end of file.
 const PATCH_CONTEXT_LINES: u32 = 3;
 
 #[derive(Default)]
@@ -93,9 +91,8 @@ fn finish_hunk_rows(files: &mut [FileStat], tail: &HunkTail) {
 }
 
 /// Counts the rows `@git-diff-view` renders for one file: every patch body line becomes a unified
-/// row, while split mode pairs a run of deletions with the additions that follow it. A hunk row is only
-/// rendered where unchanged lines are folded away, so a file whose changes reach its first or last line
-/// has none there.
+/// row, while split mode pairs a run of deletions with the additions that follow it.
+/// Hunk rows are counted only where the view folds unchanged lines away.
 fn parse_patch_stats(patch: &str) -> Vec<FileStat> {
     let mut files: Vec<FileStat> = Vec::new();
     let (mut deletions, mut additions) = (0u32, 0u32);

@@ -140,6 +140,23 @@ export function carriedKeys(held: ReadonlySet<string>, keys: Iterable<string>) {
   return new Set([...held].filter((key) => listed.has(key)))
 }
 
+export type Comparison = {
+  baseSha: string
+  headSha: string
+  files: ChangedFile[]
+}
+
+// The working tree has no commit to compare, so it always counts as changed. Attributes such as `-diff` can
+// change a file's diff while both commits stay put, so the files are compared as well.
+export function isSameComparison(shown: Comparison, next: Comparison) {
+  return (
+    next.headSha !== WORKTREE_REF &&
+    next.baseSha === shown.baseSha &&
+    next.headSha === shown.headSha &&
+    JSON.stringify(next.files) === JSON.stringify(shown.files)
+  )
+}
+
 export function sameMarks(
   left: ReadonlyMap<string, string>,
   right: ReadonlyMap<string, string>,

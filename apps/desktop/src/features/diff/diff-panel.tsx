@@ -90,6 +90,7 @@ import {
   fileName,
   initialDiffLayout,
   isFoldedFile,
+  isSameComparison,
   isViewedFile,
   NARROW_DIFF_PANEL_WIDTH,
   persistedDiffPanelParams,
@@ -97,6 +98,7 @@ import {
   toggledDiffFileTree,
   WIDE_DIFF_PANEL_WIDTH,
   type ChangedFile,
+  type Comparison,
 } from "./diff-panel-state"
 import { FileDiffCard, FileTree } from "./diff-cards"
 import {
@@ -139,12 +141,6 @@ const HIT_ICONS: Record<HitKind, ComponentType<{ className?: string }>> = {
 type ViewedFile = {
   path: string
   identity: string
-}
-
-type Comparison = {
-  baseSha: string
-  headSha: string
-  files: ChangedFile[]
 }
 
 type LoadedComparison = {
@@ -192,15 +188,6 @@ function comparisonFingerprint(path: string, head: string) {
       invoke<string>("working_tree_fingerprint", { repoPath: path })
     : null,
   ]).then((parts) => parts.join(":"))
-}
-
-// The working tree has no commit to compare, so it always counts as changed.
-function isSameComparison(shown: LoadedComparison, next: Comparison) {
-  return (
-    next.headSha !== WORKTREE_REF &&
-    next.baseSha === shown.comparison.baseSha &&
-    next.headSha === shown.comparison.headSha
-  )
 }
 
 /**
@@ -528,6 +515,7 @@ export function DiffPanel({
   // Fingerprint first, so a change landing during the comparison is caught by the next poll.
   useEffect(() => {
     let cancelled = false
+    let compared = false
     shownFingerprint.current = null
     // A joined fingerprint always holds a ":", so an empty string never matches one and the next poll reloads.
     const fingerprint = comparisonFingerprint(params.path, refs.head).catch(
@@ -544,6 +532,7 @@ export function DiffPanel({
         }),
       )
       .then((nextComparison) => {
+        compared = true
         if (!cancelled) {
           const keys = nextComparison.files.map(fileKey)
           setExpanded((current) => carriedKeys(current, keys))
@@ -553,7 +542,7 @@ export function DiffPanel({
             (
               current?.refs === refs &&
               current.ignoreWhitespace === ignoreWhitespace &&
-              isSameComparison(current, nextComparison)
+              isSameComparison(current.comparison, nextComparison)
             ) ?
               current
             : { comparison: nextComparison, ignoreWhitespace, refs },
@@ -569,7 +558,7 @@ export function DiffPanel({
       .finally(() =>
         fingerprint.then((value) => {
           if (!cancelled) {
-            shownFingerprint.current = value
+            shownFingerprint.current = compared ? value : ""
           }
         }),
       )

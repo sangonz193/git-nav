@@ -60,6 +60,7 @@ import {
   changedLines,
   fileTree,
   flattenTree,
+  isLargeDiff,
   useDiffCards,
   useDiffLoader,
   type FileDiff,
@@ -467,7 +468,7 @@ export function WorkingTreePanel({
         })),
     [params.path, tree],
   )
-  const { entries, request } = useDiffLoader(
+  const { entries, isOutdated, request } = useDiffLoader(
     keyOf,
     loadDiff,
     params.path,
@@ -729,11 +730,11 @@ export function WorkingTreePanel({
   const unstagedCount = tree?.unstaged.length ?? 0
   const isSplit = (mode & DiffModeEnum.Split) !== 0
   const pending = tree?.pendingOperation
-  const stageCheckbox = (file: ChangedFile) => (
+  const stageCheckbox = (file: ChangedFile, isStale = false) => (
     <Checkbox
       aria-label={areaOf(file) === "staged" ? "Unstage" : "Stage"}
       checked={areaOf(file) === "staged"}
-      disabled={busy}
+      disabled={busy || isStale}
       onCheckedChange={() => toggleStaged(file)}
     />
   )
@@ -850,7 +851,12 @@ export function WorkingTreePanel({
                 action={
                   <label className="diff-file-card-viewed">
                     Staged
-                    {stageCheckbox(file)}
+                    {stageCheckbox(
+                      file,
+                      isOutdated(file) &&
+                        !isFolded(file) &&
+                        (!isLargeDiff(file) || expanded.has(key)),
+                    )}
                   </label>
                 }
                 allExpanded={allExpanded.has(key)}

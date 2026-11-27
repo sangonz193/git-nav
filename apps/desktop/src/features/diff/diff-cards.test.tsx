@@ -34,7 +34,7 @@ describe("FileDiffCard load errors", () => {
           allExpanded={false}
           collapsed={false}
           entry={{ state: "error", message: "Unable to read diff" }}
-          expanded={false}
+          expanded
           file={file}
           mode={DiffModeEnum.Split}
           onExpand={() => {}}
@@ -98,6 +98,47 @@ describe("FileDiffCard large diffs", () => {
     expect(render(true)).not.toContain("Show diff")
     expect(render(true)).toContain("Expand all lines")
   })
+
+  test.each([
+    { state: "error", message: "Unable to read diff" },
+    { state: "binary", oldBinary: null, newBinary: null },
+  ] satisfies DiffEntry[])(
+    "offers to show a file that grew large under a retained $state entry",
+    (entry) => {
+      const file = {
+        status: "modified",
+        oldPath: "big.ts",
+        newPath: "big.ts",
+        oldOid: "a".repeat(40),
+        newOid: "b".repeat(40),
+        additions: 1201,
+        deletions: 0,
+        isBinary: false,
+        splitRows: 2,
+        unifiedRows: 2,
+        hunkRows: 1,
+      } satisfies ChangedFile
+      const markup = renderToStaticMarkup(
+        <FileDiffCard
+          allExpanded={false}
+          collapsed={false}
+          entry={entry}
+          expanded={false}
+          file={file}
+          mode={DiffModeEnum.Split}
+          onExpand={() => {}}
+          onToggleAllExpanded={() => {}}
+          onToggleCollapsed={() => {}}
+          theme="light"
+          wrap={false}
+        />,
+      )
+
+      expect(markup).toContain("Show diff")
+      expect(markup).not.toContain("Unable to read diff")
+      expect(markup).not.toContain("Binary file changed")
+    },
+  )
 })
 
 describe("FileDiffCard loading images", () => {

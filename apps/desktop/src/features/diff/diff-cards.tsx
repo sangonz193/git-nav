@@ -193,6 +193,13 @@ function ImageSide({
   const dimensions = content.dimensions ?? naturalDimensions
   const [decoded, setDecoded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
+  // Each reread serves the same image under a new URL, so keying by it would blink the image out on every refresh.
+  const [shownImage, setShownImage] = useState(content.image)
+  if (shownImage !== content.image) {
+    setShownImage(content.image)
+    setPreviewFailed(false)
+    setNaturalDimensions(null)
+  }
   return (
     <figure className={`diff-binary-side is-${side}`}>
       {content.image && !previewFailed ?
@@ -372,6 +379,17 @@ export function FileDiffCard({
   }, [allExpanded, diffFile, mode])
 
   const body = () => {
+    if (isUnexpandedLarge) {
+      return (
+        <p className="diff-file-card-notice">
+          Large diff with {(file.additions + file.deletions).toLocaleString()}{" "}
+          changed lines
+          <Button onClick={onExpand} size="xs" type="button" variant="outline">
+            Show diff
+          </Button>
+        </p>
+      )
+    }
     if (entry?.state === "binary") {
       return (
         <BinaryDiff
@@ -403,17 +421,6 @@ export function FileDiffCard({
       return (
         <p className="diff-file-card-notice text-destructive">
           {entry.message}
-        </p>
-      )
-    }
-    if (isUnexpandedLarge) {
-      return (
-        <p className="diff-file-card-notice">
-          Large diff with {(file.additions + file.deletions).toLocaleString()}{" "}
-          changed lines
-          <Button onClick={onExpand} size="xs" type="button" variant="outline">
-            Show diff
-          </Button>
         </p>
       )
     }
