@@ -391,6 +391,25 @@ pub(crate) fn remember_repository(path: &str, app: Option<&AppHandle>) -> Result
     Ok(project)
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpenedRepository {
+    pub(crate) project: String,
+    // Set only for a linked worktree, so the window can focus a graph on it instead of the home checkout.
+    pub(crate) worktree: Option<String>,
+}
+
+pub(crate) fn open_repository_at(path: &str, app: Option<&AppHandle>) -> Result<OpenedRepository, String> {
+    let worktree = worktree_path(path)?;
+    let project = remember_repository(&worktree, app)?;
+    Ok(opened_repository(project, worktree))
+}
+
+fn opened_repository(project: Project, worktree: String) -> OpenedRepository {
+    let worktree = (worktree != project.path).then_some(worktree);
+    OpenedRepository { project: project.id, worktree }
+}
+
 #[tauri::command]
 pub(crate) fn recent_projects() -> Result<Vec<Project>, String> {
     recent_project_list()
@@ -445,6 +464,23 @@ mod tests {
             seeded_sidebar(Ok(vec![path.clone(), id.clone(), format!("{path}/missing")])),
             vec![id]
         );
+        remove_scratch_repository(&path);
+    }
+
+    #[test]
+    fn opening_a_linked_worktree_names_it_and_opening_the_home_checkout_does_not() {
+        let (path, run) = scratch_repository("open-linked-worktree");
+        run(&["commit", "--allow-empty", "--quiet", "-m", "init"]);
+        let linked = format!("{path}-linked");
+        run(&["worktree", "add", "--quiet", "-b", "linked", &linked]);
+        let linked = worktree_path(&linked).unwrap();
+
+        let home = opened_repository(project_at(&path).unwrap(), worktree_path(&path).unwrap());
+        let opened = opened_repository(project_at(&linked).unwrap(), linked.clone());
+        assert_eq!(home.project, opened.project);
+        assert_eq!(home.worktree, None);
+        assert_eq!(opened.worktree, Some(linked.clone()));
+        remove_scratch_repository(&linked);
         remove_scratch_repository(&path);
     }
 

@@ -13,6 +13,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -68,6 +69,8 @@ import {
 } from "../../lib/panel-params"
 import { worktreeName } from "../working-tree/working-tree-state"
 import type { Project } from "./project"
+import { worktreeGraphPanelId } from "./worktree-graph-tab"
+import type { OpenedRepository } from "../workspace/workspace"
 
 // The icon names the panel, not what it is pointed at, which the selectors and the title already say.
 // It leaves the title free to be only the thing itself: a comparison, a worktree or a stash.
@@ -453,12 +456,16 @@ function repositoryParamsAt(path: string) {
 }
 
 export const RepositoryView = memo(function RepositoryView({
+  openedRepository,
   project,
   onCloseRepository,
+  onOpenedRepositoryShown,
   registerLayoutFlush,
 }: {
+  openedRepository: OpenedRepository | null
   project: string
   onCloseRepository: () => void
+  onOpenedRepositoryShown: () => void
   registerLayoutFlush: (flush: () => Promise<void>) => () => void
 }) {
   const [repositoryPath, setRepositoryPath] = useState<string | null>(null)
@@ -469,8 +476,10 @@ export const RepositoryView = memo(function RepositoryView({
   const closedTabs = useRef<ReturnType<typeof closedTabHistory> | null>(null)
   const [canReopenTab, setCanReopenTab] = useState(false)
   const [restorePending, setRestorePending] = useState(true)
-  const params =
-    repositoryPath === null ? null : repositoryParamsAt(repositoryPath)
+  const params = useMemo(
+    () => (repositoryPath === null ? null : repositoryParamsAt(repositoryPath)),
+    [repositoryPath],
+  )
 
   useLayoutEffect(
     () => () => {
@@ -514,6 +523,35 @@ export const RepositoryView = memo(function RepositoryView({
     }, [onCloseRepository]),
     reopenTab,
   })
+
+  const openedWorktree =
+    openedRepository?.project === project ? openedRepository.worktree : null
+  // Waits for the saved layout to settle, so the restore cannot replace the tab this adds.
+  useEffect(() => {
+    const api = activeDockview.current
+    if (!api || !params || restorePending || !openedWorktree) return
+    const graphs = api.panels
+      .filter((panel) => panel.api.component === "graph")
+      .map((panel) => ({
+        id: panel.id,
+        path: (panel.params as RepositoryPanelParams).path,
+      }))
+    const panelId = worktreeGraphPanelId(
+      graphs,
+      openedWorktree,
+      api.activePanel?.id,
+    )
+    if (panelId) {
+      api.getPanel(panelId)?.api.setActive()
+    } else {
+      addGraphPanel(
+        api,
+        { name: params.name, path: openedWorktree },
+        api.activePanel,
+      )
+    }
+    onOpenedRepositoryShown()
+  }, [onOpenedRepositoryShown, openedWorktree, params, restorePending])
 
   return (
     <main className="h-full min-w-0 flex-1" ref={container}>

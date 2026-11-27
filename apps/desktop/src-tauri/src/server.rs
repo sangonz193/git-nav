@@ -28,7 +28,7 @@ use tower_http::compression::{
 use crate::{
     IpcCommand,
     projects::{
-        directory_listing, project_at, project_with_id, recent_project_list, remember_repository,
+        directory_listing, open_repository_at, project_at, project_with_id, recent_project_list,
         remove_sidebar_project_at, sidebar_project_list,
     },
     graph::walk_commit_graph_page,
@@ -683,13 +683,8 @@ async fn project_by_id(Json(args): Json<ProjectArg>) -> CommandResult {
     ok(blocking(move || project_with_id(&args.project)).await?)
 }
 
-fn opened_project(path: &str) -> Result<Value, String> {
-    let project = remember_repository(path, None)?;
-    Ok(json!({ "project": project.id }))
-}
-
 async fn open_repository(Json(args): Json<PathArg>) -> CommandResult {
-    ok(opened_project(&args.path.unwrap_or_default())?)
+    ok(open_repository_at(&args.path.unwrap_or_default(), None)?)
 }
 
 async fn open_worktree(Json(args): Json<WorktreeArgs>) -> CommandResult {

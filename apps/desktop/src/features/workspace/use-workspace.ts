@@ -24,6 +24,7 @@ import {
   isWorkspaceState,
   projectAfterRemoving,
   type ActiveProject,
+  type OpenedRepository,
   type WorkspaceState,
 } from "./workspace"
 
@@ -69,6 +70,8 @@ export function useWorkspace(
     ),
   )
   const saving = useRef(Promise.resolve())
+  const [openedRepository, setOpenedRepository] =
+    useState<OpenedRepository | null>(null)
   const projects = useQuery({
     queryKey: SIDEBAR_PROJECTS_KEY,
     queryFn: () => invoke<Project[]>("sidebar_projects"),
@@ -90,21 +93,28 @@ export function useWorkspace(
     clearTimeout(timeout)
   }, [layoutFlush])
 
+  const clearOpenedRepository = useCallback(() => setOpenedRepository(null), [])
+
   const clear = useCallback(async (active: ActiveProject) => {
     if (isDesktop) {
       await invoke<void>("clear_window_project", { project: active.project })
     }
+    setOpenedRepository(null)
     setState((current) =>
       current?.active?.project === active.project ? { active: null } : current,
     )
   }, [])
 
   const showLocally = useCallback(
-    async (active: ActiveProject | null) => {
+    async (
+      active: ActiveProject | null,
+      opened: OpenedRepository | null = null,
+    ) => {
       await flushLayout()
       if (!active && currentState.current?.active) {
         await clear(currentState.current.active)
       } else {
+        setOpenedRepository(opened)
         setState((current) => current && { active })
       }
     },
@@ -152,9 +162,9 @@ export function useWorkspace(
 
   useEffect(() => {
     let disposed = false
-    const showOpened = (opened: ActiveProject[]) => {
+    const showOpened = (opened: OpenedRepository[]) => {
       const last = opened.at(-1)
-      if (!disposed && last) void showLocally(last)
+      if (!disposed && last) void showLocally({ project: last.project }, last)
     }
 
     if (!isDesktop) {
@@ -164,7 +174,7 @@ export function useWorkspace(
       })
       if (requestedRepository) {
         window.history.replaceState(null, "", window.location.pathname)
-        invoke<ActiveProject>("open_repository", {
+        invoke<OpenedRepository>("open_repository", {
           path: requestedRepository,
         })
           .then((opened) => {
@@ -182,7 +192,7 @@ export function useWorkspace(
     let loaded = false
     let unlisten: (() => void) | undefined
     const drain = () =>
-      invoke<ActiveProject[]>("take_opened_repositories")
+      invoke<OpenedRepository[]>("take_opened_repositories")
         .then(showOpened)
         .catch(reportError("Could not open the repository"))
     void (async () => {
@@ -257,6 +267,7 @@ export function useWorkspace(
         }
         if (next) await show(next)
       } else {
+        setOpenedRepository(null)
         setState((current) =>
           current?.active?.project === project ?
             { active: next ? { project: next.id } : null }
@@ -292,5 +303,7 @@ export function useWorkspace(
     show,
     remove,
     openInNewWindow,
+    openedRepository,
+    clearOpenedRepository,
   }
 }

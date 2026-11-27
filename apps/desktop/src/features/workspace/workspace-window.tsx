@@ -25,6 +25,8 @@ export function WorkspaceWindow() {
     show,
     remove,
     openInNewWindow,
+    openedRepository,
+    clearOpenedRepository,
   } = useWorkspace(layoutFlush)
   const active = state?.active ?? null
   const sidebar = useSidebar()
@@ -146,6 +148,8 @@ export function WorkspaceWindow() {
             <RepositoryView
               key={active.project}
               onCloseRepository={closeActive}
+              onOpenedRepositoryShown={clearOpenedRepository}
+              openedRepository={openedRepository}
               project={active.project}
               registerLayoutFlush={registerLayoutFlush}
             />
