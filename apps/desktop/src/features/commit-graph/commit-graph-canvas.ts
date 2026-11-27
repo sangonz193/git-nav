@@ -27,11 +27,12 @@ type SquashMergeEdge = {
   targetRow: number
 }
 
-type CommitGraphDrawing = {
+export type CommitGraphDrawing = {
   canvas: HTMLCanvasElement
   commits: Commit[]
   items: { index: number; start: number }[]
-  scrollTop: number
+  pixelRatio: number
+  top: number
   height: number
   rows: GraphRow[] | null
   squashMergeEdges: SquashMergeEdge[]
@@ -71,7 +72,8 @@ export function drawCommitGraph({
   canvas,
   commits,
   items,
-  scrollTop,
+  pixelRatio: ratio,
+  top,
   height,
   rows,
   squashMergeEdges,
@@ -80,7 +82,6 @@ export function drawCommitGraph({
   width = GRAPH_WIDTH,
   rowHeight = ROW_HEIGHT,
 }: CommitGraphDrawing) {
-  const ratio = window.devicePixelRatio || 1
   const pixelHeight = Math.max(1, Math.ceil(height * ratio))
   const pixelWidth = Math.ceil(width * ratio)
 
@@ -90,10 +91,6 @@ export function drawCommitGraph({
     canvas.style.width = `${width}px`
     canvas.style.height = `${height}px`
   }
-  // Sticky would hold the canvas still while the columns scroll out from under it, so the row it belongs to
-  // carries it sideways and the scroll offset it was drawn for places it down the page.
-  canvas.style.transform = `translateY(${scrollTop - GRAPH_HEADER_HEIGHT}px)`
-
   const context = canvas.getContext("2d")
   if (!context) {
     return
@@ -124,9 +121,9 @@ export function drawCommitGraph({
     targetRow,
   } of squashMergeEdges) {
     const branchY =
-      GRAPH_HEADER_HEIGHT + branchRow * rowHeight - scrollTop + rowHeight / 2
+      GRAPH_HEADER_HEIGHT + branchRow * rowHeight - top + rowHeight / 2
     const targetY =
-      GRAPH_HEADER_HEIGHT + targetRow * rowHeight - scrollTop + rowHeight / 2
+      GRAPH_HEADER_HEIGHT + targetRow * rowHeight - top + rowHeight / 2
     if (Math.max(branchY, targetY) < 0 || Math.min(branchY, targetY) > height) {
       continue
     }
@@ -154,7 +151,7 @@ export function drawCommitGraph({
       continue
     }
 
-    const startY = item.start - scrollTop + rowHeight / 2
+    const startY = item.start - top + rowHeight / 2
     const startX = GRAPH_GUTTER + commit.lane * LANE_WIDTH
     const isLocal = unpushed?.has(commit.hash) ?? false
 

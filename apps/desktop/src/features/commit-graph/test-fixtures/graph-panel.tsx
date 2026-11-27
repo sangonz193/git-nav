@@ -370,6 +370,11 @@ async function testRefresh() {
   }
   const grid = () =>
     window.document.querySelector<TestElement>(".commit-graph-scroll")!
+  const scrollTo = (top: number) =>
+    act(async () => {
+      grid().scrollTop = top
+      grid().dispatchEvent(new window.Event("scroll"))
+    })
   const row = (subject: number) =>
     [...grid().querySelectorAll("article")].find((row) =>
       row.textContent.includes(`Subject ${subject}Ada`),
@@ -380,6 +385,16 @@ async function testRefresh() {
     container
       .querySelector<HTMLButtonElement>('[aria-label="Refresh graph"]')!
       .click()
+  const resolutionQueries = new Map<
+    string,
+    ReturnType<typeof window.matchMedia>
+  >()
+  const matchMedia = window.matchMedia.bind(window)
+  window.matchMedia = (media) => {
+    const query = matchMedia(media)
+    if (media.startsWith("(resolution:")) resolutionQueries.set(media, query)
+    return query
+  }
 
   await act(async () => {
     root.render(
@@ -404,11 +419,34 @@ async function testRefresh() {
   await act(async () => send(0, 0, batch(0, 500)))
   assert.ok(row(0), "initial batches render before completion")
   await act(async () => send(0, 1, batch(500, 500)))
+  if (mode === "refresh") {
+    const laneCanvases = () => [...container.querySelectorAll("canvas")]
+    const [first] = laneCanvases()
+    const changeRatio = (ratio: number) =>
+      act(async () => {
+        const media = `(resolution: ${window.devicePixelRatio}dppx)`
+        window.devicePixelRatio = ratio
+        resolutionQueries
+          .get(media)
+          ?.dispatchEvent(
+            new window.MediaQueryListEvent("change", { media, matches: false }),
+          )
+      })
+    const scales = () =>
+      laneCanvases().map(
+        (canvas) => canvas.width / parseFloat(canvas.style.width),
+      )
+
+    assert.deepEqual(scales(), [1])
+    await changeRatio(2)
+    await scrollTo(25 * 32)
+    assert.equal(laneCanvases()[0], first)
+    assert.deepEqual(scales(), [2, 2])
+    await changeRatio(1)
+    assert.deepEqual(scales(), [1, 1])
+  }
   const initialTop = (filtered ? 898 : 900) * 32 + 7
-  await act(async () => {
-    grid().scrollTop = initialTop
-    grid().dispatchEvent(new window.Event("scroll"))
-  })
+  await scrollTo(initialTop)
   const visible = row(900)!
   assert.ok(visible)
   await act(async () => {
@@ -449,8 +487,12 @@ async function testRefresh() {
   assert.ok(row(900) === visible)
   assert.equal(openMenu(), menu)
   assert.equal(visible.getAttribute("aria-selected"), "true")
-  const canvas = container.querySelector("canvas")!
-  assert.equal(canvas.style.transform, "translateY(31911px)")
+  assert.deepEqual(
+    [...container.querySelectorAll("canvas")].map(
+      (canvas) => canvas.style.transform,
+    ),
+    ["translateY(30720px)", "translateY(31744px)"],
+  )
   await act(async () => refresh())
   await act(async () => send(3, 0, batch(-300, 500)))
   await act(async () => {

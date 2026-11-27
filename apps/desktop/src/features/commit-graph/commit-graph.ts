@@ -161,32 +161,42 @@ export const CHIP_GAP = 3
 // Refs share the commit column with the subject, which keeps the rest of it.
 export const REF_BUDGET_SHARE = 0.5
 
-// The canvas is placed by hand on every scroll frame, so it reaches past the viewport to cover what a fast
-// scroll uncovers before the next frame lands.
-export const GRAPH_CANVAS_OVERSCAN = 2 * ROW_HEIGHT
+export const GRAPH_CHUNK_ROWS = 32
+// A row's lines reach the middle of the second row on either side when a run header sits between them.
+const GRAPH_CHUNK_REACH = 2
 
-export function graphCanvasHeight(
-  viewportHeight: number,
-  headerHeight = GRAPH_HEADER_HEIGHT,
-) {
-  const visible = Math.max(0, viewportHeight - headerHeight)
-  return visible === 0 ? 0 : visible + 2 * GRAPH_CANVAS_OVERSCAN
+export function graphChunks(firstRow: number, lastRow: number) {
+  const chunks = []
+  for (
+    let chunk = Math.floor(firstRow / GRAPH_CHUNK_ROWS);
+    chunk <= Math.floor(lastRow / GRAPH_CHUNK_ROWS);
+    chunk += 1
+  ) {
+    chunks.push(chunk)
+  }
+  return chunks
 }
 
-// A transformed canvas still counts toward the scrollable area, so one that hangs past the last row would
-// make the graph scrollable by its own overhang on every frame.
-export function graphCanvasTop(
-  scrollTop: number,
-  viewportHeight: number,
-  contentHeight: number,
-  headerHeight = GRAPH_HEADER_HEIGHT,
+export function graphChunk<Item extends { end: number; start: number }>(
+  chunk: number,
+  items: Item[],
 ) {
-  return Math.min(
-    scrollTop - GRAPH_CANVAS_OVERSCAN,
-    headerHeight +
-      contentHeight -
-      graphCanvasHeight(viewportHeight, headerHeight),
-  )
+  const first = chunk * GRAPH_CHUNK_ROWS
+  const last = Math.min(items.length, first + GRAPH_CHUNK_ROWS) - 1
+  // The virtualizer hands out a lazy view whose unread entries are holes to slice.
+  const drawn = []
+  for (
+    let index = Math.max(0, first - GRAPH_CHUNK_REACH);
+    index <= Math.min(items.length - 1, last + GRAPH_CHUNK_REACH);
+    index += 1
+  ) {
+    drawn.push(items[index])
+  }
+  return {
+    top: items[first].start,
+    height: items[last].end - items[first].start,
+    items: drawn,
+  }
 }
 
 export function clampGraphWidth(width: number) {

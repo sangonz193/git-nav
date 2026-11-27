@@ -63,12 +63,7 @@ function pathsFor(
     style: {},
     width: 0,
   } as unknown as HTMLCanvasElement
-  const previousWindow = globalThis.window
   const previousDocument = globalThis.document
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: { devicePixelRatio: 1 },
-  })
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     value: { createElement: () => canvas },
@@ -83,16 +78,13 @@ function pathsFor(
         index,
         start: index * 32,
       })),
+      pixelRatio: 1,
       rows,
-      scrollTop: 0,
+      top: 0,
       squashMergeEdges: [],
       unpushedLanes,
     })
   } finally {
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: previousWindow,
-    })
     Object.defineProperty(globalThis, "document", {
       configurable: true,
       value: previousDocument,

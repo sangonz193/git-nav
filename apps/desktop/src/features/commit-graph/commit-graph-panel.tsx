@@ -51,11 +51,11 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react"
 
 import { BranchCleanupDialog } from "./branch-cleanup-dialog"
 import { BranchFastForwardDialog } from "./branch-fast-forward-dialog"
-import { drawCommitGraph } from "./commit-graph-canvas"
 import {
   ancestryPath,
   clampGraphWidth,
@@ -63,8 +63,7 @@ import {
   fitGraphWidth,
   GRAPH_HEADER_HEIGHT,
   GRAPH_WIDTH,
-  graphCanvasHeight,
-  graphCanvasTop,
+  graphChunks,
   isCurrentCheckout,
   laneColor,
   overflowHasSelectedRef,
@@ -99,6 +98,7 @@ import {
   type ViewConfigChange,
 } from "./commit-graph-view"
 import { Hinted } from "@/components/hinted"
+import { CommitGraphLanes } from "./commit-graph-lanes"
 import { OperationDialog } from "./commit-operation-menu"
 import {
   clearConflictPredictions,
@@ -131,6 +131,23 @@ const AUTOSCROLL_EDGE = 24
 const AUTOSCROLL_STEP = 18
 const COARSE_POINTER_ROW_HEIGHT = 36
 const UNDO_TOAST_DURATION = 10_000
+
+function getPixelRatio() {
+  return window.devicePixelRatio
+}
+
+function subscribeToPixelRatio(notify: () => void) {
+  let query = window.matchMedia(`(resolution: ${getPixelRatio()}dppx)`)
+  function onChange() {
+    query.removeEventListener("change", onChange)
+    query = window.matchMedia(`(resolution: ${getPixelRatio()}dppx)`)
+    query.addEventListener("change", onChange)
+    notify()
+  }
+  query.addEventListener("change", onChange)
+  return () => query.removeEventListener("change", onChange)
+}
+
 const commitTableFeatures = tableFeatures({
   columnSizingFeature,
   columnResizingFeature,
@@ -199,6 +216,7 @@ function CommitGraphPanelContent({
   const cleanOptions = config.cleanOptions
   const [request, setRequest] = useState<OperationRequest | null>(null)
   const [graphWidth, setGraphWidth] = useState(GRAPH_WIDTH)
+  const pixelRatio = useSyncExternalStore(subscribeToPixelRatio, getPixelRatio)
   const [isResizingGraph, setIsResizingGraph] = useState(false)
   const [rowHeight, setRowHeight] = useState(ROW_HEIGHT)
   const [columnSizing, setColumnSizing] = useState<Record<string, number>>(
@@ -215,7 +233,6 @@ function CommitGraphPanelContent({
   // A collapsed run is opened by the commit it starts at, which survives the refresh that rebuilds the runs.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
   const scrollElement = useRef<HTMLDivElement>(null)
-  const canvas = useRef<HTMLCanvasElement>(null)
   const pendingScrollHash = useRef<string | null>(null)
   const [scroll, setScroll] = useState({
     height: 0,
@@ -437,7 +454,10 @@ function CommitGraphPanelContent({
           isScrolling,
         )
       }),
-    overscan: 12,
+    // A fast scroll is painted ahead of the main thread, so a viewport of rows waits on each side.
+    overscan: Math.ceil(
+      Math.max(0, scroll.height - GRAPH_HEADER_HEIGHT) / rowHeight,
+    ),
     // Room past the last row reserves the expanded sheet, otherwise half the viewport, so rows can clear it.
     paddingEnd: Math.max(
       0,
@@ -492,11 +512,6 @@ function CommitGraphPanelContent({
   }
   const virtualRows = rowVirtualizer.getVirtualItems()
   const virtualScrollTop = rowVirtualizer.scrollOffset ?? 0
-  const graphScrollTop = graphCanvasTop(
-    virtualScrollTop,
-    scroll.height,
-    rowVirtualizer.getTotalSize(),
-  )
   const currentCheckoutRow =
     currentCheckoutIndex === -1 ? -1 : rowOfCommit(currentCheckoutIndex)
   // The brackets are drawn on rows while the drag they adjust is anchored on commits, so an endpoint carries both.
@@ -675,35 +690,6 @@ function CommitGraphPanelContent({
       element.scrollTop = restoredScrollTop
     }
   })
-
-  useLayoutEffect(() => {
-    if (canvas.current) {
-      drawCommitGraph({
-        canvas: canvas.current,
-        commits,
-        items: virtualRows,
-        scrollTop: graphScrollTop,
-        height: graphCanvasHeight(scroll.height),
-        rows,
-        squashMergeEdges,
-        unpushed,
-        unpushedLanes: unpushedLaneMasks,
-        width: graphWidth,
-        rowHeight,
-      })
-    }
-  }, [
-    commits,
-    graphScrollTop,
-    graphWidth,
-    rowHeight,
-    rows,
-    scroll.height,
-    squashMergeEdges,
-    unpushed,
-    unpushedLaneMasks,
-    virtualRows,
-  ])
 
   function startGraphResize(
     event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>,
@@ -1228,7 +1214,24 @@ function CommitGraphPanelContent({
             } as CSSProperties
           }
         >
-          <canvas aria-hidden className="commit-graph-canvas" ref={canvas} />
+          {virtualRows.length > 0 &&
+            graphChunks(virtualRows[0].index, virtualRows.at(-1)!.index).map(
+              (chunk) => (
+                <CommitGraphLanes
+                  chunk={chunk}
+                  commits={commits}
+                  key={chunk}
+                  measurements={rowVirtualizer.measurementsCache}
+                  pixelRatio={pixelRatio}
+                  rowHeight={rowHeight}
+                  rows={rows}
+                  squashMergeEdges={squashMergeEdges}
+                  unpushed={unpushed}
+                  unpushedLanes={unpushedLaneMasks}
+                  width={graphWidth}
+                />
+              ),
+            )}
           {virtualRows.map((row) => {
             const graphRow = rows?.[row.index]
             const index = graphRow ? graphRow.index : row.index

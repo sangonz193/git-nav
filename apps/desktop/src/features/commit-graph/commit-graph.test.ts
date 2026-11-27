@@ -12,9 +12,9 @@ import {
   GRAPH_HEADER_HEIGHT,
   GRAPH_MAX_WIDTH,
   GRAPH_MIN_WIDTH,
-  GRAPH_CANVAS_OVERSCAN,
-  graphCanvasHeight,
-  graphCanvasTop,
+  GRAPH_CHUNK_ROWS,
+  graphChunk,
+  graphChunks,
   indexPullRequests,
   isCurrentCheckout,
   laneColor,
@@ -826,47 +826,58 @@ describe("fitGraphWidth", () => {
   })
 })
 
-describe("graphCanvasHeight", () => {
-  test("covers the viewport under the header with a margin at each end", () => {
-    expect(graphCanvasHeight(400)).toBe(
-      400 - GRAPH_HEADER_HEIGHT + 2 * GRAPH_CANVAS_OVERSCAN,
-    )
-  })
-
-  test("uses the active header height for coarse pointers", () => {
-    expect(graphCanvasHeight(500, 44)).toBe(
-      500 - 44 + 2 * GRAPH_CANVAS_OVERSCAN,
-    )
-  })
-
-  test("stays at zero for a viewport shorter than the header", () => {
-    expect(graphCanvasHeight(0)).toBe(0)
+describe("graphChunks", () => {
+  test("lists every block that holds a mounted row", () => {
+    expect(graphChunks(0, GRAPH_CHUNK_ROWS - 1)).toEqual([0])
+    expect(graphChunks(GRAPH_CHUNK_ROWS - 1, 2 * GRAPH_CHUNK_ROWS)).toEqual([
+      0, 1, 2,
+    ])
   })
 })
 
-describe("graphCanvasTop", () => {
-  test("starts an overscan above the scroll position", () => {
-    expect(graphCanvasTop(1_000, 400, 10_000)).toBe(
-      1_000 - GRAPH_CANVAS_OVERSCAN,
+describe("graphChunk", () => {
+  const measured = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      end: GRAPH_HEADER_HEIGHT + (index + 1) * 32,
+      index,
+      start: GRAPH_HEADER_HEIGHT + index * 32,
+    }))
+
+  test("spans its block and draws the rows whose lines reach into it", () => {
+    const chunk = graphChunk(1, measured(3 * GRAPH_CHUNK_ROWS))
+    expect(chunk.top).toBe(GRAPH_HEADER_HEIGHT + GRAPH_CHUNK_ROWS * 32)
+    expect(chunk.height).toBe(GRAPH_CHUNK_ROWS * 32)
+    expect(chunk.items.map(({ index }) => index)).toEqual(
+      Array.from(
+        { length: GRAPH_CHUNK_ROWS + 4 },
+        (_, index) => GRAPH_CHUNK_ROWS - 2 + index,
+      ),
     )
   })
 
-  test("ends at the last row when the scroll position nears the end", () => {
-    const contentHeight = 1_200
-    const top = graphCanvasTop(
-      contentHeight - 400 + GRAPH_HEADER_HEIGHT,
-      400,
-      contentHeight,
-    )
-    expect(top + graphCanvasHeight(400)).toBe(
-      GRAPH_HEADER_HEIGHT + contentHeight,
-    )
+  test("ends at the last row", () => {
+    const chunk = graphChunk(1, measured(GRAPH_CHUNK_ROWS + 5))
+    expect(chunk.height).toBe(5 * 32)
+    expect(chunk.items.at(-1)?.index).toBe(GRAPH_CHUNK_ROWS + 4)
   })
 
-  test("ends at the last row when the rows fit in the viewport", () => {
-    expect(graphCanvasTop(0, 400, 100) + graphCanvasHeight(400)).toBe(
-      GRAPH_HEADER_HEIGHT + 100,
-    )
+  test("starts at the first row", () => {
+    const chunk = graphChunk(0, measured(GRAPH_CHUNK_ROWS + 5))
+    expect(chunk.top).toBe(GRAPH_HEADER_HEIGHT)
+    expect(chunk.items[0].index).toBe(0)
+  })
+
+  test("reads entries a sparse view has not materialised", () => {
+    const view = new Proxy(new Array(4), {
+      get: (target, property, receiver) =>
+        property === "length" ? 4
+        : typeof property === "string" && /^\d+$/.test(property) ?
+          measured(4)[Number(property)]
+        : Reflect.get(target, property, receiver),
+    })
+    expect(graphChunk(0, view).items.map(({ index }) => index)).toEqual([
+      0, 1, 2, 3,
+    ])
   })
 })
 
