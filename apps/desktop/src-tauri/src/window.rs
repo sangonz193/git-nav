@@ -15,7 +15,7 @@ use tauri::{
 use crate::storage::{
     SETTING_CHANGED_EVENT, SettingChanged, load_settings, save_setting_at_then, settings_path,
 };
-use crate::projects::remember_repository;
+use crate::projects::{OpenedRepository, open_repository_at};
 use crate::git::resolve_project_id;
 use crate::sharing::TrayExit;
 use crate::window_sessions::{
@@ -390,15 +390,15 @@ fn disable_browser_accelerator_keys(window: &WebviewWindow) -> Result<(), String
 pub(crate) struct WindowProjects(Mutex<HashMap<String, WindowSession>>);
 
 #[derive(Default)]
-pub(crate) struct PendingRepositories(Mutex<HashMap<String, Vec<ActiveProject>>>);
+pub(crate) struct PendingRepositories(Mutex<HashMap<String, Vec<OpenedRepository>>>);
 
 impl PendingRepositories {
-    fn deliver(&self, window_projects: &WindowProjects, label: &str, opened: ActiveProject) -> Result<(), String> {
+    fn deliver(&self, window_projects: &WindowProjects, label: &str, opened: OpenedRepository) -> Result<(), String> {
         let mut window_projects = window_projects.0.lock().map_err(|error| error.to_string())?;
         let mut pending = self.0.lock().map_err(|error| error.to_string())?;
         window_projects.insert(label.to_string(), WindowSession {
             label: label.to_string(),
-            active: Some(opened.clone()),
+            active: Some(ActiveProject { project: opened.project.clone() }),
         });
         pending.entry(label.to_string()).or_default().push(opened);
         Ok(())
@@ -856,7 +856,7 @@ pub(crate) fn install_app_menu(app: &AppHandle) -> Result<(), String> {
 fn deliver_repository(
     app: &AppHandle,
     window: &WebviewWindow,
-    opened: ActiveProject,
+    opened: OpenedRepository,
 ) -> Result<(), String> {
     app.state::<PendingRepositories>()
         .deliver(&app.state::<WindowProjects>(), window.label(), opened)?;
@@ -865,9 +865,8 @@ fn deliver_repository(
     reveal_window(window)
 }
 
-fn resolve_opened(app: &AppHandle, path: &str) -> Result<ActiveProject, String> {
-    let project = remember_repository(path, Some(app))?;
-    Ok(ActiveProject { project: project.id })
+fn resolve_opened(app: &AppHandle, path: &str) -> Result<OpenedRepository, String> {
+    open_repository_at(path, Some(app))
 }
 
 fn window_showing_label(
@@ -998,7 +997,7 @@ pub(crate) fn clear_window_project(
 pub(crate) fn take_opened_repositories(
     window: WebviewWindow,
     pending: tauri::State<PendingRepositories>,
-) -> Result<Vec<ActiveProject>, String> {
+) -> Result<Vec<OpenedRepository>, String> {
     Ok(pending
         .0
         .lock()
@@ -1015,6 +1014,10 @@ mod tests {
 
     fn active(project: &str) -> ActiveProject {
         ActiveProject { project: project.to_string() }
+    }
+
+    fn delivery(project: &str) -> OpenedRepository {
+        OpenedRepository { project: project.to_string(), worktree: None }
     }
 
     #[test]
@@ -1100,7 +1103,7 @@ mod tests {
         };
         lifecycle.save_project(&window_projects, previous.clone(), |_| Ok(())).unwrap();
         let delivered = active("/b");
-        pending.deliver(&window_projects, "main", delivered.clone()).unwrap();
+        pending.deliver(&window_projects, "main", delivery(&delivered.project)).unwrap();
         pending.0.lock().unwrap().remove("main");
         lifecycle.save_project(&window_projects, WindowSession { label: "main".to_string(), active: None }, |_| Ok(())).unwrap();
         lifecycle.save_project(&window_projects, previous, |_| Ok(())).unwrap();
@@ -1121,12 +1124,12 @@ mod tests {
         lifecycle.live.extend(["main".to_string(), "window-2".to_string()]);
         let first = active("/a");
         let second = active("/b");
-        pending.deliver(&window_projects, "main", first.clone()).unwrap();
-        pending.deliver(&window_projects, "main", second.clone()).unwrap();
+        pending.deliver(&window_projects, "main", delivery(&first.project)).unwrap();
+        pending.deliver(&window_projects, "main", delivery(&second.project)).unwrap();
         lifecycle.clear_project(&window_projects, "main", &first.project).unwrap();
         assert_eq!(window_projects.0.lock().unwrap()["main"].active, Some(second.clone()));
 
-        pending.deliver(&window_projects, "window-2", second.clone()).unwrap();
+        pending.deliver(&window_projects, "window-2", delivery(&second.project)).unwrap();
         lifecycle.closing.insert("main".to_string());
         lifecycle.clear_project(&window_projects, "main", &second.project).unwrap();
         for active in [None, Some(second.clone())] {
@@ -1137,7 +1140,7 @@ mod tests {
         }
 
         lifecycle.closing.remove("main");
-        pending.deliver(&window_projects, "main", first).unwrap();
+        pending.deliver(&window_projects, "main", delivery(&first.project)).unwrap();
         assert_eq!(window_showing_label(&window_projects.0.lock().unwrap(), "/a", None, &HashSet::new()).as_deref(), Some("main"));
         lifecycle.live.remove("main");
         window_projects.0.lock().unwrap().remove("main");
@@ -1203,14 +1206,14 @@ mod tests {
         let pending = PendingRepositories::default();
         let window_projects = WindowProjects::default();
         let opened = active("/code/app/.git");
-        pending.deliver(&window_projects, "window-2", opened.clone()).unwrap();
+        pending.deliver(&window_projects, "window-2", delivery(&opened.project)).unwrap();
         let sessions = window_projects.0.lock().unwrap();
         assert_eq!(sessions["window-2"].active, Some(opened.clone()));
         assert_eq!(
             window_showing_label(&sessions, &opened.project, None, &HashSet::new()).as_deref(),
             Some("window-2"),
         );
-        assert_eq!(pending.0.lock().unwrap()["window-2"], vec![opened.clone()]);
+        assert_eq!(pending.0.lock().unwrap()["window-2"], vec![delivery(&opened.project)]);
 
         let closing = HashSet::from(["window-2".to_string()]);
         assert_eq!(window_showing_label(&sessions, &opened.project, None, &closing), None);

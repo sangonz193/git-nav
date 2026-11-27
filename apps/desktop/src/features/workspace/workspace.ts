@@ -4,6 +4,10 @@ export type ActiveProject = {
   project: string
 }
 
+export type OpenedRepository = ActiveProject & {
+  worktree: string | null
+}
+
 export type WorkspaceState = {
   active: ActiveProject | null
 }
