@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react"
 
+import { worktreeBranch } from "../working-tree/working-tree-state"
 import {
   commitFromTuple,
   indexPullRequests,
@@ -144,7 +145,7 @@ export function useGraphData({
     return projectWorktrees.map((worktree): RowWorktree => {
       const status = statuses.get(worktree.path)
       return {
-        branch: worktree.isDetached ? null : worktree.branch,
+        branch: worktreeBranch(worktree) ?? null,
         changedFiles: status?.changedFiles ?? 0,
         head: worktree.head,
         isCurrent: worktree.path === repoPath,

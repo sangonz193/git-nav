@@ -11,7 +11,9 @@ import {
   restoredAmendingHead,
   workingTreeFileKey,
   workingTreeFiles,
+  worktreeDisplayName,
   worktreeName,
+  worktreeTooltip,
   type WorkingTree,
 } from "./working-tree-state"
 
@@ -189,6 +191,31 @@ describe("labels", () => {
   test("names a worktree by its directory", () => {
     expect(worktreeName("/projects/git-nav/")).toBe("git-nav")
     expect(worktreeName("/projects/git-nav-feature")).toBe("git-nav-feature")
+  })
+
+  test("names a worktree by its branch, falling back to its directory", () => {
+    const path = "/projects/grateful-vulture"
+    expect(worktreeDisplayName({ branch: "feat/tab-actions", path })).toBe(
+      "feat/tab-actions",
+    )
+    expect(worktreeDisplayName({ branch: null, path })).toBe("grateful-vulture")
+    expect(
+      worktreeDisplayName({ branch: "topic", isDetached: true, path }),
+    ).toBe("grateful-vulture")
+    expect(worktreeDisplayName({ branch: undefined, path })).toBe(
+      "grateful-vulture",
+    )
+  })
+
+  test("tooltips a worktree with both its directory and branch", () => {
+    const path = "/projects/grateful-vulture"
+    expect(worktreeTooltip({ branch: "feat/tab-actions", path })).toBe(
+      "grateful-vulture · feat/tab-actions",
+    )
+    expect(worktreeTooltip({ branch: null, path })).toBe("grateful-vulture")
+    expect(worktreeTooltip({ branch: "topic", isDetached: true, path })).toBe(
+      "grateful-vulture",
+    )
   })
 })
 

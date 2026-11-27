@@ -18,6 +18,7 @@ import {
   refLabel,
   selectedRefs,
 } from "../diff/diff-title"
+import { worktreeDisplayName } from "../working-tree/working-tree-state"
 import { rangeBaseHash } from "./selection-diff"
 
 type BranchSelection = { baseRef: string; headRef: string }
@@ -139,7 +140,7 @@ export function diffTabs({
       params: { ...repositoryPanelParams, path: worktree.path },
       position: { direction: "within", referencePanel },
       tabComponent: "working-tree",
-      title: worktree.name,
+      title: worktreeDisplayName(worktree),
     })
   }
 

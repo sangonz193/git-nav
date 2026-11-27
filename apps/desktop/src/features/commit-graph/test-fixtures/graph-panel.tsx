@@ -593,7 +593,7 @@ async function testWorktreeSelector() {
     new KeyboardEvent("keydown", { bubbles: true, key: value })
   const trigger = () =>
     [...container.querySelectorAll('[aria-haspopup="menu"]')].find((element) =>
-      element.textContent.startsWith("app"),
+      element.textContent.startsWith(mainWorktree.branch),
     )!
   const item = (name: string) =>
     [...document.querySelectorAll('[role="menuitem"]')].find((element) =>
@@ -609,11 +609,11 @@ async function testWorktreeSelector() {
       </QueryClientProvider>,
     )
   })
-  await waitUntil(() => container.textContent.includes(mainWorktree.branch))
+  await waitUntil(() => Boolean(trigger()))
   const before = updates.length
 
   await act(async () => trigger().dispatchEvent(key("Enter")))
-  await act(async () => item("app").dispatchEvent(key("Enter")))
+  await act(async () => item(mainWorktree.branch).dispatchEvent(key("Enter")))
   assert.equal(
     updates.length,
     before,
@@ -621,7 +621,7 @@ async function testWorktreeSelector() {
   )
 
   await act(async () => trigger().dispatchEvent(key("Enter")))
-  await act(async () => item("feature").dispatchEvent(key("Enter")))
+  await act(async () => item(worktree.branch).dispatchEvent(key("Enter")))
   assert.deepEqual(updates.slice(before), [
     { name: "app", path: worktree.path, selectedCommitHashes: [] },
   ])

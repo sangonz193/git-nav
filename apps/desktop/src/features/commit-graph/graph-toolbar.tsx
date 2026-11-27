@@ -44,7 +44,10 @@ import {
   SlidersHorizontal,
 } from "lucide-react"
 
-import { worktreeName } from "../working-tree/working-tree-state"
+import {
+  worktreeDisplayName,
+  worktreeName,
+} from "../working-tree/working-tree-state"
 import {
   PULL_REQUEST_STATE_LABELS,
   relativeDate,
@@ -83,7 +86,7 @@ import type { useGraphSearch } from "./use-graph-search"
 function worktreeDetail(worktree: RowWorktree) {
   const changes = worktree.changedFiles + worktree.untrackedFiles
   return [
-    worktree.branch ?? "Detached",
+    worktree.branch ? worktreeName(worktree.path) : "Detached",
     changes > 0 && `${changes.toLocaleString()} uncommitted`,
   ]
     .filter(Boolean)
@@ -111,10 +114,12 @@ function WorktreeSelector({
         >
           <span className="flex min-w-0 items-center gap-1.5">
             <AppWindow className="shrink-0 text-muted-foreground" />
-            <span className="truncate">{worktreeName(path)}</span>
+            <span className="truncate">
+              {current ? worktreeDisplayName(current) : worktreeName(path)}
+            </span>
             {current && (
               <span className="truncate text-xs text-muted-foreground">
-                {current.branch ?? "Detached"}
+                {current.branch ? worktreeName(path) : "Detached"}
               </span>
             )}
           </span>
@@ -131,7 +136,7 @@ function WorktreeSelector({
           >
             <AppWindow />
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate">{worktreeName(worktree.path)}</span>
+              <span className="truncate">{worktreeDisplayName(worktree)}</span>
               <span className="truncate text-xs text-muted-foreground">
                 {worktreeDetail(worktree)}
               </span>
