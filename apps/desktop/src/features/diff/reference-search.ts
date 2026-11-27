@@ -31,16 +31,27 @@ export type ReferenceHit = {
   kind: HitKind
   label: string
   reference: string
+  /** Set when the hit reads one worktree's state, so picking it moves the comparison to that worktree. */
+  worktreePath?: string
+}
+
+export type WorktreeSource = {
+  /** What the worktree's HEAD is on, unknown until read. */
+  headDetail: string | null
+  name: string
+  path: string
 }
 
 export type ReferenceSources = {
   /** Only the head of a comparison can be the working tree; git has no revision to read it as a base. */
   allowWorktree: boolean
   commits: Commit[]
-  headDetail: string | null
+  /** The worktree the diff is on, offered before the others and while they are still being read. */
+  currentWorktree: WorktreeSource
   references: Reference[]
   revision: ResolvedRevision | null
   stashes: StashEntry[]
+  worktrees: WorktreeSource[]
 }
 
 export function isRevisionExpression(query: string) {
@@ -48,13 +59,36 @@ export function isRevisionExpression(query: string) {
   return revision !== WORKTREE_REF && REVISION_EXPRESSION.test(revision)
 }
 
-function worktreeHit(): ReferenceHit {
+export function workingTreeHitLabel(name: string) {
+  return `Working tree (${name})`
+}
+
+export function headHitLabel(name: string) {
+  return `HEAD (${name})`
+}
+
+function worktreeHit({ name, path }: WorktreeSource): ReferenceHit {
   return {
     branch: null,
-    detail: "Uncommitted changes in this worktree",
+    detail: "Uncommitted changes",
     kind: "worktree",
-    label: "Working tree",
+    label: workingTreeHitLabel(name),
     reference: WORKTREE_REF,
+    worktreePath: path,
+  }
+}
+
+function headHit(
+  { name, path }: WorktreeSource,
+  headDetail: string,
+): ReferenceHit {
+  return {
+    branch: "HEAD",
+    detail: headDetail,
+    kind: "branch",
+    label: headHitLabel(name),
+    reference: "HEAD",
+    worktreePath: path,
   }
 }
 
@@ -78,10 +112,11 @@ export function searchReferences(
   {
     allowWorktree,
     commits,
-    headDetail,
+    currentWorktree,
     references,
     revision,
     stashes,
+    worktrees,
   }: ReferenceSources,
 ): ReferenceHit[] {
   const needle = query.trim().toLowerCase()
@@ -105,17 +140,23 @@ export function searchReferences(
       reference: query.trim(),
     })
   }
-  if (allowWorktree && "working tree".includes(needle)) {
-    hits.push(worktreeHit())
+  const worktreesCurrentFirst = [
+    currentWorktree,
+    ...worktrees.filter((worktree) => worktree.path !== currentWorktree.path),
+  ]
+  const offers = (keyword: string, { name }: WorktreeSource) =>
+    keyword.includes(needle) || name.toLowerCase().includes(needle)
+  if (allowWorktree) {
+    for (const worktree of worktreesCurrentFirst) {
+      if (offers("working tree", worktree)) {
+        hits.push(worktreeHit(worktree))
+      }
+    }
   }
-  if (headDetail && "head".includes(needle)) {
-    hits.push({
-      branch: "HEAD",
-      detail: headDetail,
-      kind: "branch",
-      label: "HEAD",
-      reference: "HEAD",
-    })
+  for (const worktree of worktreesCurrentFirst) {
+    if (worktree.headDetail !== null && offers("head", worktree)) {
+      hits.push(headHit(worktree, worktree.headDetail))
+    }
   }
 
   const revisions = new Set(hits.map((hit) => hit.reference))
