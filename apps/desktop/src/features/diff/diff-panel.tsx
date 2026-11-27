@@ -103,6 +103,7 @@ import {
   changedLines,
   fileTree,
   flattenTree,
+  isLargeDiff,
   useDiffCards,
   useDiffLoader,
   type FileDiff,
@@ -356,7 +357,12 @@ export function DiffPanel({
   )
   // Only moving an end starts the list over; a reread keeps the scroll position and the loaded diffs.
   const comparisonScope = loadedComparison?.refs ?? null
-  const { entries, request } = useDiffLoader(fileKey, loadDiff, comparisonScope)
+  const { entries, isOutdated, request, retryFailed } = useDiffLoader(
+    fileKey,
+    loadDiff,
+    comparisonScope,
+    comparison?.files,
+  )
   const metadata = useRepositoryMetadata(params.path, version)
   const sources = useReferenceSources(params.path, picker !== null, version)
   const shownFiles = useMemo(
@@ -975,6 +981,11 @@ export function DiffPanel({
                     Viewed
                     <Checkbox
                       checked={isViewedFile(file, refs.head, viewed)}
+                      disabled={
+                        isOutdated(file) &&
+                        !isFolded(file) &&
+                        (!isLargeDiff(file) || expanded.has(fileKey(file)))
+                      }
                       onCheckedChange={() => toggleViewed(file)}
                     />
                   </label>
@@ -1207,7 +1218,10 @@ export function DiffPanel({
         <Hinted hint="Reread this comparison">
           <Button
             aria-label="Refresh the comparison"
-            onClick={() => setVersion((current) => current + 1)}
+            onClick={() => {
+              retryFailed()
+              setVersion((current) => current + 1)
+            }}
             size="icon-sm"
             type="button"
             variant="outline"

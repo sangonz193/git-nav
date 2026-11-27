@@ -237,6 +237,7 @@ type Loader = (file: ChangedFile) => Promise<FileDiff>
 type LoaderState = {
   load: Loader | null
   queued: ChangedFile[]
+  requested: ChangedFile[]
   started: Set<string>
   inFlight: number
 }
@@ -245,6 +246,7 @@ function freshLoader(load: Loader | null): LoaderState {
   return {
     load,
     queued: [],
+    requested: [],
     started: new Set(),
     inFlight: 0,
   }
@@ -255,6 +257,7 @@ const NO_ENTRIES: Record<string, DiffEntry> = {}
 type LoadedEntries = {
   scope: unknown
   entries: Record<string, DiffEntry>
+  readers: Record<string, Loader>
 }
 
 export function withLoadedEntry(
@@ -262,12 +265,38 @@ export function withLoadedEntry(
   scope: unknown,
   key: string,
   entry: DiffEntry,
+  load: Loader,
 ) {
-  const entries = loaded.scope === scope ? loaded.entries : {}
+  const isSameScope = loaded.scope === scope
+  const entries = isSameScope ? loaded.entries : {}
+  const readers = isSameScope ? loaded.readers : {}
   const shown = entries[key]
-  return shown && sameDiff(shown, entry) ? loaded : (
-      { scope, entries: { ...entries, [key]: entry } }
-    )
+  if (shown && sameDiff(shown, entry)) {
+    return readers[key] === load ?
+        loaded
+      : { scope, entries, readers: { ...readers, [key]: load } }
+  }
+  return {
+    scope,
+    entries: { ...entries, [key]: entry },
+    readers: { ...readers, [key]: load },
+  }
+}
+
+export function withListedEntries(
+  loaded: LoadedEntries,
+  listed: ReadonlySet<string>,
+) {
+  const keys = Object.keys(loaded.entries)
+  if (keys.every((key) => listed.has(key))) {
+    return loaded
+  }
+  const kept = keys.filter((key) => listed.has(key))
+  return {
+    scope: loaded.scope,
+    entries: Object.fromEntries(kept.map((key) => [key, loaded.entries[key]])),
+    readers: Object.fromEntries(kept.map((key) => [key, loaded.readers[key]])),
+  }
 }
 
 // A new `scope` empties the cards. A new loader in the same scope keeps each diff on screen until its reread lands.
@@ -275,10 +304,16 @@ export function useDiffLoader(
   keyOf: (file: ChangedFile) => string,
   load: Loader | null,
   scope: unknown,
+  listed: ChangedFile[] | undefined,
 ) {
-  const [loaded, setLoaded] = useState<LoadedEntries>({ scope, entries: {} })
+  const [loaded, setLoaded] = useState<LoadedEntries>({
+    scope,
+    entries: {},
+    readers: {},
+  })
   const loader = useRef(freshLoader(load))
-  const entries = loaded.scope === scope ? loaded.entries : NO_ENTRIES
+  const isSameScope = loaded.scope === scope
+  const entries = isSameScope ? loaded.entries : NO_ENTRIES
 
   // A request replaces the queue, so files scrolled past before a worker picked them up free their slot.
   const request = useCallback(
@@ -288,8 +323,11 @@ export function useDiffLoader(
       }
       if (loader.current.load !== load) {
         loader.current = freshLoader(load)
+        const keys = new Set(listed?.map(keyOf))
+        setLoaded((current) => withListedEntries(current, keys))
       }
       const state = loader.current
+      state.requested = files
       state.queued = files.filter((file) => !state.started.has(keyOf(file)))
       const drain = async () => {
         for (
@@ -329,7 +367,9 @@ export function useDiffLoader(
           if (loader.current !== state) {
             return
           }
-          setLoaded((current) => withLoadedEntry(current, scope, key, entry))
+          setLoaded((current) =>
+            withLoadedEntry(current, scope, key, entry, load),
+          )
         }
       }
       while (
@@ -342,10 +382,25 @@ export function useDiffLoader(
         })
       }
     },
-    [keyOf, load, scope],
+    [keyOf, listed, load, scope],
   )
 
-  return { entries, request }
+  const retryFailed = () => {
+    const state = loader.current
+    for (const [key, entry] of Object.entries(entries)) {
+      if (entry.state === "error") {
+        state.started.delete(key)
+      }
+    }
+    request(state.requested)
+  }
+
+  const isOutdated = (file: ChangedFile) => {
+    const reader = isSameScope ? loaded.readers[keyOf(file)] : undefined
+    return reader !== undefined && reader !== load
+  }
+
+  return { entries, isOutdated, request, retryFailed }
 }
 
 /**
@@ -410,10 +465,8 @@ export function useDiffCards({
   // sizes a measurement is compared against. Cards above the scroller stay at their estimates until they
   // come back, which would move everything below them by the difference, so the card at the top of the
   // scroller is put back where it was. A fold that moved what sits above the scroller asks for its own card
-  // instead, and a file leaving the list takes its card out before it can be aimed at. A list only read
-  // again keeps its heights, or every card above the scroller would jump as it scrolls back in. Its new
-  // counts can still move the estimate of a card above that was never measured, so the top card is found
-  // where the previous render laid it out.
+  // instead, and a file leaving the list takes its card out before it can be aimed at.
+  // A list only read again keeps its heights, or cards above the scroller would jump as they scroll back in.
   const layout = useRef({ allExpanded, isFolded, mode, wrap })
   useEffect(() => {
     const previous = layout.current

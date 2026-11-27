@@ -7,6 +7,7 @@ import {
   estimatedBodyHeight,
   mirrorSplitScroll,
   preparedDiffFile,
+  withListedEntries,
   withLoadedEntry,
   type DiffEntry,
 } from "./diff-files"
@@ -152,32 +153,80 @@ describe("preparedDiffFile", () => {
   })
 })
 
-describe("withLoadedEntry", () => {
-  const diff = (content: string): DiffEntry => ({
-    state: "loaded",
-    data: {
-      oldFile: { fileName: "a.ts", content: "" },
-      newFile: { fileName: "a.ts", content },
-      hunks: [content],
-    },
-  })
+const diff = (content: string): DiffEntry => ({
+  state: "loaded",
+  data: {
+    oldFile: { fileName: "a.ts", content: "" },
+    newFile: { fileName: "a.ts", content },
+    hunks: [content],
+  },
+})
 
+const loader = () => () => Promise.reject(new Error("unused"))
+
+describe("withLoadedEntry", () => {
   test("keeps what is shown when the list is read again and the diff reads the same", () => {
     const scope = {}
-    const loaded = { scope, entries: { a: diff("one"), b: diff("two") } }
-    expect(withLoadedEntry(loaded, scope, "a", diff("one"))).toBe(loaded)
+    const load = loader()
+    const loaded = {
+      scope,
+      entries: { a: diff("one"), b: diff("two") },
+      readers: { a: load, b: load },
+    }
+    expect(withLoadedEntry(loaded, scope, "a", diff("one"), load)).toBe(loaded)
 
-    const changed = withLoadedEntry(loaded, scope, "a", diff("three"))
+    const changed = withLoadedEntry(loaded, scope, "a", diff("three"), load)
     expect(changed.entries.a).toEqual(diff("three"))
     expect(changed.entries.b).toBe(loaded.entries.b)
   })
 
+  test("records a new reader without replacing a diff that reads the same", () => {
+    const scope = {}
+    const previous = loader()
+    const next = loader()
+    const loaded = {
+      scope,
+      entries: { a: diff("one"), b: diff("two") },
+      readers: { a: previous, b: previous },
+    }
+    const reread = withLoadedEntry(loaded, scope, "a", diff("one"), next)
+    expect(reread.entries).toBe(loaded.entries)
+    expect(reread.readers).toEqual({ a: next, b: previous })
+  })
+
   test("starts over for a different list", () => {
-    const loaded = { scope: {}, entries: { a: diff("one"), b: diff("two") } }
+    const load = loader()
+    const loaded = {
+      scope: {},
+      entries: { a: diff("one"), b: diff("two") },
+      readers: { a: load, b: load },
+    }
     const next = {}
-    expect(withLoadedEntry(loaded, next, "a", diff("one"))).toEqual({
+    expect(withLoadedEntry(loaded, next, "a", diff("one"), load)).toEqual({
       scope: next,
       entries: { a: diff("one") },
+      readers: { a: load },
     })
+  })
+})
+
+describe("withListedEntries", () => {
+  const load = loader()
+  const loaded = {
+    scope: {},
+    entries: { a: diff("one"), b: diff("two") },
+    readers: { a: load, b: load },
+  }
+
+  test("drops the diffs of files that left the list", () => {
+    expect(withListedEntries(loaded, new Set(["b", "c"]))).toEqual({
+      scope: loaded.scope,
+      entries: { b: loaded.entries.b },
+      readers: { b: load },
+    })
+  })
+
+  test("keeps what is shown while every file is still listed", () => {
+    expect(withListedEntries(loaded, new Set(["a", "b", "c"]))).toBe(loaded)
   })
 })

@@ -467,7 +467,12 @@ export function WorkingTreePanel({
         })),
     [params.path, tree],
   )
-  const { entries, request } = useDiffLoader(keyOf, loadDiff, params.path)
+  const { entries, request } = useDiffLoader(
+    keyOf,
+    loadDiff,
+    params.path,
+    allFiles,
+  )
   const isFolded = useCallback(
     (file: ChangedFile) => handFolds.get(keyOf(file)) ?? false,
     [handFolds, keyOf],
