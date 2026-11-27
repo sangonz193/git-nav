@@ -320,10 +320,13 @@ export function FileDiffCard({
 }) {
   const card = useRef<HTMLElement>(null)
   const diffView = useRef<ComponentRef<typeof DiffView>>(null)
-  const loaded = entry?.state === "loaded"
+  const isUnexpandedLarge = isLargeDiff(file) && !expanded
   const diffFile = useMemo(
-    () => (entry?.state === "loaded" ? preparedDiffFile(entry.data) : null),
-    [entry],
+    () =>
+      entry?.state === "loaded" && !collapsed && !isUnexpandedLarge ?
+        preparedDiffFile(entry.data, theme)
+      : null,
+    [collapsed, entry, isUnexpandedLarge, theme],
   )
   useEffect(() => () => diffFile?.clearId(), [diffFile])
 
@@ -366,7 +369,7 @@ export function FileDiffCard({
     } else if (!allExpanded && isExpanded) {
       instance.onAllCollapse(modeName)
     }
-  }, [allExpanded, collapsed, diffFile, mode])
+  }, [allExpanded, diffFile, mode])
 
   const body = () => {
     if (entry?.state === "binary") {
@@ -403,6 +406,17 @@ export function FileDiffCard({
         </p>
       )
     }
+    if (isUnexpandedLarge) {
+      return (
+        <p className="diff-file-card-notice">
+          Large diff with {(file.additions + file.deletions).toLocaleString()}{" "}
+          changed lines
+          <Button onClick={onExpand} size="xs" type="button" variant="outline">
+            Show diff
+          </Button>
+        </p>
+      )
+    }
     if (diffFile) {
       return (
         <>
@@ -426,17 +440,6 @@ export function FileDiffCard({
             ref={diffView}
           />
         </>
-      )
-    }
-    if (isLargeDiff(file) && !expanded) {
-      return (
-        <p className="diff-file-card-notice">
-          Large diff with {(file.additions + file.deletions).toLocaleString()}{" "}
-          changed lines
-          <Button onClick={onExpand} size="xs" type="button" variant="outline">
-            Show diff
-          </Button>
-        </p>
       )
     }
     if (file.isBinary) {
@@ -466,7 +469,7 @@ export function FileDiffCard({
           <FileStatusLetter letter={statusLetter(file)} />
           <span className="diff-file-card-path truncate">{fileName(file)}</span>
         </button>
-        {loaded && !collapsed && (
+        {diffFile && (
           <Hinted
             hint={allExpanded ? "Collapse unchanged lines" : "Expand all lines"}
           >

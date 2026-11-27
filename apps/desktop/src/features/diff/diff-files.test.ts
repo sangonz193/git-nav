@@ -137,11 +137,16 @@ describe("mirrorSplitScroll", () => {
 
 describe("preparedDiffFile", () => {
   test("has its rows built before the view first renders it", () => {
-    const diffFile = preparedDiffFile({
-      oldFile: { fileName: "a.ts", content: "one\ntwo\n" },
-      newFile: { fileName: "a.ts", content: "one\nthree\n" },
-      hunks: ["--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n"],
-    })
+    const diffFile = preparedDiffFile(
+      {
+        oldFile: { fileName: "a.ts", content: "one\ntwo\n" },
+        newFile: { fileName: "a.ts", content: "one\nthree\n" },
+        hunks: [
+          "--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n",
+        ],
+      },
+      "dark",
+    )
     expect(diffFile.splitLineLength).toBeGreaterThan(0)
     expect(diffFile.unifiedLineLength).toBeGreaterThan(0)
   })

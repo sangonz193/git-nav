@@ -72,7 +72,7 @@ type DiffData = {
 }
 
 // Handed raw data, the diff view builds its rows in an effect and paints a frame with none, collapsing the card.
-export function preparedDiffFile(data: DiffData) {
+export function preparedDiffFile(data: DiffData, theme: "light" | "dark") {
   const file = new DiffFile(
     data.oldFile.fileName ?? "",
     data.oldFile.content ?? "",
@@ -80,6 +80,7 @@ export function preparedDiffFile(data: DiffData) {
     data.newFile.content ?? "",
     data.hunks,
   )
+  file.initTheme(theme)
   file.init()
   file.buildSplitDiffLines()
   file.buildUnifiedDiffLines()
@@ -378,6 +379,10 @@ export function useDiffCards({
 }) {
   const pendingScroll = useRef<string | null>(null)
   const pendingAnchor = useRef<string | null>(null)
+  const committed = useRef<{
+    files: ChangedFile[]
+    rows: VirtualItem[]
+  } | null>(null)
   const rowVirtualizer = useVirtualizer({
     count: files.length,
     getScrollElement: () => scrollElement.current,
@@ -394,6 +399,7 @@ export function useDiffCards({
 
   // Measured heights belong to the previous list or layout, so drop them and start over.
   useEffect(() => {
+    committed.current = null
     rowVirtualizer.measure()
     rowVirtualizer.scrollToOffset(0)
   }, [resetKey, rowVirtualizer])
@@ -409,10 +415,6 @@ export function useDiffCards({
   // counts can still move the estimate of a card above that was never measured, so the top card is found
   // where the previous render laid it out.
   const layout = useRef({ allExpanded, isFolded, mode, wrap })
-  const committed = useRef<{
-    files: ChangedFile[]
-    rows: VirtualItem[]
-  } | null>(null)
   useEffect(() => {
     const previous = layout.current
     layout.current = { allExpanded, isFolded, mode, wrap }
@@ -461,7 +463,7 @@ export function useDiffCards({
   ])
 
   useEffect(() => {
-    committed.current = { files, rows: rowVirtualizer.measurementsCache }
+    committed.current = { files, rows: virtualRows }
   })
 
   useEffect(() => {

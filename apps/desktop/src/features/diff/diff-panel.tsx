@@ -523,8 +523,9 @@ export function DiffPanel({
   useEffect(() => {
     let cancelled = false
     shownFingerprint.current = null
+    // A joined fingerprint always holds a ":", so an empty string never matches one and the next poll reloads.
     const fingerprint = comparisonFingerprint(params.path, refs.head).catch(
-      () => null,
+      () => "",
     )
     fingerprint
       .then(() =>
@@ -571,7 +572,6 @@ export function DiffPanel({
     }
   }, [ignoreWhitespace, params.path, refs, version])
 
-  // A hidden tab skips polls and checks once it is shown again.
   useEffect(() => {
     let disposed = false
     let inFlight = false
