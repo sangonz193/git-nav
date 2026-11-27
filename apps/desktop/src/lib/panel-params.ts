@@ -1,3 +1,5 @@
+import { dependsOnWorktree } from "../features/diff/diff-title"
+
 export type RepositoryPanelParams = {
   name: string
   path: string
@@ -46,4 +48,18 @@ export type WorkingTreePanelParams = RepositoryPanelParams & {
   amendHeadMessage?: string | null
   selectedFilePath?: string | null
   userPreferences?: WorkingTreePanelUserPreferences
+}
+
+export function newTabParams(
+  repository: RepositoryPanelParams,
+  activeTab: RepositoryPanelParams | DiffPanelParams | undefined,
+) {
+  if (
+    !activeTab ||
+    ("baseRef" in activeTab &&
+      !dependsOnWorktree({ base: activeTab.baseRef, head: activeTab.headRef }))
+  ) {
+    return repository
+  }
+  return { ...repository, path: activeTab.path }
 }

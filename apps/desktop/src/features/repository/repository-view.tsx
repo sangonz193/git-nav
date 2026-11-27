@@ -61,9 +61,10 @@ import {
   RepositoryLayoutDraftsContext,
 } from "../../lib/repository-layout-drafts"
 import { settingsClientId } from "../../lib/settings"
-import type {
-  DiffPanelParams,
-  RepositoryPanelParams,
+import {
+  newTabParams,
+  type DiffPanelParams,
+  type RepositoryPanelParams,
 } from "../../lib/panel-params"
 import { worktreeName } from "../working-tree/working-tree-state"
 import type { Project } from "./project"
@@ -293,7 +294,7 @@ function addWorkingTreePanel(
     params,
     position: { direction: "within", referencePanel },
     tabComponent: "working-tree",
-    title: params.name,
+    title: worktreeName(params.path),
   })
 }
 
@@ -307,11 +308,18 @@ function NewTabAction({
   activePanel,
   containerApi,
 }: IDockviewHeaderActionsProps) {
-  const params = useContext(RepositoryContext)
+  const repository = useContext(RepositoryContext)
   const reopenTab = useContext(ReopenTabContext)
-  if (!params) {
+  if (!repository) {
     return null
   }
+  // A tab can move to another worktree without this header rendering again.
+  const params = () =>
+    newTabParams(
+      repository,
+      activePanel?.params as
+        DiffPanelParams | RepositoryPanelParams | undefined,
+    )
 
   return (
     <DropdownMenu>
@@ -323,20 +331,20 @@ function NewTabAction({
       </DropdownMenuTrigger>
       <DropdownMenuContent>
         <DropdownMenuItem
-          onSelect={() => addGraphPanel(containerApi, params, activePanel)}
+          onSelect={() => addGraphPanel(containerApi, params(), activePanel)}
         >
           <GitGraph />
           Graph
         </DropdownMenuItem>
         <DropdownMenuItem
-          onSelect={() => addDiffPanel(containerApi, params, activePanel)}
+          onSelect={() => addDiffPanel(containerApi, params(), activePanel)}
         >
           <FileDiff />
           Diff
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() =>
-            addWorkingTreePanel(containerApi, params, activePanel)
+            addWorkingTreePanel(containerApi, params(), activePanel)
           }
         >
           <FilePen />
