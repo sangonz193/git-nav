@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { WORKTREE_REF } from "@/lib/repository-constants"
 import {
   carriedFolds,
+  carriedKeys,
   changedFilesLabel,
   fileIdentity,
   formatBytes,
@@ -10,13 +11,16 @@ import {
   initialDiffLayout,
   isFoldedFile,
   isImagePath,
+  isSameComparison,
   isSvgPath,
   isViewedFile,
   NARROW_DIFF_PANEL_WIDTH,
   persistedDiffPanelParams,
+  sameMarks,
   svgContent,
   toggledDiffFileTree,
   type ChangedFile,
+  type Comparison,
 } from "./diff-panel-state"
 
 describe("formatBytes", () => {
@@ -302,6 +306,77 @@ describe("carriedFolds", () => {
         ["opened", false],
       ]),
     )
+  })
+
+  test("hands back the same folds when every folded file is still listed", () => {
+    const folds = new Map([["folded", true]])
+    expect(carriedFolds(folds, ["folded", "added"])).toBe(folds)
+  })
+})
+
+describe("carriedKeys", () => {
+  test("keeps the keys still listed and hands back the same set when none left", () => {
+    const held = new Set(["kept", "gone"])
+    expect(carriedKeys(held, ["kept"])).toEqual(new Set(["kept"]))
+    expect(carriedKeys(held, ["kept", "gone", "added"])).toBe(held)
+  })
+})
+
+describe("sameMarks", () => {
+  test("compares the files marked and the identity each was marked at", () => {
+    const marks = new Map([["a.ts", "1"]])
+    expect(sameMarks(marks, new Map([["a.ts", "1"]]))).toBe(true)
+    expect(sameMarks(marks, new Map([["a.ts", "2"]]))).toBe(false)
+    expect(sameMarks(marks, new Map())).toBe(false)
+  })
+})
+
+describe("isSameComparison", () => {
+  const file = {
+    status: "modified",
+    oldPath: "app.tsx",
+    newPath: "app.tsx",
+    oldOid: "a".repeat(40),
+    newOid: "b".repeat(40),
+    additions: 1,
+    deletions: 1,
+    isBinary: false,
+    splitRows: 2,
+    unifiedRows: 2,
+    hunkRows: 1,
+  } satisfies ChangedFile
+  const shown = {
+    baseSha: "c".repeat(40),
+    headSha: "d".repeat(40),
+    files: [file],
+  } satisfies Comparison
+
+  test("keeps a comparison read again with the same commits and files", () => {
+    expect(isSameComparison(shown, { ...shown, files: [{ ...file }] })).toBe(
+      true,
+    )
+  })
+
+  test("replaces a comparison whose files changed under the same commits", () => {
+    expect(
+      isSameComparison(shown, {
+        ...shown,
+        files: [{ ...file, isBinary: true, additions: 0, deletions: 0 }],
+      }),
+    ).toBe(false)
+    expect(isSameComparison(shown, { ...shown, files: [] })).toBe(false)
+  })
+
+  test("replaces a comparison at other commits or against the working tree", () => {
+    expect(isSameComparison(shown, { ...shown, headSha: "e".repeat(40) })).toBe(
+      false,
+    )
+    expect(
+      isSameComparison(
+        { ...shown, headSha: WORKTREE_REF },
+        { ...shown, headSha: WORKTREE_REF },
+      ),
+    ).toBe(false)
   })
 })
 

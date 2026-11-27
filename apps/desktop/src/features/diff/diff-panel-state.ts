@@ -119,19 +119,52 @@ export function isFoldedFile(
 }
 
 // A comparison read again still lists the files that were folded by hand, and rereading is no reason to
-// open them, so their folds are carried over. A file that left the list takes its fold with it.
+// open them, so their folds are carried over. A file that left the list takes its fold with it. When none
+// left, the same map comes back so the cards are not laid out again.
 export function carriedFolds(
   folds: ReadonlyMap<string, boolean>,
   keys: Iterable<string>,
 ) {
-  const next = new Map<string, boolean>()
-  for (const key of keys) {
-    const fold = folds.get(key)
-    if (fold !== undefined) {
-      next.set(key, fold)
-    }
+  const listed = new Set(keys)
+  if ([...folds.keys()].every((key) => listed.has(key))) {
+    return folds
   }
-  return next
+  return new Map([...folds].filter(([key]) => listed.has(key)))
+}
+
+export function carriedKeys(held: ReadonlySet<string>, keys: Iterable<string>) {
+  const listed = new Set(keys)
+  if ([...held].every((key) => listed.has(key))) {
+    return held
+  }
+  return new Set([...held].filter((key) => listed.has(key)))
+}
+
+export type Comparison = {
+  baseSha: string
+  headSha: string
+  files: ChangedFile[]
+}
+
+// The working tree has no commit to compare, so it always counts as changed. Attributes such as `-diff` can
+// change a file's diff while both commits stay put, so the files are compared as well.
+export function isSameComparison(shown: Comparison, next: Comparison) {
+  return (
+    next.headSha !== WORKTREE_REF &&
+    next.baseSha === shown.baseSha &&
+    next.headSha === shown.headSha &&
+    JSON.stringify(next.files) === JSON.stringify(shown.files)
+  )
+}
+
+export function sameMarks(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>,
+) {
+  return (
+    left.size === right.size &&
+    [...left].every(([path, identity]) => right.get(path) === identity)
+  )
 }
 
 // The counts describe the comparison, whatever the filter is showing of it, so two numbers beside each

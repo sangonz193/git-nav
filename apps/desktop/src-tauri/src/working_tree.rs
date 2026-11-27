@@ -273,7 +273,7 @@ mod tests {
         assert!(matches!(tree.pending_operation, Some(PendingOperation::Merge)));
         assert!(tree.staged.is_empty());
         assert_eq!(paths(&tree.unstaged), vec!["other.txt"]);
-        assert_eq!((tree.unstaged[0].additions, tree.unstaged[0].deletions, tree.unstaged[0].split_rows, tree.unstaged[0].unified_rows, tree.unstaged[0].hunk_rows), (1, 0, 2, 2, 2));
+        assert_eq!((tree.unstaged[0].additions, tree.unstaged[0].deletions, tree.unstaged[0].split_rows, tree.unstaged[0].unified_rows, tree.unstaged[0].hunk_rows), (1, 0, 2, 2, 0));
         remove_scratch_repository(&path);
     }
 

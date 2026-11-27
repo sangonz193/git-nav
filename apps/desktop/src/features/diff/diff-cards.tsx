@@ -34,6 +34,8 @@ import {
   estimatedBodyHeight,
   isLargeDiff,
   isSvgFile,
+  mirrorSplitScroll,
+  preparedDiffFile,
   statusLetter,
   type BinaryContent,
   type DiffEntry,
@@ -191,6 +193,13 @@ function ImageSide({
   const dimensions = content.dimensions ?? naturalDimensions
   const [decoded, setDecoded] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
+  // Each reread serves the same image under a new URL, so keying by it would blink the image out on every refresh.
+  const [shownImage, setShownImage] = useState(content.image)
+  if (shownImage !== content.image) {
+    setShownImage(content.image)
+    setPreviewFailed(false)
+    setNaturalDimensions(null)
+  }
   return (
     <figure className={`diff-binary-side is-${side}`}>
       {content.image && !previewFailed ?
@@ -316,8 +325,23 @@ export function FileDiffCard({
   theme: "light" | "dark"
   wrap: boolean
 }) {
+  const card = useRef<HTMLElement>(null)
   const diffView = useRef<ComponentRef<typeof DiffView>>(null)
-  const loaded = entry?.state === "loaded"
+  const isUnexpandedLarge = isLargeDiff(file) && !expanded
+  const diffFile = useMemo(
+    () =>
+      entry?.state === "loaded" && !collapsed && !isUnexpandedLarge ?
+        preparedDiffFile(entry.data, theme)
+      : null,
+    [collapsed, entry, isUnexpandedLarge, theme],
+  )
+  useEffect(() => () => diffFile?.clearId(), [diffFile])
+
+  useEffect(() => {
+    const element = card.current
+    element?.addEventListener("scroll", mirrorSplitScroll, true)
+    return () => element?.removeEventListener("scroll", mirrorSplitScroll, true)
+  }, [])
   const svg = useMemo(
     () =>
       entry?.state === "loaded" ?
@@ -352,9 +376,20 @@ export function FileDiffCard({
     } else if (!allExpanded && isExpanded) {
       instance.onAllCollapse(modeName)
     }
-  }, [allExpanded, collapsed, loaded, mode])
+  }, [allExpanded, diffFile, mode])
 
   const body = () => {
+    if (isUnexpandedLarge) {
+      return (
+        <p className="diff-file-card-notice">
+          Large diff with {(file.additions + file.deletions).toLocaleString()}{" "}
+          changed lines
+          <Button onClick={onExpand} size="xs" type="button" variant="outline">
+            Show diff
+          </Button>
+        </p>
+      )
+    }
     if (entry?.state === "binary") {
       return (
         <BinaryDiff
@@ -389,7 +424,7 @@ export function FileDiffCard({
         </p>
       )
     }
-    if (entry?.state === "loaded") {
+    if (diffFile) {
       return (
         <>
           {(svg.oldBinary || svg.newBinary) && (
@@ -403,7 +438,7 @@ export function FileDiffCard({
             />
           )}
           <DiffView
-            data={entry.data}
+            diffFile={diffFile}
             diffViewFontSize={DIFF_FONT_SIZE}
             diffViewHighlight
             diffViewMode={mode}
@@ -412,17 +447,6 @@ export function FileDiffCard({
             ref={diffView}
           />
         </>
-      )
-    }
-    if (isLargeDiff(file) && !expanded) {
-      return (
-        <p className="diff-file-card-notice">
-          Large diff with {(file.additions + file.deletions).toLocaleString()}{" "}
-          changed lines
-          <Button onClick={onExpand} size="xs" type="button" variant="outline">
-            Show diff
-          </Button>
-        </p>
       )
     }
     if (file.isBinary) {
@@ -438,7 +462,7 @@ export function FileDiffCard({
   }
 
   return (
-    <article className={cn("diff-file-card", dimmed && "is-viewed")}>
+    <article className={cn("diff-file-card", dimmed && "is-viewed")} ref={card}>
       <header className="diff-file-card-header">
         <button
           aria-expanded={!collapsed}
@@ -452,7 +476,7 @@ export function FileDiffCard({
           <FileStatusLetter letter={statusLetter(file)} />
           <span className="diff-file-card-path truncate">{fileName(file)}</span>
         </button>
-        {loaded && !collapsed && (
+        {diffFile && (
           <Hinted
             hint={allExpanded ? "Collapse unchanged lines" : "Expand all lines"}
           >
