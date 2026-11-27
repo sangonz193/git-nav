@@ -1,7 +1,7 @@
 import type { ProjectWorktree } from "../features/workspace/workspace"
 import { invoke, isDesktop } from "./ipc"
 
-export type WorktreeTarget = "git-nav" | "vscode" | "terminal" | "finder"
+export type WorktreeTarget = "vscode" | "terminal" | "finder"
 
 const openedListeners = new Set<(opened: ProjectWorktree) => void>()
 
@@ -38,16 +38,7 @@ export async function openRepositoryInNewWindow(path: string) {
 }
 
 export async function openWorktree(path: string, target: WorktreeTarget) {
-  if (isDesktop) {
-    return invoke<void>("open_worktree", { path, target })
-  }
-  const opened = await invoke<ProjectWorktree>("open_worktree", {
-    path,
-    target,
-  })
-  if (target === "git-nav") {
-    announceOpened(opened)
-  }
+  return invoke<void>("open_worktree", { path, target })
 }
 
 /**

@@ -181,11 +181,8 @@ function validFields(
   )
 }
 
-function validGraphParams(params: PanelParams, path: string) {
-  return (
-    params.path === path &&
-    validFields(params, GRAPH_PARAM_CHECKS, GRAPH_PARAM_MANDATORY)
-  )
+function validGraphParams(params: PanelParams) {
+  return validFields(params, GRAPH_PARAM_CHECKS, GRAPH_PARAM_MANDATORY)
 }
 
 function validDiffParams(params: PanelParams) {
@@ -216,7 +213,6 @@ function isPanelComponent(
 
 export function usableRepositoryLayout(
   value: unknown,
-  path: string,
 ): SerializedDockview | null {
   if (
     !isObject(value) ||
@@ -249,7 +245,7 @@ export function usableRepositoryLayout(
     ) {
       return null
     }
-    if (!PANEL_PARAM_VALIDATORS[serialized.contentComponent](params, path)) {
+    if (!PANEL_PARAM_VALIDATORS[serialized.contentComponent](params)) {
       return null
     }
   }
@@ -432,13 +428,16 @@ export function listenForRepositoryLayoutPageHide(
   return () => target.removeEventListener("pagehide", flush)
 }
 
-// A working tree tab is worth keeping for as long as its worktree exists.
+// Graph and working tree tabs are worth keeping for as long as their worktree exists.
 function panelRevisions(panel: SerializedPanel) {
   const params = panel.params
   if (typeof params?.path !== "string") {
     return null
   }
-  if (panel.contentComponent === "working-tree") {
+  if (
+    panel.contentComponent === "graph" ||
+    panel.contentComponent === "working-tree"
+  ) {
     return { path: params.path, revisions: [WORKTREE_REF] }
   }
   if (panel.contentComponent !== "diff") {

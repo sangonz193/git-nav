@@ -524,10 +524,7 @@ export const RepositoryView = memo(function RepositoryView({
                         path: stored.path,
                       }
                       setRepositoryPath(stored.path)
-                      const layout = usableRepositoryLayout(
-                        stored.layout,
-                        stored.path,
-                      )
+                      const layout = usableRepositoryLayout(stored.layout)
                       if (layout) {
                         const invalidPanelIds = await unresolvablePanelIds(
                           layout,

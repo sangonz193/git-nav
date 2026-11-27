@@ -697,13 +697,7 @@ async fn open_repository(
     ok(opened_worktree(&args.path.unwrap_or_default(), &state)?)
 }
 
-async fn open_worktree(
-    State(state): State<Arc<ServerState>>,
-    Json(args): Json<WorktreeArgs>,
-) -> CommandResult {
-    if args.target == "git-nav" {
-        return ok(opened_worktree(&args.path, &state)?);
-    }
+async fn open_worktree(Json(args): Json<WorktreeArgs>) -> CommandResult {
     launch_worktree(&args.path, &args.target)?;
     ok(json!({ "path": args.path }))
 }

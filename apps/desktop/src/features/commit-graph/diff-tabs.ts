@@ -105,6 +105,22 @@ export function diffTabs({
     })
   }
 
+  function openWorktreeGraph(worktree: RowWorktree) {
+    const referencePanel = containerApi.getPanel(panel)
+    if (!referencePanel) {
+      showErrorToast("Could not open a graph tab.")
+      return
+    }
+    containerApi.addPanel({
+      component: "graph",
+      id: panelId("graph"),
+      params: { name: worktree.name, path: worktree.path },
+      position: { direction: "within", referencePanel },
+      tabComponent: "graph",
+      title: "Graph",
+    })
+  }
+
   // The tab is scoped to the worktree the chip stands for, whichever one this panel was opened on.
   function openWorkingTree(worktree: RowWorktree) {
     const referencePanel = containerApi.getPanel(panel)
@@ -174,6 +190,7 @@ export function diffTabs({
     openRangeDiff,
     openRefDiff,
     openStashDiff,
+    openWorktreeGraph,
     openWorkingTree,
     openWorktreeDiff,
   }
